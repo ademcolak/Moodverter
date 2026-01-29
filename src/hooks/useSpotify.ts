@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { SpotifyTokens, SpotifyUser } from '../types/spotify';
 import * as spotifyAuth from '../services/spotify/auth';
 import * as spotifyApi from '../services/spotify/api';
+import { isMockMode, MOCK_USER } from '../services/mock';
 
 interface UseSpotifyReturn {
   isAuthenticated: boolean;
@@ -9,6 +10,7 @@ interface UseSpotifyReturn {
   user: SpotifyUser | null;
   tokens: SpotifyTokens | null;
   error: string | null;
+  isMockMode: boolean;
   login: () => Promise<void>;
   logout: () => void;
   refreshTokens: () => Promise<boolean>;
@@ -20,10 +22,27 @@ export const useSpotify = (): UseSpotifyReturn => {
   const [user, setUser] = useState<SpotifyUser | null>(null);
   const [tokens, setTokens] = useState<SpotifyTokens | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const mockMode = isMockMode();
 
-  // Check for existing tokens on mount
+  // Check for existing tokens on mount (or activate mock mode)
   useEffect(() => {
     const checkAuth = async () => {
+      // Mock mode - auto authenticate
+      if (mockMode) {
+        setUser(MOCK_USER as SpotifyUser);
+        setTokens({
+          access_token: 'mock-token',
+          refresh_token: 'mock-refresh',
+          expires_in: 3600,
+          expires_at: Date.now() + 3600000,
+          token_type: 'Bearer',
+          scope: 'mock',
+        });
+        setIsAuthenticated(true);
+        setIsLoading(false);
+        return;
+      }
+
       try {
         const storedTokens = await spotifyAuth.getStoredTokens();
         if (storedTokens) {
@@ -54,7 +73,7 @@ export const useSpotify = (): UseSpotifyReturn => {
     };
 
     checkAuth();
-  }, []);
+  }, [mockMode]);
 
   const login = useCallback(async () => {
     try {
@@ -105,6 +124,7 @@ export const useSpotify = (): UseSpotifyReturn => {
     user,
     tokens,
     error,
+    isMockMode: mockMode,
     login,
     logout,
     refreshTokens,

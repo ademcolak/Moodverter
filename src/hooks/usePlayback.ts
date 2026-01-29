@@ -2,6 +2,17 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { SpotifyPlaybackState, SpotifyTrack } from '../types/spotify';
 import { Track } from '../types/track';
 import * as playbackService from '../services/spotify/playback';
+import {
+  isMockMode,
+  onMockStateChange,
+  mockPlay,
+  mockPause,
+  mockSkipNext,
+  mockSkipPrevious,
+  mockSeek,
+  mockPlayTrack,
+  mockGetCurrentTrack,
+} from '../services/mock';
 
 // Track change types
 export type TrackChangeType = 'skip' | 'previous' | 'manual' | 'natural' | 'app_initiated';
@@ -56,17 +67,18 @@ export const usePlayback = (
   options: UsePlaybackOptions = {}
 ): UsePlaybackReturn => {
   const { onTrackChange } = options;
-  
+  const mockMode = isMockMode();
+
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [playbackState, setPlaybackState] = useState<SpotifyPlaybackState | null>(null);
   const [lastTrackChange, setLastTrackChange] = useState<TrackChangeEvent | null>(null);
-  
+
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  
+
   // Track change detection refs
   const previousTrackRef = useRef<Track | null>(null);
   const previousProgressRef = useRef<number>(0);
@@ -87,43 +99,93 @@ export const usePlayback = (
       if (type === 'previous') return 'previous';
       if (type === 'play') return 'app_initiated';
     }
-    
+
     // No previous track - first play
     if (!previousTrack) return 'app_initiated';
-    
+
     // Same track - no change
     if (previousTrack.spotifyId === newTrack.spotifyId) return 'natural';
-    
+
     // Track ended naturally (progress was near end)
     const progressPercent = previousProgress / trackDuration;
     if (progressPercent > 0.95) return 'natural';
-    
+
     // Track changed before it ended - user intervention
     // Could be skip, previous, or manual selection
     if (progressPercent < 0.05) {
       // Changed very early - likely previous
       return 'previous';
     }
-    
+
     // Changed mid-track - could be skip or manual
     return 'manual';
   }, []);
 
-  // Fetch playback state
+  // Mock mode: Subscribe to mock state changes
+  useEffect(() => {
+    if (!mockMode) return;
+
+    // Initialize with first track
+    const initialTrack = mockGetCurrentTrack();
+    if (initialTrack) {
+      setCurrentTrack(initialTrack);
+      setDuration(initialTrack.durationMs);
+      previousTrackRef.current = initialTrack;
+    }
+
+    // Subscribe to state changes
+    onMockStateChange((state) => {
+      setIsPlaying(state.isPlaying);
+      setProgress(state.progress);
+
+      const newTrack = state.library[state.currentTrackIndex];
+      if (newTrack) {
+        const prevTrack = previousTrackRef.current;
+
+        // Detect track change
+        if (!prevTrack || prevTrack.spotifyId !== newTrack.spotifyId) {
+          const changeType = detectTrackChangeType(
+            prevTrack,
+            newTrack,
+            previousProgressRef.current,
+            prevTrack?.durationMs || newTrack.durationMs
+          );
+
+          const changeEvent: TrackChangeEvent = {
+            type: changeType,
+            previousTrack: prevTrack,
+            newTrack,
+            timestamp: Date.now(),
+          };
+
+          setLastTrackChange(changeEvent);
+          onTrackChange?.(changeEvent);
+        }
+
+        previousTrackRef.current = newTrack;
+        previousProgressRef.current = state.progress;
+
+        setCurrentTrack(newTrack);
+        setDuration(newTrack.durationMs);
+      }
+    });
+  }, [mockMode, detectTrackChangeType, onTrackChange]);
+
+  // Fetch playback state (real Spotify)
   const fetchPlaybackState = useCallback(async () => {
-    if (!accessToken) return;
-    
+    if (!accessToken || mockMode) return;
+
     try {
       const state = await playbackService.getPlaybackState(accessToken);
       if (state) {
         setPlaybackState(state);
         setIsPlaying(state.is_playing);
-        
+
         if (state.item) {
           const newTrack = mapSpotifyTrackToTrack(state.item);
           const prevTrack = previousTrackRef.current;
           const prevProgress = previousProgressRef.current;
-          
+
           // Detect track change
           if (!prevTrack || prevTrack.spotifyId !== newTrack.spotifyId) {
             const changeType = detectTrackChangeType(
@@ -132,22 +194,22 @@ export const usePlayback = (
               prevProgress,
               prevTrack?.durationMs || state.item.duration_ms
             );
-            
+
             const changeEvent: TrackChangeEvent = {
               type: changeType,
               previousTrack: prevTrack,
               newTrack,
               timestamp: Date.now(),
             };
-            
+
             setLastTrackChange(changeEvent);
             onTrackChange?.(changeEvent);
           }
-          
+
           // Update refs for next comparison
           previousTrackRef.current = newTrack;
           previousProgressRef.current = state.progress_ms;
-          
+
           setCurrentTrack(newTrack);
           setProgress(state.progress_ms);
           setDuration(state.item.duration_ms);
@@ -156,11 +218,11 @@ export const usePlayback = (
     } catch (err) {
       console.error('Failed to fetch playback state:', err);
     }
-  }, [accessToken, detectTrackChangeType, onTrackChange]);
+  }, [accessToken, mockMode, detectTrackChangeType, onTrackChange]);
 
-  // Poll playback state
+  // Poll playback state (real Spotify only)
   useEffect(() => {
-    if (!accessToken) return;
+    if (!accessToken || mockMode) return;
 
     fetchPlaybackState();
     pollIntervalRef.current = setInterval(fetchPlaybackState, 5000);
@@ -170,10 +232,12 @@ export const usePlayback = (
         clearInterval(pollIntervalRef.current);
       }
     };
-  }, [accessToken, fetchPlaybackState]);
+  }, [accessToken, mockMode, fetchPlaybackState]);
 
-  // Update progress locally when playing
+  // Update progress locally when playing (real Spotify only)
   useEffect(() => {
+    if (mockMode) return; // Mock mode handles its own progress
+
     if (isPlaying) {
       progressIntervalRef.current = setInterval(() => {
         setProgress(prev => Math.min(prev + 1000, duration));
@@ -189,47 +253,72 @@ export const usePlayback = (
         clearInterval(progressIntervalRef.current);
       }
     };
-  }, [isPlaying, duration]);
+  }, [mockMode, isPlaying, duration]);
 
   const play = useCallback(async () => {
+    if (mockMode) {
+      mockPlay();
+      return;
+    }
     if (!accessToken) return;
     await playbackService.play(accessToken);
     setIsPlaying(true);
-  }, [accessToken]);
+  }, [accessToken, mockMode]);
 
   const pause = useCallback(async () => {
+    if (mockMode) {
+      mockPause();
+      return;
+    }
     if (!accessToken) return;
     await playbackService.pause(accessToken);
     setIsPlaying(false);
-  }, [accessToken]);
+  }, [accessToken, mockMode]);
 
   const skipNext = useCallback(async () => {
-    if (!accessToken) return;
     appInitiatedChangeRef.current = 'skip';
+    if (mockMode) {
+      mockSkipNext();
+      return;
+    }
+    if (!accessToken) return;
     await playbackService.skipToNext(accessToken);
-    // Fetch new state after skip
     setTimeout(fetchPlaybackState, 500);
-  }, [accessToken, fetchPlaybackState]);
+  }, [accessToken, mockMode, fetchPlaybackState]);
 
   const skipPrevious = useCallback(async () => {
-    if (!accessToken) return;
     appInitiatedChangeRef.current = 'previous';
+    if (mockMode) {
+      mockSkipPrevious();
+      return;
+    }
+    if (!accessToken) return;
     await playbackService.skipToPrevious(accessToken);
     setTimeout(fetchPlaybackState, 500);
-  }, [accessToken, fetchPlaybackState]);
+  }, [accessToken, mockMode, fetchPlaybackState]);
 
   const seek = useCallback(async (positionMs: number) => {
+    if (mockMode) {
+      mockSeek(positionMs);
+      return;
+    }
     if (!accessToken) return;
     await playbackService.seek(accessToken, positionMs);
     setProgress(positionMs);
-  }, [accessToken]);
+  }, [accessToken, mockMode]);
 
   const playTrack = useCallback(async (trackUri: string) => {
-    if (!accessToken) return;
     appInitiatedChangeRef.current = 'play';
+    if (mockMode) {
+      // Extract track ID from URI (spotify:track:xxx or just xxx)
+      const trackId = trackUri.includes(':') ? trackUri.split(':').pop()! : trackUri;
+      mockPlayTrack(trackId);
+      return;
+    }
+    if (!accessToken) return;
     await playbackService.playTrack(accessToken, trackUri);
     setTimeout(fetchPlaybackState, 500);
-  }, [accessToken, fetchPlaybackState]);
+  }, [accessToken, mockMode, fetchPlaybackState]);
 
   return {
     isPlaying,

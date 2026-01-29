@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useRef, useState, useCallback } from 'react';
 import { Track } from '../types/track';
 
 interface NowPlayingProps {
@@ -6,9 +6,48 @@ interface NowPlayingProps {
   progress: number;
   duration: number;
   transitionPoint?: number;
+  onSeek?: (positionMs: number) => void;
 }
 
-export const NowPlaying = memo(function NowPlaying({ track, progress, duration, transitionPoint }: NowPlayingProps) {
+export const NowPlaying = memo(function NowPlaying({ track, progress, duration, transitionPoint, onSeek }: NowPlayingProps) {
+  const progressBarRef = useRef<HTMLDivElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragProgress, setDragProgress] = useState(0);
+
+  const calculatePositionFromEvent = useCallback((e: React.MouseEvent | MouseEvent) => {
+    if (!progressBarRef.current || duration <= 0) return 0;
+    const rect = progressBarRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+    const percent = x / rect.width;
+    return Math.floor(percent * duration);
+  }, [duration]);
+
+  const handleProgressClick = useCallback((e: React.MouseEvent) => {
+    if (!onSeek) return;
+    const position = calculatePositionFromEvent(e);
+    onSeek(position);
+  }, [onSeek, calculatePositionFromEvent]);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (!onSeek) return;
+    setIsDragging(true);
+    setDragProgress(calculatePositionFromEvent(e));
+
+    const handleMouseMove = (e: MouseEvent) => {
+      setDragProgress(calculatePositionFromEvent(e));
+    };
+
+    const handleMouseUp = (e: MouseEvent) => {
+      const position = calculatePositionFromEvent(e);
+      onSeek(position);
+      setIsDragging(false);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  }, [onSeek, calculatePositionFromEvent]);
   if (!track) {
     return (
       <div className="flex items-center gap-4 p-4 bg-[var(--color-surface)] rounded-lg">
@@ -69,12 +108,28 @@ export const NowPlaying = memo(function NowPlaying({ track, progress, duration, 
       
       {/* Progress bar */}
       <div className="relative group/progress">
-        <div className="h-1 bg-[var(--color-background)] rounded-full overflow-hidden cursor-pointer group-hover/progress:h-1.5 transition-all duration-150">
-          <div 
+        <div
+          ref={progressBarRef}
+          className={`h-1 bg-[var(--color-background)] rounded-full overflow-hidden cursor-pointer
+                      ${onSeek ? 'hover:h-2' : ''} transition-all duration-150`}
+          onClick={handleProgressClick}
+          onMouseDown={handleMouseDown}
+        >
+          <div
             className="h-full bg-[var(--color-primary)] transition-all duration-200"
-            style={{ width: `${progressPercent}%` }}
+            style={{ width: `${isDragging ? (dragProgress / duration) * 100 : progressPercent}%` }}
           />
         </div>
+
+        {/* Drag handle (visible when hovering or dragging) */}
+        {onSeek && (
+          <div
+            className={`absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow-md
+                        transition-opacity duration-150 pointer-events-none
+                        ${isDragging ? 'opacity-100 scale-110' : 'opacity-0 group-hover/progress:opacity-100'}`}
+            style={{ left: `calc(${isDragging ? (dragProgress / duration) * 100 : progressPercent}% - 6px)` }}
+          />
+        )}
         
         {/* Transition point marker */}
         {transitionPercent && (

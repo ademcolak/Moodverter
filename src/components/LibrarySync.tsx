@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { getAllSavedTracks, getAudioFeaturesBatch } from '../services/spotify/api';
 import { setTrackCache, getTrackCache, getCacheStats } from '../services/db/cache';
 import { Track } from '../types/track';
-import { SpotifySavedTrack } from '../types/spotify';
 
 interface LibrarySyncProps {
   accessToken: string;

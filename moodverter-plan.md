@@ -397,4 +397,29 @@ moodverter/
 
 ---
 
+## 📝 Backlog (MVP Sonrası)
+
+### Yüksek Öncelik
+- [ ] **System Tray Entegrasyonu** - macOS menu bar / Windows system tray ikonu
+  - Pencereyi gizle/göster toggle
+  - Tray ikonuna tıklayınca widget açılır/kapanır
+  - Sağ tık menüsü (Quit, Settings, vb.)
+- [ ] **Pencere Minimize/Gizleme** - Kapatma yerine gizleme butonu
+  - X butonu pencereyi kapatmasın, tray'e göndersin
+  - Keyboard shortcut ile toggle (ör: Cmd+Shift+M)
+- [ ] **Always-on-top Toggle** - Her zaman üstte kalma seçeneği
+  - Settings'te toggle ekle
+  - Kullanıcı isterse alta indirebilsin
+  - Varsayılan: açık (widget davranışı)
+
+### Orta Öncelik
+- [ ] **Ritme göre geçiş (Transition)** - Mevcut transition.ts kodunu entegre et
+- [ ] **Gerçek Spotify verisi ile mock** - Kullanıcının kendi şarkılarını export edip mock olarak kullan
+
+### Düşük Öncelik
+- [ ] **Preset mood'lar** - Hazır mood butonları (Energetic, Chill, Focus, vb.)
+- [ ] **Mini player modu** - Daha da küçük görünüm seçeneği
+
+---
+
 *Bu döküman proje ilerledikçe güncellenecektir. Her tamamlanan adımı ✅ ile işaretle.*

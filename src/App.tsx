@@ -5,6 +5,7 @@ import { Track } from './types/track';
 import { MoodDeviation, MoodParameters } from './types/mood';
 import { getAudioFeatures } from './services/spotify/api';
 import { getCacheStats } from './services/db/cache';
+import { MOCK_TRACKS } from './services/mock/data';
 
 // Helper to generate mood description from parameters
 const getMoodDescription = (params: MoodParameters): string => {
@@ -42,7 +43,7 @@ function App() {
   const [libraryTracks, setLibraryTracks] = useState<Track[]>([]);
 
   // Hooks
-  const { isAuthenticated, isLoading: authLoading, user, tokens, login, logout } = useSpotify();
+  const { isAuthenticated, isLoading: authLoading, user, tokens, login, logout, isMockMode } = useSpotify();
   const accessToken = tokens?.access_token || null;
   
   const { moodState, processMood, calculateDeviation } = useMood(settings.openAiApiKey || null);
@@ -51,28 +52,36 @@ function App() {
   const handleTrackChange = useCallback(async (event: TrackChangeEvent) => {
     // Only check deviation for user-initiated changes (not natural progression or app-initiated)
     if (event.type === 'natural' || event.type === 'app_initiated') return;
-    if (!moodState.current || !accessToken) return;
-    
+    if (!moodState.current) return;
+
     try {
-      // Fetch audio features for the new track
-      const features = await getAudioFeatures(accessToken, event.newTrack.spotifyId);
-      
-      // Create track with audio features
-      const trackWithFeatures: Track = {
-        ...event.newTrack,
-        energy: features.energy,
-        valence: features.valence,
-        tempo: features.tempo,
-        danceability: features.danceability,
-        acousticness: features.acousticness,
-        instrumentalness: features.instrumentalness,
-        key: features.key,
-        mode: features.mode,
-      };
-      
+      let trackWithFeatures: Track;
+
+      // In mock mode, tracks already have audio features
+      if (isMockMode) {
+        trackWithFeatures = event.newTrack;
+      } else {
+        if (!accessToken) return;
+        // Fetch audio features for the new track
+        const features = await getAudioFeatures(accessToken, event.newTrack.spotifyId);
+
+        // Create track with audio features
+        trackWithFeatures = {
+          ...event.newTrack,
+          energy: features.energy,
+          valence: features.valence,
+          tempo: features.tempo,
+          danceability: features.danceability,
+          acousticness: features.acousticness,
+          instrumentalness: features.instrumentalness,
+          key: features.key,
+          mode: features.mode,
+        };
+      }
+
       // Calculate deviation
       const deviation = calculateDeviation(trackWithFeatures);
-      
+
       if (deviation?.isSignificant) {
         // Show dialog for significant deviations
         setCurrentDeviation(deviation);
@@ -85,7 +94,7 @@ function App() {
     } catch (err) {
       console.error('Failed to check track deviation:', err);
     }
-  }, [moodState.current, accessToken, calculateDeviation]);
+  }, [moodState.current, accessToken, isMockMode, calculateDeviation]);
 
   const {
     isPlaying,
@@ -96,6 +105,7 @@ function App() {
     pause,
     skipNext,
     skipPrevious,
+    seek,
   } = usePlayback(accessToken, { onTrackChange: handleTrackChange });
 
   // Handle adaptation to new mood based on current track
@@ -160,12 +170,19 @@ function App() {
   // Check if library sync is needed after authentication
   useEffect(() => {
     if (isAuthenticated && needsLibrarySync === null) {
+      // Mock mode: use mock tracks directly, no sync needed
+      if (isMockMode) {
+        setLibraryTracks(MOCK_TRACKS);
+        setNeedsLibrarySync(false);
+        return;
+      }
+
       const stats = getCacheStats();
       // Need sync if no tracks or last sync was more than 24 hours ago
-      const needsSync = stats.trackCount === 0 || 
-        (stats.lastSync && (Date.now() - stats.lastSync) > 24 * 60 * 60 * 1000);
+      const needsSync = stats.trackCount === 0 ||
+        (stats.lastSync ? (Date.now() - stats.lastSync) > 24 * 60 * 60 * 1000 : true);
       setNeedsLibrarySync(needsSync);
-      
+
       if (!needsSync && stats.trackCount > 0) {
         // Load existing cached tracks
         import('./services/db/cache').then(({ getTrackCache }) => {
@@ -173,7 +190,7 @@ function App() {
         });
       }
     }
-  }, [isAuthenticated, needsLibrarySync]);
+  }, [isAuthenticated, isMockMode, needsLibrarySync]);
 
   // Library sync handlers
   const handleLibrarySyncComplete = useCallback((tracks: Track[]) => {
@@ -194,9 +211,16 @@ function App() {
         data-tauri-drag-region 
         className="h-8 flex items-center justify-between px-3 bg-[var(--color-surface)]"
       >
-        <span className="text-xs text-[var(--color-text-secondary)] font-medium">
-          Moodverter
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-[var(--color-text-secondary)] font-medium">
+            Moodverter
+          </span>
+          {isMockMode && (
+            <span className="px-1.5 py-0.5 text-[10px] bg-amber-500/20 text-amber-400 rounded font-medium">
+              DEMO
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-1">
           {/* Collapse/Expand button */}
           <button
@@ -346,10 +370,11 @@ function App() {
               )}
 
               {/* Now playing */}
-              <NowPlaying 
+              <NowPlaying
                 track={currentTrack}
                 progress={progress}
                 duration={duration}
+                onSeek={seek}
               />
 
               {/* Player controls */}
