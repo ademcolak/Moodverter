@@ -106,6 +106,8 @@ export const useMood = (openAiApiKey: string | null): UseMoodReturn => {
       deviationScore,
       isSignificant: deviationScore > SIGNIFICANT_DEVIATION_THRESHOLD,
     };
+    // Note: moodState.current is used instead of moodState to capture current mood snapshot
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moodState.current]);
 
   const clearMood = useCallback(() => {

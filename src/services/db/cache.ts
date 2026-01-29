@@ -5,6 +5,36 @@ const CACHE_KEY = 'moodverter_track_cache';
 const CACHE_VERSION = 1;
 const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+// Check if error is quota exceeded
+const isQuotaExceeded = (err: unknown): boolean => {
+  if (err instanceof DOMException) {
+    // Most browsers
+    return (
+      err.code === 22 ||
+      err.code === 1014 ||
+      err.name === 'QuotaExceededError' ||
+      err.name === 'NS_ERROR_DOM_QUOTA_REACHED'
+    );
+  }
+  return false;
+};
+
+// Handle storage errors with automatic cleanup attempt
+const handleStorageError = (operation: string, err: unknown): void => {
+  if (isQuotaExceeded(err)) {
+    console.warn(`Storage quota exceeded during ${operation}. Attempting cleanup...`);
+    // Try to cleanup old cache entries
+    try {
+      const removed = cleanupCache();
+      console.warn(`Cleaned up ${removed} old cache entries`);
+    } catch {
+      console.error('Failed to cleanup cache after quota exceeded');
+    }
+  } else {
+    console.error(`Cache ${operation} failed:`, err);
+  }
+};
+
 interface CacheData {
   version: number;
   tracks: Record<string, Track>;
@@ -46,7 +76,7 @@ export const getCachedTrack = (spotifyId: string): Track | null => {
 };
 
 // Cache tracks
-export const cacheTracks = (tracks: Track[]): void => {
+export const cacheTracks = (tracks: Track[]): boolean => {
   try {
     const existing = localStorage.getItem(CACHE_KEY);
     let cache: CacheData;
@@ -69,9 +99,22 @@ export const cacheTracks = (tracks: Track[]): void => {
     }
 
     cache.lastUpdated = Date.now();
-    localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+      return true;
+    } catch (storageErr) {
+      if (isQuotaExceeded(storageErr)) {
+        // Try cleanup and retry once
+        handleStorageError('cacheTracks', storageErr);
+        localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+        return true;
+      }
+      throw storageErr;
+    }
   } catch (err) {
-    console.error('Failed to cache tracks:', err);
+    handleStorageError('cacheTracks', err);
+    return false;
   }
 };
 
@@ -84,14 +127,14 @@ export const cacheTrack = (track: Track): void => {
 export const updateTrackFeatures = (
   spotifyId: string,
   features: SpotifyAudioFeatures
-): void => {
+): boolean => {
   try {
     const data = localStorage.getItem(CACHE_KEY);
-    if (!data) return;
+    if (!data) return false;
 
     const cache: CacheData = JSON.parse(data);
     const track = cache.tracks[spotifyId];
-    
+
     if (track) {
       cache.tracks[spotifyId] = {
         ...track,
@@ -104,11 +147,19 @@ export const updateTrackFeatures = (
         key: features.key,
         mode: features.mode,
       };
-      
-      localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+        return true;
+      } catch (storageErr) {
+        handleStorageError('updateTrackFeatures', storageErr);
+        return false;
+      }
     }
+    return false;
   } catch (err) {
-    console.error('Failed to update track features:', err);
+    handleStorageError('updateTrackFeatures', err);
+    return false;
   }
 };
 
@@ -202,7 +253,7 @@ export const getTrackCache = (): Track[] => {
 };
 
 // Set all tracks in cache (replaces existing)
-export const setTrackCache = (tracks: Track[]): void => {
+export const setTrackCache = (tracks: Track[]): boolean => {
   try {
     const cache: CacheData = {
       version: CACHE_VERSION,
@@ -217,9 +268,35 @@ export const setTrackCache = (tracks: Track[]): void => {
       };
     }
 
-    localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+      return true;
+    } catch (storageErr) {
+      if (isQuotaExceeded(storageErr)) {
+        // Storage full - try with fewer tracks
+        console.warn('Storage quota exceeded. Caching fewer tracks...');
+        const reducedCache: CacheData = {
+          version: CACHE_VERSION,
+          tracks: {},
+          lastUpdated: Date.now(),
+        };
+        // Keep only the most recent half
+        const trackList = tracks.slice(0, Math.floor(tracks.length / 2));
+        for (const track of trackList) {
+          reducedCache.tracks[track.spotifyId] = {
+            ...track,
+            cachedAt: new Date(),
+          };
+        }
+        localStorage.setItem(CACHE_KEY, JSON.stringify(reducedCache));
+        console.warn(`Cached ${trackList.length} tracks (reduced from ${tracks.length})`);
+        return true;
+      }
+      throw storageErr;
+    }
   } catch (err) {
-    console.error('Failed to set track cache:', err);
+    handleStorageError('setTrackCache', err);
+    return false;
   }
 };
 

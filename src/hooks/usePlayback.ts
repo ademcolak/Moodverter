@@ -224,7 +224,8 @@ export const usePlayback = (
   useEffect(() => {
     if (!accessToken || mockMode) return;
 
-    fetchPlaybackState();
+    // Initial fetch on mount
+    void fetchPlaybackState();
     pollIntervalRef.current = setInterval(fetchPlaybackState, 5000);
 
     return () => {

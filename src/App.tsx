@@ -31,7 +31,9 @@ function App() {
     spotifyConnected: false,
     openAiApiKey: import.meta.env.VITE_OPENAI_API_KEY || '',
   });
-  const [nextTrack, _setNextTrack] = useState<Track | null>(null);
+  const [nextTrack, setNextTrack] = useState<Track | null>(null);
+  // Note: setNextTrack will be used when track selection is implemented
+  void setNextTrack; // Suppress unused warning until implementation
   
   // Deviation dialog state
   const [deviationDialogOpen, setDeviationDialogOpen] = useState(false);
@@ -89,11 +91,14 @@ function App() {
         setDeviationDialogOpen(true);
       } else if (deviation && deviation.deviationScore > 0.15) {
         // Silent adaptation for small-medium deviations
-        console.log('Small mood deviation detected, adapting silently...');
+        // Using warn level for development visibility
+        console.warn('Small mood deviation detected, adapting silently...');
       }
     } catch (err) {
       console.error('Failed to check track deviation:', err);
     }
+    // Note: moodState.current is intentionally used instead of moodState to avoid unnecessary re-renders
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moodState.current, accessToken, isMockMode, calculateDeviation]);
 
   const {

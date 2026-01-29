@@ -98,7 +98,7 @@ export const LibrarySync = ({ accessToken, onSyncComplete, onSkip }: LibrarySync
   }, [accessToken, onSyncComplete]);
 
   useEffect(() => {
-    syncLibrary();
+    void syncLibrary();
   }, [syncLibrary]);
 
   const getPhaseText = () => {

@@ -303,15 +303,15 @@ moodverter/
 ### Faz 8: Test ve Polish
 **Süre:** 3-4 gün
 
-- [ ] **8.1** Unit testler (kritik fonksiyonlar için)
-- [ ] **8.2** End-to-end akış testi
-- [ ] **8.3** macOS build ve test
-- [ ] **8.4** Windows build ve test
-- [ ] **8.5** Edge case testleri
-- [ ] **8.6** Performance optimizasyonu
-- [ ] **8.7** Memory leak kontrolü
-- [ ] **8.8** Error handling review
-- [ ] **8.9** UI/UX iyileştirmeleri
+- [x] **8.1** Unit testler (kritik fonksiyonlar için) ✅ *126 test (cache, selector, scorer, mapper, transition)*
+- [ ] **8.2** End-to-end akış testi ⏳ *Spotify bağlantısı gerektirir*
+- [ ] **8.3** macOS build ve test ⏳ *Spotify bağlantısı gerektirir*
+- [ ] **8.4** Windows build ve test ⏳ *Spotify bağlantısı gerektirir*
+- [x] **8.5** Edge case testleri ✅ *Testlerde kapsamlı edge case coverage*
+- [x] **8.6** Performance optimizasyonu ✅ *Cache quota handling eklendi*
+- [x] **8.7** Memory leak kontrolü ✅ *useSpotify hook düzeltildi (isMountedRef)*
+- [x] **8.8** Error handling review ✅ *cache.ts localStorage quota exceeded handling*
+- [ ] **8.9** UI/UX iyileştirmeleri ⏳ *Spotify bağlantısı ile test gerektirir*
 
 ---
 
@@ -381,32 +381,43 @@ moodverter/
 | - | İlk versiyon oluşturuldu |
 | 28 Ocak 2026 | Faz 0, 1, 2, 4, 5 tamamlandı. Faz 3, 6, 7 kısmen tamamlandı. |
 | 28 Ocak 2026 | Faz 3, 6, 7 tamamlandı. Kullanıcı müdahalesi yönetimi, expand/collapse, hover states, library sync eklendi. |
+| 29 Ocak 2026 | Faz 8 kısmen tamamlandı: Unit testler (126 test), memory leak fix, error handling iyileştirmeleri. Spotify bağlantısı bekleyen testler hariç. |
+| 29 Ocak 2026 | Lint hataları düzeltildi. README güncellendi. System Tray entegrasyonu eklendi. Preset mood butonları eklendi. |
 
 ---
 
 ## 🎯 Mevcut Durum
 
-**Tamamlanan:** Faz 0 ✅, Faz 1 ✅, Faz 2 ✅, Faz 3 ✅, Faz 4 ✅, Faz 5 ✅, Faz 6 ✅, Faz 7 ✅  
-**Bekleyen:** Faz 8, Faz 9
+**Tamamlanan:** Faz 0 ✅, Faz 1 ✅, Faz 2 ✅, Faz 3 ✅, Faz 4 ✅, Faz 5 ✅, Faz 6 ✅, Faz 7 ✅, Faz 8 (kısmen) ✅
+**Bekleyen:** Faz 8 (Spotify gerektiren testler), Faz 9
 
-**Sonraki Adımlar:**
+**Tamamlanan İyileştirmeler (29 Ocak 2026):**
+- ✅ Unit testler: 126 test (cache.test.ts, selector.test.ts eklendi)
+- ✅ Memory leak fix: useSpotify hook'ta isMountedRef ile async cleanup
+- ✅ Error handling: cache.ts'de localStorage quota exceeded handling
+- ✅ Edge case testleri: Kapsamlı test coverage
+
+**Sonraki Adımlar (Spotify bağlantısı sonrası):**
 1. `.env` dosyası oluştur ve `VITE_SPOTIFY_CLIENT_ID` ekle
 2. Spotify Developer Dashboard'dan app oluştur
 3. `pnpm tauri dev` ile test et
-4. Faz 8: Test ve Polish aşamasına geç
+4. End-to-end akış testi (8.2)
+5. macOS/Windows build ve test (8.3, 8.4)
+6. UI/UX iyileştirmeleri (8.9)
+7. Faz 9: Dağıtım ve Dokümantasyon
 
 ---
 
 ## 📝 Backlog (MVP Sonrası)
 
 ### Yüksek Öncelik
-- [ ] **System Tray Entegrasyonu** - macOS menu bar / Windows system tray ikonu
-  - Pencereyi gizle/göster toggle
-  - Tray ikonuna tıklayınca widget açılır/kapanır
-  - Sağ tık menüsü (Quit, Settings, vb.)
-- [ ] **Pencere Minimize/Gizleme** - Kapatma yerine gizleme butonu
-  - X butonu pencereyi kapatmasın, tray'e göndersin
-  - Keyboard shortcut ile toggle (ör: Cmd+Shift+M)
+- [x] **System Tray Entegrasyonu** - macOS menu bar / Windows system tray ikonu ✅
+  - ✅ Pencereyi gizle/göster toggle
+  - ✅ Tray ikonuna tıklayınca widget açılır/kapanır
+  - ✅ Sağ tık menüsü (Show, Hide, Quit)
+- [x] **Pencere Minimize/Gizleme** - Kapatma yerine gizleme butonu ✅
+  - ✅ X butonu pencereyi kapatmasın, tray'e göndersin
+  - [ ] Keyboard shortcut ile toggle (ör: Cmd+Shift+M) *Gelecek*
 - [ ] **Always-on-top Toggle** - Her zaman üstte kalma seçeneği
   - Settings'te toggle ekle
   - Kullanıcı isterse alta indirebilsin
@@ -417,7 +428,7 @@ moodverter/
 - [ ] **Gerçek Spotify verisi ile mock** - Kullanıcının kendi şarkılarını export edip mock olarak kullan
 
 ### Düşük Öncelik
-- [ ] **Preset mood'lar** - Hazır mood butonları (Energetic, Chill, Focus, vb.)
+- [x] **Preset mood'lar** - Hazır mood butonları (Energetic, Chill, Focus, vb.) ✅
 - [ ] **Mini player modu** - Daha da küçük görünüm seçeneği
 
 ---

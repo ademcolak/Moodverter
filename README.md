@@ -11,6 +11,9 @@ A cross-platform desktop widget that provides mood-based music navigation with S
 - **Mood Deviation Detection**: Detects when you skip to tracks that don't match your current mood and offers to adapt
 - **Minimal Widget UI**: Compact, always-on-top widget that stays out of your way
 - **Cross-Platform**: Built with Tauri for macOS and Windows support
+- **System Tray**: Minimize to tray, left-click to toggle visibility, right-click for menu
+- **Expand/Collapse**: Quick toggle between full widget and mini player modes
+- **Demo Mode**: Try without Spotify using `VITE_MOCK_MODE=true`
 
 ## Tech Stack
 
@@ -145,6 +148,17 @@ src/
 - Fallback mood parsing when AI is unavailable
 - Supports 40+ keywords in English and Turkish
 - Compound mood support (e.g., "happy energetic")
+
+## Test Coverage
+
+The project includes 126 unit tests covering:
+- `scorer.ts` - Mood and transition scoring algorithms
+- `mapper.ts` - Keyword-to-mood parameter mapping
+- `transition.ts` - Camelot wheel and transition calculations
+- `cache.ts` - Local storage caching logic
+- `selector.ts` - Track selection and filtering
+
+Run tests with `pnpm test:run` or see coverage with `pnpm test:coverage`.
 
 ## Contributing
 
