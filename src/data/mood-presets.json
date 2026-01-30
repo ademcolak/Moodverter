@@ -1,0 +1,170 @@
+{
+  "version": "1.0.0",
+  "generatedAt": "2024-01-01T00:00:00.000Z",
+  "model": "fallback",
+  "embedModel": "none",
+  "presets": [
+    {
+      "category": "energetic",
+      "phrases": ["energetic", "pumped up", "enerjik", "fired up", "coşkulu", "hyped", "high energy"],
+      "params": { "energy": 0.85, "valence": 0.75, "danceability": 0.80, "tempo": { "min": 120, "max": 150 } },
+      "embeddings": []
+    },
+    {
+      "category": "happy",
+      "phrases": ["happy", "joyful", "mutlu", "neşeli", "cheerful", "upbeat", "bright"],
+      "params": { "energy": 0.70, "valence": 0.90, "danceability": 0.75, "tempo": { "min": 100, "max": 130 } },
+      "embeddings": []
+    },
+    {
+      "category": "party",
+      "phrases": ["party", "celebration", "parti", "festival", "club", "dance", "rave"],
+      "params": { "energy": 0.90, "valence": 0.80, "danceability": 0.90, "tempo": { "min": 120, "max": 140 } },
+      "embeddings": []
+    },
+    {
+      "category": "workout",
+      "phrases": ["workout", "gym", "exercise", "spor", "training", "fitness", "pump"],
+      "params": { "energy": 0.95, "valence": 0.65, "danceability": 0.75, "tempo": { "min": 130, "max": 160 } },
+      "embeddings": []
+    },
+    {
+      "category": "confident",
+      "phrases": ["confident", "powerful", "güçlü", "bold", "empowering", "strong", "badass"],
+      "params": { "energy": 0.80, "valence": 0.70, "danceability": 0.65, "tempo": { "min": 100, "max": 130 } },
+      "embeddings": []
+    },
+    {
+      "category": "chill",
+      "phrases": ["chill", "relaxed", "rahat", "laid back", "easygoing", "mellow", "casual"],
+      "params": { "energy": 0.40, "valence": 0.60, "danceability": 0.50, "tempo": { "min": 80, "max": 110 } },
+      "embeddings": []
+    },
+    {
+      "category": "focused",
+      "phrases": ["focused", "concentration", "odaklı", "study", "work", "productive", "deep work"],
+      "params": { "energy": 0.45, "valence": 0.50, "danceability": 0.30, "tempo": { "min": 90, "max": 120 }, "instrumentalness": 0.7 },
+      "embeddings": []
+    },
+    {
+      "category": "romantic",
+      "phrases": ["romantic", "love", "aşk", "intimate", "tender", "sensual", "passion"],
+      "params": { "energy": 0.35, "valence": 0.65, "danceability": 0.45, "tempo": { "min": 70, "max": 100 } },
+      "embeddings": []
+    },
+    {
+      "category": "groovy",
+      "phrases": ["groovy", "funky", "rhythm", "groove", "smooth", "funk", "bass"],
+      "params": { "energy": 0.65, "valence": 0.70, "danceability": 0.85, "tempo": { "min": 95, "max": 115 } },
+      "embeddings": []
+    },
+    {
+      "category": "dreamy",
+      "phrases": ["dreamy", "ethereal", "rüya", "floating", "atmospheric", "ambient", "hazy"],
+      "params": { "energy": 0.30, "valence": 0.55, "danceability": 0.35, "tempo": { "min": 70, "max": 100 }, "acousticness": 0.6 },
+      "embeddings": []
+    },
+    {
+      "category": "calm",
+      "phrases": ["calm", "peaceful", "sakin", "serene", "tranquil", "quiet", "gentle"],
+      "params": { "energy": 0.20, "valence": 0.55, "danceability": 0.25, "tempo": { "min": 60, "max": 85 }, "acousticness": 0.7 },
+      "embeddings": []
+    },
+    {
+      "category": "sleepy",
+      "phrases": ["sleepy", "bedtime", "uykulu", "lullaby", "night", "uyku", "sleep"],
+      "params": { "energy": 0.15, "valence": 0.45, "danceability": 0.15, "tempo": { "min": 50, "max": 75 }, "instrumentalness": 0.6 },
+      "embeddings": []
+    },
+    {
+      "category": "acoustic",
+      "phrases": ["acoustic", "unplugged", "akustik", "organic", "raw", "live", "singer-songwriter"],
+      "params": { "energy": 0.35, "valence": 0.55, "danceability": 0.40, "tempo": { "min": 80, "max": 110 }, "acousticness": 0.85 },
+      "embeddings": []
+    },
+    {
+      "category": "melancholic",
+      "phrases": ["melancholic", "bittersweet", "melankolik", "wistful", "hüzünlü", "longing", "yearning"],
+      "params": { "energy": 0.30, "valence": 0.25, "danceability": 0.30, "tempo": { "min": 70, "max": 100 } },
+      "embeddings": []
+    },
+    {
+      "category": "sad",
+      "phrases": ["sad", "heartbroken", "üzgün", "blue", "crying", "depressed", "down"],
+      "params": { "energy": 0.20, "valence": 0.15, "danceability": 0.20, "tempo": { "min": 60, "max": 90 } },
+      "embeddings": []
+    },
+    {
+      "category": "nostalgic",
+      "phrases": ["nostalgic", "memories", "nostaljik", "throwback", "reminiscing", "retro", "vintage"],
+      "params": { "energy": 0.40, "valence": 0.45, "danceability": 0.35, "tempo": { "min": 80, "max": 110 } },
+      "embeddings": []
+    },
+    {
+      "category": "angry",
+      "phrases": ["angry", "aggressive", "kızgın", "intense", "rage", "furious", "metal"],
+      "params": { "energy": 0.90, "valence": 0.20, "danceability": 0.55, "tempo": { "min": 120, "max": 160 } },
+      "embeddings": []
+    },
+    {
+      "category": "anxious",
+      "phrases": ["anxious", "tense", "endişeli", "nervous", "restless", "uneasy", "stressed"],
+      "params": { "energy": 0.60, "valence": 0.25, "danceability": 0.40, "tempo": { "min": 100, "max": 140 } },
+      "embeddings": []
+    },
+    {
+      "category": "driving",
+      "phrases": ["driving", "road trip", "yolculuk", "highway", "cruising", "car", "araba"],
+      "params": { "energy": 0.65, "valence": 0.70, "danceability": 0.60, "tempo": { "min": 100, "max": 130 } },
+      "embeddings": []
+    },
+    {
+      "category": "cooking",
+      "phrases": ["cooking", "kitchen", "yemek", "dinner", "chef", "brunch", "cafe"],
+      "params": { "energy": 0.55, "valence": 0.75, "danceability": 0.65, "tempo": { "min": 90, "max": 120 } },
+      "embeddings": []
+    },
+    {
+      "category": "morning",
+      "phrases": ["morning", "wake up", "sabah", "sunrise", "fresh", "kahvaltı", "breakfast"],
+      "params": { "energy": 0.50, "valence": 0.70, "danceability": 0.45, "tempo": { "min": 90, "max": 115 } },
+      "embeddings": []
+    },
+    {
+      "category": "late_night",
+      "phrases": ["late night", "midnight", "gece", "after hours", "3am", "insomnia", "geç saatler"],
+      "params": { "energy": 0.35, "valence": 0.40, "danceability": 0.45, "tempo": { "min": 80, "max": 110 } },
+      "embeddings": []
+    },
+    {
+      "category": "indie",
+      "phrases": ["indie", "alternative", "alternatif", "underground", "hipster", "indie rock", "bağımsız"],
+      "params": { "energy": 0.50, "valence": 0.55, "danceability": 0.50, "tempo": { "min": 90, "max": 130 } },
+      "embeddings": []
+    },
+    {
+      "category": "electronic",
+      "phrases": ["electronic", "synth", "elektronik", "edm", "techno", "house", "trance"],
+      "params": { "energy": 0.75, "valence": 0.60, "danceability": 0.80, "tempo": { "min": 115, "max": 140 } },
+      "embeddings": []
+    },
+    {
+      "category": "jazz",
+      "phrases": ["jazz", "swing", "caz", "smooth jazz", "bebop", "blues", "soul"],
+      "params": { "energy": 0.45, "valence": 0.60, "danceability": 0.55, "tempo": { "min": 80, "max": 140 }, "instrumentalness": 0.5 },
+      "embeddings": []
+    },
+    {
+      "category": "classical",
+      "phrases": ["classical", "orchestral", "klasik", "symphony", "chamber", "opera", "piano"],
+      "params": { "energy": 0.40, "valence": 0.50, "danceability": 0.20, "tempo": { "min": 60, "max": 140 }, "instrumentalness": 0.9 },
+      "embeddings": []
+    },
+    {
+      "category": "lofi",
+      "phrases": ["lofi", "lo-fi", "beats", "chillhop", "cafe", "study beats", "homework"],
+      "params": { "energy": 0.35, "valence": 0.55, "danceability": 0.45, "tempo": { "min": 70, "max": 95 }, "instrumentalness": 0.7 },
+      "embeddings": []
+    }
+  ]
+}

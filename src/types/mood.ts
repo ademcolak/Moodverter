@@ -1,5 +1,16 @@
 // Mood related types
 
+// New format - used by mood engine
+export interface MoodParams {
+  energy: number;         // 0.0 - 1.0
+  valence: number;        // 0.0 - 1.0 (positivity)
+  danceability: number;   // 0.0 - 1.0
+  tempo: { min: number; max: number }; // BPM range
+  acousticness?: number;  // 0.0 - 1.0 (optional)
+  instrumentalness?: number; // 0.0 - 1.0 (optional)
+}
+
+// Legacy format - for backwards compatibility
 export interface MoodParameters {
   energy: number;         // 0.0 - 1.0
   valence: number;        // 0.0 - 1.0 (positivity)
