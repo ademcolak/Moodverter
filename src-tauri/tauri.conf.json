@@ -16,18 +16,18 @@
         "label": "main",
         "width": 400,
         "height": 500,
-        "minWidth": 320,
-        "minHeight": 400,
-        "resizable": true,
+        "visible": false,
+        "resizable": false,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
-        "skipTaskbar": false,
-        "center": true
+        "skipTaskbar": true,
+        "center": true,
+        "focus": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' https://i.scdn.co data:; connect-src 'self' https://api.spotify.com https://accounts.spotify.com https://api.openai.com; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; script-src 'self' https://www.youtube.com; img-src 'self' https://i.scdn.co https://i.ytimg.com https://img.youtube.com data:; connect-src 'self' https://api.spotify.com https://accounts.spotify.com https://api.openai.com https://www.youtube.com https://noembed.com http://localhost:11434; style-src 'self' 'unsafe-inline'; frame-src https://www.youtube.com"
     }
   },
   "bundle": {

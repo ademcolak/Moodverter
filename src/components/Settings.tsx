@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import type { ProviderType } from '../types/provider';
 import type { EngineStatus } from '../services/mood/engine';
 import { getEngineStatus } from '../services/mood/engine';
@@ -35,6 +35,47 @@ const PROVIDER_INFO: Record<ProviderType, { name: string; description: string }>
   },
 };
 
+type TabType = 'general' | 'source' | 'engine' | 'data';
+
+const TABS: { id: TabType; label: string; icon: ReactNode }[] = [
+  {
+    id: 'general',
+    label: 'General',
+    icon: (
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+      </svg>
+    ),
+  },
+  {
+    id: 'source',
+    label: 'Source',
+    icon: (
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+      </svg>
+    ),
+  },
+  {
+    id: 'engine',
+    label: 'Engine',
+    icon: (
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+      </svg>
+    ),
+  },
+  {
+    id: 'data',
+    label: 'Data',
+    icon: (
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
+      </svg>
+    ),
+  },
+];
+
 export const Settings = ({
   isOpen,
   onClose,
@@ -46,12 +87,11 @@ export const Settings = ({
   onProviderChange,
   availableProviders = ['mock', 'spotify', 'youtube'],
 }: SettingsProps) => {
-  const [showApiKey, setShowApiKey] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabType>('general');
   const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [isAddingTrack, setIsAddingTrack] = useState(false);
 
-  // Load engine status when settings open
   useEffect(() => {
     if (isOpen) {
       getEngineStatus().then(setEngineStatus).catch(console.error);
@@ -70,14 +110,12 @@ export const Settings = ({
 
     setIsAddingTrack(true);
     try {
-      // Import dynamically to avoid circular deps
       const { getYouTubeProvider } = await import('../services/providers/youtube');
       const provider = getYouTubeProvider();
       const track = await provider.addTrackFromUrl(youtubeUrl);
 
       if (track) {
         setYoutubeUrl('');
-        // Could show a success toast here
       }
     } catch (error) {
       console.error('Failed to add track:', error);
@@ -87,230 +125,258 @@ export const Settings = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-full max-w-md max-h-[90vh] overflow-y-auto p-6 bg-[var(--color-surface)] rounded-xl shadow-xl">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-semibold text-[var(--color-text-primary)]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="w-full max-w-md bg-[var(--color-surface)] shadow-2xl border border-white/5 flex flex-col max-h-[80vh]">
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 border-b border-white/5">
+          <h2 className="text-lg font-black text-[var(--color-text-primary)] uppercase tracking-wider">
             Settings
           </h2>
           <button
             onClick={onClose}
-            className="p-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
+            className="p-2 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/5 transition-all"
           >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
 
-        <div className="space-y-6">
-          {/* Music Provider Selection */}
-          <div className="p-4 bg-[var(--color-background)] rounded-lg">
-            <h3 className="text-[var(--color-text-primary)] font-medium mb-3">Music Provider</h3>
-            <div className="space-y-2">
-              {availableProviders.map((provider) => (
-                <button
-                  key={provider}
-                  onClick={() => handleProviderChange(provider)}
-                  className={`w-full p-3 rounded-lg text-left transition-colors ${
-                    settings.provider === provider
-                      ? 'bg-[var(--color-primary)]/20 border border-[var(--color-primary)]'
-                      : 'bg-[var(--color-surface)] hover:bg-[var(--color-surface-light)]'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-[var(--color-text-primary)] font-medium">
-                        {PROVIDER_INFO[provider].name}
-                      </span>
-                      <p className="text-xs text-[var(--color-text-secondary)]">
-                        {PROVIDER_INFO[provider].description}
-                      </p>
-                    </div>
-                    {settings.provider === provider && (
-                      <svg className="w-5 h-5 text-[var(--color-primary)]" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                      </svg>
-                    )}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
+        {/* Tab Navigation */}
+        <div className="flex border-b border-white/5">
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex-1 flex items-center justify-center gap-2 py-3 text-xs font-black uppercase tracking-wider transition-all ${
+                activeTab === tab.id
+                  ? 'text-[var(--color-primary)] border-b-2 border-[var(--color-primary)] bg-[var(--color-primary)]/5'
+                  : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/5'
+              }`}
+            >
+              {tab.icon}
+              <span className="hidden sm:inline">{tab.label}</span>
+            </button>
+          ))}
+        </div>
 
-          {/* Spotify Connection - Show only when Spotify is selected */}
-          {settings.provider === 'spotify' && (
-            <div className="p-4 bg-[var(--color-background)] rounded-lg">
-              <div className="flex items-center justify-between">
+        {/* Tab Content */}
+        <div className="flex-1 overflow-y-auto p-5">
+          {/* General Tab */}
+          {activeTab === 'general' && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between p-4 bg-white/5">
                 <div>
-                  <h3 className="text-[var(--color-text-primary)] font-medium">Spotify Account</h3>
-                  <p className="text-sm text-[var(--color-text-secondary)]">
-                    {settings.spotifyConnected ? 'Connected' : 'Not connected'}
-                  </p>
+                  <span className="text-sm font-bold text-[var(--color-text-primary)]">Smart Recommendations</span>
+                  <p className="text-[10px] text-[var(--color-text-secondary)]">Include new discoveries in flow</p>
                 </div>
                 <button
-                  onClick={settings.spotifyConnected ? onSpotifyDisconnect : onSpotifyConnect}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    settings.spotifyConnected
-                      ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
-                      : 'bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-dark)]'
+                  onClick={() => onSettingsChange({ openToNewSongs: !settings.openToNewSongs })}
+                  className={`relative w-10 h-6 rounded-full transition-all ${
+                    settings.openToNewSongs ? 'bg-[var(--color-primary)]' : 'bg-white/10'
                   }`}
                 >
-                  {settings.spotifyConnected ? 'Disconnect' : 'Connect'}
+                  <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-all ${
+                    settings.openToNewSongs ? 'translate-x-4' : ''
+                  }`} />
                 </button>
               </div>
-            </div>
-          )}
 
-          {/* YouTube URL Add - Show only when YouTube is selected */}
-          {settings.provider === 'youtube' && (
-            <div className="p-4 bg-[var(--color-background)] rounded-lg">
-              <h3 className="text-[var(--color-text-primary)] font-medium mb-2">Add YouTube Track</h3>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={youtubeUrl}
-                  onChange={(e) => setYoutubeUrl(e.target.value)}
-                  placeholder="Paste YouTube URL..."
-                  className="flex-1 px-3 py-2 bg-[var(--color-surface)] rounded-lg
-                             text-[var(--color-text-primary)] text-sm
-                             border border-[var(--color-surface-light)]
-                             focus:border-[var(--color-primary)] focus:outline-none"
-                />
-                <button
-                  onClick={handleAddYouTubeTrack}
-                  disabled={isAddingTrack || !youtubeUrl.trim()}
-                  className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg
-                             text-sm font-medium transition-colors
-                             hover:bg-[var(--color-primary-dark)]
-                             disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isAddingTrack ? '...' : 'Add'}
-                </button>
-              </div>
-              <p className="mt-2 text-xs text-[var(--color-text-secondary)]">
-                Add videos to your library by URL
-              </p>
-            </div>
-          )}
-
-          {/* Ollama Status */}
-          <div className="p-4 bg-[var(--color-background)] rounded-lg">
-            <h3 className="text-[var(--color-text-primary)] font-medium mb-2">AI Engine (Ollama)</h3>
-            {engineStatus ? (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`w-2 h-2 rounded-full ${
-                      engineStatus.ollamaRunning ? 'bg-green-500' : 'bg-red-500'
-                    }`}
-                  />
-                  <span className="text-sm text-[var(--color-text-secondary)]">
-                    {engineStatus.ollamaRunning ? 'Running' : 'Not running'}
-                  </span>
+              <div className="p-4 bg-white/5 border border-white/5">
+                <div className="flex items-center gap-2 mb-2">
+                  <svg className="w-4 h-4 text-[var(--color-primary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="text-xs font-bold text-[var(--color-text-secondary)]">Tray Control</span>
                 </div>
-                {engineStatus.ollamaRunning && (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`w-2 h-2 rounded-full ${
-                          engineStatus.llmAvailable ? 'bg-green-500' : 'bg-yellow-500'
-                        }`}
-                      />
-                      <span className="text-sm text-[var(--color-text-secondary)]">
-                        LLM: {engineStatus.llmAvailable ? 'Available' : 'Model not found'}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`w-2 h-2 rounded-full ${
-                          engineStatus.hasEmbeddings ? 'bg-green-500' : 'bg-yellow-500'
-                        }`}
-                      />
-                      <span className="text-sm text-[var(--color-text-secondary)]">
-                        Embeddings: {engineStatus.hasEmbeddings ? 'Ready' : 'Not generated'}
-                      </span>
-                    </div>
-                  </>
-                )}
-                {!engineStatus.ollamaRunning && (
-                  <p className="text-xs text-[var(--color-text-secondary)]">
-                    Run <code className="px-1 bg-[var(--color-surface)] rounded">ollama serve</code> to enable AI features
-                  </p>
-                )}
-              </div>
-            ) : (
-              <p className="text-sm text-[var(--color-text-secondary)]">Checking status...</p>
-            )}
-          </div>
-
-          {/* OpenAI API Key (Legacy) */}
-          <div className="p-4 bg-[var(--color-background)] rounded-lg">
-            <h3 className="text-[var(--color-text-primary)] font-medium mb-2">
-              OpenAI API Key <span className="text-xs text-[var(--color-text-secondary)]">(Optional fallback)</span>
-            </h3>
-            <div className="relative">
-              <input
-                type={showApiKey ? 'text' : 'password'}
-                value={settings.openAiApiKey}
-                onChange={(e) => onSettingsChange({ openAiApiKey: e.target.value })}
-                placeholder="sk-..."
-                className="w-full px-3 py-2 bg-[var(--color-surface)] rounded-lg
-                           text-[var(--color-text-primary)] text-sm
-                           border border-[var(--color-surface-light)]
-                           focus:border-[var(--color-primary)] focus:outline-none"
-              />
-              <button
-                onClick={() => setShowApiKey(!showApiKey)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1
-                           text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  {showApiKey ? (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
-                  ) : (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                  )}
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {/* Open to New Songs Toggle */}
-          <div className="p-4 bg-[var(--color-background)] rounded-lg">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-[var(--color-text-primary)] font-medium">
-                  Open to New Songs
-                </h3>
-                <p className="text-sm text-[var(--color-text-secondary)]">
-                  Include recommendations
+                <p className="text-[10px] text-[var(--color-text-secondary)] leading-relaxed">
+                  Click the tray icon to show/hide. Right-click for menu.
                 </p>
               </div>
-              <button
-                onClick={() => onSettingsChange({ openToNewSongs: !settings.openToNewSongs })}
-                className={`relative w-12 h-6 rounded-full transition-colors ${
-                  settings.openToNewSongs ? 'bg-[var(--color-primary)]' : 'bg-[var(--color-surface-light)]'
-                }`}
-              >
-                <span
-                  className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
-                    settings.openToNewSongs ? 'translate-x-6' : ''
-                  }`}
-                />
-              </button>
             </div>
-          </div>
+          )}
 
-          {/* Clear Cache */}
-          <button
-            onClick={onClearCache}
-            className="w-full px-4 py-3 bg-[var(--color-background)] rounded-lg
-                       text-[var(--color-text-secondary)] hover:text-red-400
-                       text-sm font-medium transition-colors"
-          >
-            Clear Cache
-          </button>
+          {/* Source Tab */}
+          {activeTab === 'source' && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 gap-2">
+                {availableProviders.map((provider) => (
+                  <button
+                    key={provider}
+                    onClick={() => handleProviderChange(provider)}
+                    className={`w-full p-4 text-left transition-all group ${
+                      settings.provider === provider
+                        ? 'bg-[var(--color-primary)]/10 border border-[var(--color-primary)]/50'
+                        : 'bg-white/5 border border-transparent hover:bg-white/10'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className={`p-2 ${
+                          settings.provider === provider ? 'bg-[var(--color-primary)]/20 text-[var(--color-primary)]' : 'bg-white/5 text-[var(--color-text-secondary)]'
+                        }`}>
+                          {provider === 'spotify' && (
+                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/>
+                            </svg>
+                          )}
+                          {provider === 'youtube' && (
+                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                            </svg>
+                          )}
+                          {provider === 'mock' && (
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                          )}
+                        </div>
+                        <div>
+                          <span className={`text-sm font-bold ${settings.provider === provider ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-primary)]'}`}>
+                            {PROVIDER_INFO[provider].name}
+                          </span>
+                          <p className="text-xs text-[var(--color-text-secondary)] opacity-70">
+                            {PROVIDER_INFO[provider].description}
+                          </p>
+                        </div>
+                      </div>
+                      {settings.provider === provider && (
+                        <div className="w-2 h-2 bg-[var(--color-primary)] shadow-[0_0_8px_var(--color-primary)]" />
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              {/* Provider-specific options */}
+              {settings.provider === 'spotify' && (
+                <div className="p-4 bg-white/5 border border-white/5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-2 h-2 ${settings.spotifyConnected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500'}`} />
+                      <span className="text-sm font-bold text-[var(--color-text-primary)]">Connection</span>
+                    </div>
+                    <button
+                      onClick={settings.spotifyConnected ? onSpotifyDisconnect : onSpotifyConnect}
+                      className={`px-4 py-2 text-xs font-black uppercase tracking-wider transition-all ${
+                        settings.spotifyConnected
+                          ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20'
+                          : 'bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-dark)]'
+                      }`}
+                    >
+                      {settings.spotifyConnected ? 'Disconnect' : 'Connect'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {settings.provider === 'youtube' && (
+                <div className="p-4 bg-white/5 border border-white/5 space-y-3">
+                  <span className="text-xs font-bold text-[var(--color-text-primary)] flex items-center gap-2">
+                    <svg className="w-4 h-4 text-red-500" fill="currentColor" viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+                    Import via URL
+                  </span>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={youtubeUrl}
+                      onChange={(e) => setYoutubeUrl(e.target.value)}
+                      placeholder="Paste YouTube link..."
+                      className="flex-1 px-3 py-2 bg-black/20 text-[var(--color-text-primary)] text-sm border border-white/5 focus:border-[var(--color-primary)] focus:outline-none transition-all"
+                    />
+                    <button
+                      onClick={handleAddYouTubeTrack}
+                      disabled={isAddingTrack || !youtubeUrl.trim()}
+                      className="px-4 py-2 bg-[var(--color-primary)] text-white text-xs font-black uppercase tracking-wider transition-all hover:bg-[var(--color-primary-dark)] disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
+                    >
+                      {isAddingTrack ? '...' : 'Add'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Engine Tab */}
+          {activeTab === 'engine' && (
+            <div className="space-y-4">
+              <div className="p-4 bg-white/5 border border-white/5">
+                {engineStatus ? (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-bold text-[var(--color-text-primary)]">Ollama Service</span>
+                      <span className={`px-2 py-1 text-[10px] font-black uppercase tracking-wider ${
+                        engineStatus.ollamaRunning ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'
+                      }`}>
+                        {engineStatus.ollamaRunning ? 'Online' : 'Offline'}
+                      </span>
+                    </div>
+
+                    {engineStatus.ollamaRunning && (
+                      <div className="grid grid-cols-2 gap-3 pt-3 border-t border-white/5">
+                        <div className="p-3 bg-black/20">
+                          <span className="text-[10px] text-[var(--color-text-secondary)] font-bold uppercase tracking-wider block mb-1">LLM</span>
+                          <span className={`text-sm font-bold ${engineStatus.llmAvailable ? 'text-green-500' : 'text-yellow-500'}`}>
+                            {engineStatus.llmAvailable ? 'Llama 3.2' : 'Missing'}
+                          </span>
+                        </div>
+                        <div className="p-3 bg-black/20">
+                          <span className="text-[10px] text-[var(--color-text-secondary)] font-bold uppercase tracking-wider block mb-1">Embeddings</span>
+                          <span className={`text-sm font-bold ${engineStatus.hasEmbeddings ? 'text-green-500' : 'text-yellow-500'}`}>
+                            {engineStatus.hasEmbeddings ? 'nomic-embed' : 'Ready'}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {!engineStatus.ollamaRunning && (
+                      <p className="text-xs text-[var(--color-text-secondary)]">
+                        Start Ollama to enable local AI features
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3 animate-pulse">
+                    <div className="w-2 h-2 bg-white/20" />
+                    <span className="text-sm text-[var(--color-text-secondary)] font-bold">Checking engine...</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Data Tab */}
+          {activeTab === 'data' && (
+            <div className="space-y-4">
+              <button
+                onClick={onClearCache}
+                className="w-full p-4 bg-white/5 text-left border border-transparent hover:border-red-500/30 hover:bg-red-500/5 group transition-all"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-sm font-bold text-[var(--color-text-primary)] group-hover:text-red-400">Clear All Data</span>
+                    <p className="text-[10px] text-[var(--color-text-secondary)]">Flush database, cache & settings</p>
+                  </div>
+                  <svg className="w-5 h-5 text-[var(--color-text-secondary)] group-hover:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </div>
+              </button>
+
+              <div className="p-4 bg-white/5 border border-white/5">
+                <span className="text-[10px] text-[var(--color-text-secondary)] font-bold uppercase tracking-wider">Storage</span>
+                <p className="text-sm text-[var(--color-text-primary)] mt-1">Local browser storage</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 bg-black/20 border-t border-white/5 text-center">
+          <p className="text-[10px] text-[var(--color-text-secondary)] font-bold uppercase tracking-widest opacity-30">
+            Moodverter v0.1.0
+          </p>
         </div>
       </div>
     </div>

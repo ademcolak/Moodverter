@@ -18,6 +18,7 @@ interface UseMoodReturn {
   moodState: MoodState;
   processMood: (text: string) => Promise<MoodParameters | null>;
   processMoodQuick: (text: string) => MoodParameters | null;
+  setMoodParameters: (params: MoodParameters, method?: string) => void;
   calculateDeviation: (track: Track) => MoodDeviation | null;
   clearMood: () => void;
   // New: Engine status and parse info
@@ -150,6 +151,28 @@ export const useMood = (_apiKey?: string | null): UseMoodReturn => {
     }
   }, []);
 
+  const setMoodParameters = useCallback((parameters: MoodParameters, method: string = 'manual') => {
+    setLastParseResult({
+      params: {
+        energy: parameters.energy,
+        valence: parameters.valence,
+        danceability: parameters.danceability,
+        tempo: { min: parameters.tempo_min, max: parameters.tempo_max },
+        acousticness: parameters.acousticness,
+      },
+      method: method as any,
+      confidence: 1.0,
+      processingTimeMs: 0,
+    });
+
+    setMoodState(prev => ({
+      ...prev,
+      current: parameters,
+      isProcessing: false,
+      error: null,
+    }));
+  }, []);
+
   const calculateDeviation = useCallback((track: Track): MoodDeviation | null => {
     if (!moodState.current) return null;
 
@@ -199,6 +222,7 @@ export const useMood = (_apiKey?: string | null): UseMoodReturn => {
     moodState,
     processMood,
     processMoodQuick: processMoodQuickFn,
+    setMoodParameters,
     calculateDeviation,
     clearMood,
     engineStatus,

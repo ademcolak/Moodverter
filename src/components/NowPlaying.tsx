@@ -49,13 +49,14 @@ export const NowPlaying = memo(function NowPlaying({ track, progress, duration, 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
   }, [onSeek, calculatePositionFromEvent]);
+
   if (!track) {
     return (
-      <div className="flex items-center gap-4 p-4 bg-[var(--color-surface)] rounded-lg">
-        <div className="w-16 h-16 bg-[var(--color-surface-light)] rounded-md animate-pulse" />
+      <div className="flex items-center gap-4 p-4 bg-[var(--color-surface)] border border-white/5">
+        <div className="w-16 h-16 bg-[var(--color-surface-light)] animate-pulse" />
         <div className="flex-1">
-          <div className="h-4 bg-[var(--color-surface-light)] rounded w-3/4 mb-2 animate-pulse" />
-          <div className="h-3 bg-[var(--color-surface-light)] rounded w-1/2 animate-pulse" />
+          <div className="h-4 bg-[var(--color-surface-light)] w-3/4 mb-2 animate-pulse" />
+          <div className="h-3 bg-[var(--color-surface-light)] w-1/2 animate-pulse" />
         </div>
       </div>
     );
@@ -74,43 +75,47 @@ export const NowPlaying = memo(function NowPlaying({ track, progress, duration, 
   };
 
   return (
-    <div className="p-4 bg-[var(--color-surface)] rounded-lg hover:bg-[var(--color-surface-light)] transition-colors duration-200 group">
-      <div className="flex items-center gap-4 mb-3">
+    <div className="p-5 glass-panel group transition-all duration-500 hover:shadow-[0_20px_60px_-15px_rgba(0,0,0,0.7)]">
+      <div className="flex items-center gap-5 mb-6">
         {track.albumArt ? (
-          <div className="relative">
+          <div className="relative shrink-0">
+            <div className="absolute -inset-2 bg-gradient-to-br from-[var(--color-primary)] to-[var(--color-accent)] blur-lg opacity-20 group-hover:opacity-40 transition-opacity duration-500"></div>
             <img 
               src={track.albumArt} 
               alt={track.name}
-              className="w-16 h-16 rounded-md object-cover shadow-lg group-hover:shadow-xl transition-shadow duration-200"
+              className="relative w-20 h-20 object-cover shadow-2xl transition-transform duration-500 group-hover:scale-105"
             />
-            {/* Album art hover glow effect */}
-            <div className="absolute inset-0 rounded-md bg-[var(--color-primary)] opacity-0 group-hover:opacity-10 transition-opacity duration-200" />
           </div>
         ) : (
-          <div className="w-16 h-16 bg-[var(--color-surface-light)] rounded-md flex items-center justify-center group-hover:bg-[var(--color-background)] transition-colors">
-            <span className="text-2xl">🎵</span>
+          <div className="w-20 h-20 bg-[var(--color-surface-light)] flex items-center justify-center shadow-inner">
+            <span className="text-3xl animate-bounce-slow">🎵</span>
           </div>
         )}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 mb-1">
             <h3 
-              className="text-[var(--color-text-primary)] font-semibold truncate cursor-default"
+              className="text-lg font-black text-gradient truncate cursor-default leading-tight uppercase"
               title={track.name}
             >
               {track.name}
             </h3>
             {isAnalyzing && (
-              <span 
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-400 font-medium animate-pulse"
-                title="Analyzing audio features..."
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-bounce" />
-                Analyzing
-              </span>
+              <div className="flex gap-0.5 items-end h-3 mb-1">
+                {[...Array(3)].map((_, i) => (
+                  <div 
+                    key={i}
+                    className="w-1 bg-[var(--color-primary)] animate-pulse"
+                    style={{ 
+                      height: `${40 + Math.random() * 60}%`,
+                      animationDelay: `${i * 0.15}s`
+                    }}
+                  />
+                ))}
+              </div>
             )}
           </div>
           <p 
-            className="text-[var(--color-text-secondary)] text-sm truncate cursor-default hover:text-[var(--color-primary)] transition-colors"
+            className="text-[var(--color-text-secondary)] text-sm font-bold uppercase tracking-wider truncate cursor-default opacity-80"
             title={track.artist}
           >
             {track.artist}
@@ -119,46 +124,32 @@ export const NowPlaying = memo(function NowPlaying({ track, progress, duration, 
       </div>
       
       {/* Progress bar */}
-      <div className="relative group/progress">
-        <div
-          ref={progressBarRef}
-          className={`h-1 bg-[var(--color-background)] rounded-full overflow-hidden cursor-pointer
-                      ${onSeek ? 'hover:h-2' : ''} transition-all duration-150`}
-          onClick={handleProgressClick}
-          onMouseDown={handleMouseDown}
-        >
+      <div className="space-y-3">
+        <div className="relative h-2 group/progress">
           <div
-            className="h-full bg-[var(--color-primary)] transition-all duration-200"
-            style={{ width: `${isDragging ? (dragProgress / duration) * 100 : progressPercent}%` }}
-          />
-        </div>
-
-        {/* Drag handle (visible when hovering or dragging) */}
-        {onSeek && (
-          <div
-            className={`absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow-md
-                        transition-opacity duration-150 pointer-events-none
-                        ${isDragging ? 'opacity-100 scale-110' : 'opacity-0 group-hover/progress:opacity-100'}`}
-            style={{ left: `calc(${isDragging ? (dragProgress / duration) * 100 : progressPercent}% - 6px)` }}
-          />
-        )}
-        
-        {/* Transition point marker */}
-        {transitionPercent && (
-          <div 
-            className="absolute top-0 w-0.5 h-3 -mt-1 bg-yellow-400 rounded cursor-help group/marker"
-            style={{ left: `${transitionPercent}%` }}
+            ref={progressBarRef}
+            className="absolute inset-0 bg-white/5 overflow-hidden cursor-pointer"
+            onClick={handleProgressClick}
+            onMouseDown={handleMouseDown}
           >
-            {/* Tooltip for transition point */}
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-0.5 
-                            bg-yellow-400 text-black text-xs rounded whitespace-nowrap
-                            opacity-0 group-hover/marker:opacity-100 pointer-events-none transition-opacity">
-              Transition
+            <div
+              className="h-full bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] transition-all duration-300 relative"
+              style={{ width: `${isDragging ? (dragProgress / duration) * 100 : progressPercent}%` }}
+            >
+              <div className="absolute right-0 top-0 bottom-0 w-8 bg-white/20 blur-md" />
             </div>
           </div>
-        )}
+
+          {/* Transition point marker */}
+          {transitionPercent && (
+            <div 
+              className="absolute top-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-white shadow-[0_0_8px_white] z-10"
+              style={{ left: `${transitionPercent}%` }}
+            />
+          )}
+        </div>
         
-        <div className="flex justify-between mt-1 text-xs text-[var(--color-text-secondary)]">
+        <div className="flex justify-between items-center text-[10px] font-black text-[var(--color-text-secondary)] uppercase tracking-widest opacity-50">
           <span>{formatTime(progress)}</span>
           <span>{formatTime(duration)}</span>
         </div>
