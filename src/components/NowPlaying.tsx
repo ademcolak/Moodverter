@@ -6,10 +6,11 @@ interface NowPlayingProps {
   progress: number;
   duration: number;
   transitionPoint?: number;
+  isAnalyzing?: boolean;
   onSeek?: (positionMs: number) => void;
 }
 
-export const NowPlaying = memo(function NowPlaying({ track, progress, duration, transitionPoint, onSeek }: NowPlayingProps) {
+export const NowPlaying = memo(function NowPlaying({ track, progress, duration, transitionPoint, isAnalyzing, onSeek }: NowPlayingProps) {
   const progressBarRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragProgress, setDragProgress] = useState(0);
@@ -91,12 +92,23 @@ export const NowPlaying = memo(function NowPlaying({ track, progress, duration, 
           </div>
         )}
         <div className="flex-1 min-w-0">
-          <h3 
-            className="text-[var(--color-text-primary)] font-semibold truncate cursor-default"
-            title={track.name}
-          >
-            {track.name}
-          </h3>
+          <div className="flex items-center gap-2">
+            <h3 
+              className="text-[var(--color-text-primary)] font-semibold truncate cursor-default"
+              title={track.name}
+            >
+              {track.name}
+            </h3>
+            {isAnalyzing && (
+              <span 
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-400 font-medium animate-pulse"
+                title="Analyzing audio features..."
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-bounce" />
+                Analyzing
+              </span>
+            )}
+          </div>
           <p 
             className="text-[var(--color-text-secondary)] text-sm truncate cursor-default hover:text-[var(--color-primary)] transition-colors"
             title={track.artist}

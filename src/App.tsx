@@ -46,6 +46,9 @@ function App() {
   const [needsLibrarySync, setNeedsLibrarySync] = useState<boolean | null>(null);
   const [libraryTracks, setLibraryTracks] = useState<Track[]>([]);
 
+  // Audio analysis state
+  const [isAnalyzingAudio, setIsAnalyzingAudio] = useState(false);
+
   // Provider hook (new unified provider system)
   const {
     isAuthenticated: providerAuthenticated,
@@ -74,6 +77,7 @@ function App() {
     if (!moodState.current) return;
 
     try {
+      setIsAnalyzingAudio(true);
       let trackWithFeatures: Track;
 
       // In mock mode, tracks already have audio features
@@ -116,6 +120,8 @@ function App() {
       }
     } catch (err) {
       console.error('Failed to check track deviation:', err);
+    } finally {
+      setIsAnalyzingAudio(false);
     }
     // Note: moodState.current is intentionally used instead of moodState to avoid unnecessary re-renders
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -412,7 +418,11 @@ function App() {
                   </span>
                 )}
                 {/* AI Engine indicator */}
-                {engineStatus && (
+                {!engineStatus ? (
+                  <span className="ml-auto px-1.5 py-0.5 rounded text-[10px] bg-gray-500/20 text-gray-400 animate-pulse">
+                    Checking AI...
+                  </span>
+                ) : (
                   <span className={`ml-auto px-1.5 py-0.5 rounded text-[10px] ${
                     engineStatus.ollamaRunning
                       ? 'bg-green-500/20 text-green-400'
@@ -464,6 +474,7 @@ function App() {
                 progress={progress}
                 duration={duration}
                 onSeek={seek}
+                isAnalyzing={isAnalyzingAudio}
               />
 
               {/* Player controls */}

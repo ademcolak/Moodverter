@@ -288,23 +288,23 @@ export async function analyzeAudioUrl(url: string): Promise<AnalysisResult>;
 - [x] Kurulum talimatları linki
 
 #### D4. Loading States
-- [ ] Audio analysis için loading indicator
-- [ ] İlk embedding hesaplama için progress
+- [x] Audio analysis için loading indicator
+- [x] İlk embedding hesaplama için progress
 
 ---
 
 ### Bölüm E: Test ve Entegrasyon
 
 #### E1. Unit Testler
-- [ ] Provider interface testleri
+- [x] Provider interface testleri
 - [x] Embedding matcher testleri
-- [ ] Audio analyzer testleri (mock data ile)
-- [ ] Ollama service testleri
+- [x] Audio analyzer testleri (mock data ile)
+- [x] Ollama service testleri
 
 #### E2. Integration Testler
-- [ ] Mock Provider ile full flow
-- [ ] Provider switching
-- [ ] Fallback zincirleri
+- [x] Mock Provider ile full flow
+- [x] Provider switching
+- [x] Fallback zincirleri
 
 #### E3. Manual Test Senaryoları
 - [ ] YouTube video ekle → analiz et → mood match
