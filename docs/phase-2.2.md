@@ -1,6 +1,6 @@
 # Faz 2.2: System Tray + Popover Mimarisi
 
-> **Durum:** Planlandı
+> **Durum:** Tamamlandı
 >
 > **Hedef:** Kronik UI sorunlarını çözmek için window mekanizmasını System Tray + Popover pattern'ine geçirmek
 
@@ -55,39 +55,29 @@
 ### Bölüm A: Tauri System Tray Kurulumu
 
 #### A1. Tray Plugin Ekleme
-- [ ] `tauri-plugin-shell` veya native tray API ekle
-- [ ] `Cargo.toml`'a dependency ekle
-- [ ] `tauri.conf.json`'da tray permission ekle
+- [x] `tauri-plugin-shell` veya native tray API ekle
+- [x] `Cargo.toml`'a dependency ekle
+- [x] `tauri.conf.json`'da tray permission ekle
 
 #### A2. Tray Icon Oluşturma
-- [ ] macOS için menubar icon (template image, 22x22 @1x, @2x)
-- [ ] Windows için system tray icon (ICO, 16x16, 32x32)
-- [ ] Dark/light mode uyumlu icon
+- [x] macOS için menubar icon (template image, 22x22 @1x, @2x)
+- [x] Windows için system tray icon (ICO, 16x16, 32x32)
+- [x] Dark/light mode uyumlu icon
 
 #### A3. Tray Rust Backend
-- [ ] `src-tauri/src/tray.rs` oluştur
-- [ ] Tray icon initialize
-- [ ] Click event handler (toggle window)
-- [ ] Right-click context menu (Quit, Settings)
+- [x] `src-tauri/src/tray.rs` oluştur (lib.rs içinde implement edildi)
+- [x] Tray icon initialize
+- [x] Click event handler (toggle window)
+- [x] Right-click context menu (Quit, Settings)
 
 ```rust
-// src-tauri/src/tray.rs
+// src-tauri/src/lib.rs
 use tauri::{
     tray::{TrayIconBuilder, TrayIconEvent},
     Manager,
 };
 
-pub fn create_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let tray = TrayIconBuilder::new()
-        .icon(app.default_window_icon().unwrap().clone())
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click { .. } = event {
-                // Toggle window visibility
-            }
-        })
-        .build(app)?;
-    Ok(())
-}
+// Tray implementation in lib.rs
 ```
 
 ---
@@ -95,13 +85,13 @@ pub fn create_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 ### Bölüm B: Window Konfigürasyonu
 
 #### B1. Tauri Config Güncelleme
-- [ ] `tauri.conf.json` window ayarları:
-  - [ ] `visible: false` (başlangıçta gizli)
-  - [ ] `skipTaskbar: true`
-  - [ ] `decorations: false`
-  - [ ] `alwaysOnTop: true`
-  - [ ] `resizable: false` (sabit boyut)
-  - [ ] `focus: true` (açılınca focus)
+- [x] `tauri.conf.json` window ayarları:
+  - [x] `visible: false` (başlangıçta gizli)
+  - [x] `skipTaskbar: true`
+  - [x] `decorations: false`
+  - [x] `alwaysOnTop: true`
+  - [x] `resizable: false` (sabit boyut)
+  - [x] `focus: true` (açılınca focus)
 
 ```json
 {
@@ -124,40 +114,40 @@ pub fn create_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 #### B2. Window Positioning
-- [ ] Tray icon pozisyonuna göre pencere aç
-- [ ] macOS: Menubar altında, ortada
-- [ ] Windows: Tray icon üstünde
-- [ ] Ekran kenarlarını aşmama kontrolü
+- [x] Tray icon pozisyonuna göre pencere aç
+- [x] macOS: Menubar altında, ortada
+- [x] Windows: Tray icon üstünde
+- [x] Ekran kenarlarını aşmama kontrolü
 
 #### B3. Focus-on-blur Davranışı (Opsiyonel)
-- [ ] Window focus kaybedince otomatik gizle
-- [ ] Settings'te toggle (bazı kullanıcılar istemeyebilir)
-- [ ] Tıklama dışında kapanmama (drag sırasında)
+- [x] Window focus kaybedince otomatik gizle
+- [x] Settings'te toggle (bazı kullanıcılar istemeyebilir)
+- [x] Tıklama dışında kapanmama (drag sırasında)
 
 ---
 
 ### Bölüm C: Frontend Refactor
 
 #### C1. Window Controls Kaldırma
-- [ ] macOS traffic light butonları kaldır
-- [ ] Windows minimize/maximize/close kaldır
-- [ ] İlgili state ve handler'ları temizle
+- [x] macOS traffic light butonları kaldır
+- [x] Windows minimize/maximize/close kaldır
+- [x] İlgili state ve handler'ları temizle
 
 #### C2. Drag Region Basitleştirme
-- [ ] Sadece title bar'da tek bir drag region
-- [ ] Absolute positioned drag div kaldır
-- [ ] `pointer-events` karmaşasını temizle
+- [x] Sadece title bar'da tek bir drag region
+- [x] Absolute positioned drag div kaldır
+- [x] `pointer-events` karmaşasını temizle
 
 #### C3. App.tsx Temizliği
-- [ ] `windowControls` objesi kaldır
-- [ ] `isMacOS` platform detection kaldır
-- [ ] `isCollapsed` state kaldır
-- [ ] İlgili useEffect'leri temizle
+- [x] `windowControls` objesi kaldır
+- [x] `isMacOS` platform detection kaldır
+- [x] `isCollapsed` state kaldır
+- [x] İlgili useEffect'leri temizle
 
 #### C4. Yeni Title Bar
-- [ ] Minimal title bar (sadece logo + settings)
-- [ ] Drag region olarak işaretle
-- [ ] Tıklanabilir alanları `pointer-events-auto` yap
+- [x] Minimal title bar (sadece logo + settings)
+- [x] Drag region olarak işaretle
+- [x] Tıklanabilir alanları `pointer-events-auto` yap
 
 ```tsx
 // Yeni basit title bar
@@ -179,88 +169,86 @@ pub fn create_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 ### Bölüm D: Tauri Commands
 
 #### D1. Window Toggle Command
-- [ ] `toggle_window` Tauri command
-- [ ] Pozisyon hesaplama logic
-- [ ] Show/hide animasyonu (opsiyonel)
+- [x] `toggle_window` Tauri command
+- [x] Pozisyon hesaplama logic
+- [x] Show/hide animasyonu (opsiyonel)
 
 ```rust
-#[tauri::command]
-async fn toggle_window(window: tauri::Window) {
-    if window.is_visible().unwrap() {
-        window.hide().unwrap();
-    } else {
-        // Position window near tray
-        window.show().unwrap();
-        window.set_focus().unwrap();
-    }
+// Window toggle implemented in tray click handler
+if window.is_visible().unwrap_or(false) {
+    window.hide()
+} else {
+    window.set_position(...)
+    window.show()
+    window.set_focus()
 }
 ```
 
 #### D2. Quit Command
-- [ ] Context menu'den çağrılacak
-- [ ] Graceful shutdown
+- [x] Context menu'den çağrılacak
+- [x] Graceful shutdown
 
 #### D3. Frontend'e Event Göndermee
-- [ ] Window visibility event'i
-- [ ] Tray click event'i
+- [x] Window visibility event'i
+- [x] Tray click event'i
 
 ---
 
 ### Bölüm E: Platform-Specific Davranışlar
 
 #### E1. macOS
-- [ ] Menubar'da sağ tarafta icon
-- [ ] Click → Toggle window
-- [ ] Option+Click → Context menu (veya right-click)
-- [ ] Window menubar altında açılsın
+- [x] Menubar'da sağ tarafta icon
+- [x] Click → Toggle window
+- [x] Option+Click → Context menu (veya right-click)
+- [x] Window menubar altında açılsın
 
 #### E2. Windows
-- [ ] System tray'de icon
-- [ ] Left-click → Toggle window
-- [ ] Right-click → Context menu
-- [ ] Window tray üstünde açılsın
+- [x] System tray'de icon
+- [x] Left-click → Toggle window
+- [x] Right-click → Context menu
+- [x] Window tray üstünde açılsın
 
 #### E3. Context Menu
-- [ ] "Settings" → Settings modal aç
-- [ ] "Quit Moodverter" → Uygulamayı kapat
-- [ ] Opsiyonel: "About", versiyon bilgisi
+- [x] "Settings" → Settings modal aç
+- [x] "Quit Moodverter" → Uygulamayı kapat
+- [x] Opsiyonel: "About", versiyon bilgisi
 
 ---
 
 ### Bölüm F: Settings Güncellemesi
 
 #### F1. Behavior Tab Ekle
-- [ ] "Close on focus loss" toggle
-- [ ] "Start minimized" toggle (launch at login ile)
-- [ ] "Launch at login" toggle
+- [x] "Close on focus loss" toggle
+- [x] "Start minimized" toggle (launch at login ile)
+- [x] "Launch at login" toggle
 
 #### F2. Always on Top Kaldır
-- [ ] Artık varsayılan davranış, toggle gereksiz
-- [ ] Settings'ten kaldır
+- [x] Artık varsayılan davranış, toggle gereksiz
+- [x] Settings'ten kaldır
 
 ---
 
 ### Bölüm G: Test ve Doğrulama
 
 #### G1. macOS Test
-- [ ] Menubar'da icon görünüyor
-- [ ] Tıklayınca pencere açılıyor/kapanıyor
-- [ ] Pencere doğru pozisyonda açılıyor
-- [ ] Right-click menu çalışıyor
-- [ ] Quit çalışıyor
+- [x] Menubar'da icon görünüyor
+- [x] Tıklayınca pencere açılıyor/kapanıyor
+- [x] Pencere doğru pozisyonda açılıyor
+- [x] Right-click menu çalışıyor
+- [x] Quit çalışıyor
 
 #### G2. Windows Test
-- [ ] System tray'de icon görünüyor
-- [ ] Tıklayınca pencere açılıyor/kapanıyor
-- [ ] Pencere doğru pozisyonda açılıyor
-- [ ] Right-click menu çalışıyor
-- [ ] Quit çalışıyor
+- [x] System tray'de icon görünüyor
+- [x] Tıklayınca pencere açılıyor/kapanıyor
+- [x] Pencere doğru pozisyonda açılıyor
+- [x] Right-click menu çalışıyor
+- [x] Quit çalışıyor
 
 #### G3. Genel Test
-- [ ] Sürükleme çalışıyor (sadece title bar)
-- [ ] Settings açılıyor
-- [ ] Müzik kontroleri çalışıyor
-- [ ] Focus kaybında kapanma (eğer açıksa)
+- [x] Sürükleme çalışıyor (sadece title bar)
+- [x] Settings açılıyor
+- [x] Müzik kontroleri çalışıyor
+- [x] Focus kaybında kapanma (eğer açıksa)
 
 ---
 
@@ -268,10 +256,10 @@ async fn toggle_window(window: tauri::Window) {
 
 | Dosya | Değişiklik |
 |-------|------------|
-| `src-tauri/Cargo.toml` | Tray plugin dependency |
+| `src-tauri/Cargo.toml` | Tray plugin dependency, autostart plugin |
 | `src-tauri/tauri.conf.json` | Window config, permissions |
 | `src-tauri/src/main.rs` | Tray initialization |
-| `src-tauri/src/tray.rs` | YENİ - Tray logic |
+| `src-tauri/src/lib.rs` | Tray logic, autostart commands, hide-on-blur toggle |
 | `src-tauri/icons/` | Tray icons |
 | `src/App.tsx` | Window controls kaldır, title bar basitleştir |
 | `src/components/Settings.tsx` | Always on top kaldır, behavior tab ekle |
@@ -281,25 +269,25 @@ async fn toggle_window(window: tauri::Window) {
 ## Öncelik Sırası
 
 ```
-1. Bölüm A: Tray Kurulumu
+1. Bölüm A: Tray Kurulumu ✅
    └── Tray icon çalışsın, tıklanabilir olsun
 
-2. Bölüm B: Window Config
+2. Bölüm B: Window Config ✅
    └── Doğru başlangıç ayarları
 
-3. Bölüm D: Commands
+3. Bölüm D: Commands ✅
    └── Toggle çalışsın
 
-4. Bölüm C: Frontend
+4. Bölüm C: Frontend ✅
    └── Gereksiz kodu temizle
 
-5. Bölüm E: Platform
+5. Bölüm E: Platform ✅
    └── macOS/Windows fine-tuning
 
-6. Bölüm F: Settings
+6. Bölüm F: Settings ✅
    └── Yeni ayarlar
 
-7. Bölüm G: Test
+7. Bölüm G: Test ✅
    └── Her şey çalışıyor mu?
 ```
 
@@ -317,4 +305,4 @@ Bu faz tamamlandığında:
 
 ---
 
-*Bu döküman güncellenecektir. Her tamamlanan adımı ✅ ile işaretle.*
+*Tamamlandı: 2024-02-02*

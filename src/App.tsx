@@ -9,6 +9,13 @@ import { getCacheStats } from './services/db/cache';
 import { MOCK_TRACKS } from './services/mock/data';
 
 function App() {
+  // Disable context menu (right-click)
+  useEffect(() => {
+    const handleContextMenu = (e: MouseEvent) => e.preventDefault();
+    document.addEventListener('contextmenu', handleContextMenu);
+    return () => document.removeEventListener('contextmenu', handleContextMenu);
+  }, []);
+
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState({
     openToNewSongs: true,
@@ -188,24 +195,19 @@ function App() {
   }, []);
 
   return (
-    <div className="w-full h-screen bg-[var(--color-background)] rounded-none overflow-hidden flex flex-col border border-white/10 shadow-[0_0_100px_rgba(0,0,0,0.8)]">
-      {/* Draggable title bar - minimal, tray controls the window */}
+    <div className="w-full h-screen bg-[var(--color-background)] overflow-hidden flex flex-col border border-white/10">
+      {/* Title bar */}
       <div
         data-tauri-drag-region
-        className="h-10 flex items-center justify-between px-4 bg-[var(--color-surface)]/40 backdrop-blur-xl no-select cursor-default relative z-20 shrink-0 border-b border-white/5"
+        className="h-10 flex items-center justify-between px-4 bg-[var(--color-surface)] no-select cursor-default relative z-20 shrink-0 border-b border-white/10"
       >
-        {/* App title */}
-        <div data-tauri-drag-region className="flex items-center gap-2 pointer-events-none">
-          <div className="w-2 h-2 bg-gradient-to-tr from-[var(--color-primary)] to-[var(--color-accent)] shadow-[0_0_10px_var(--color-primary)]" />
-          <span className="text-[10px] font-black tracking-[0.25em] text-white/80 uppercase">
-            Moodverter
-          </span>
-        </div>
+        <span data-tauri-drag-region className="text-sm font-semibold text-[var(--color-text-primary)] pointer-events-none">
+          Moodverter
+        </span>
 
-        {/* Settings button */}
         <button
           onClick={() => setIsSettingsOpen(true)}
-          className="p-2 text-white/40 hover:text-[var(--color-primary)] hover:bg-white/5 transition-all active:scale-90 pointer-events-auto"
+          className="p-2 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/5 transition-colors pointer-events-auto"
           title="Settings"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -217,32 +219,31 @@ function App() {
 
       {/* Main content */}
       <div className="flex-1 overflow-hidden flex flex-col relative">
-        {/* Absolute Background Drag Region */}
         <div data-tauri-drag-region className="absolute inset-0 z-0" />
 
-        <div className="p-8 space-y-10 flex-1 flex flex-col justify-center max-w-md mx-auto w-full relative z-10 pointer-events-auto">
+        <div className="p-6 flex-1 flex flex-col max-w-md mx-auto w-full relative z-10 pointer-events-auto">
           {effectiveLoading ? (
             <div className="flex-1 flex items-center justify-center">
-              <div className="w-12 h-12 border-4 border-white/5 border-t-[var(--color-primary)] animate-spin shadow-[0_0_20px_var(--color-primary)]" />
+              <div className="w-8 h-8 border-2 border-white/10 border-t-[var(--color-primary)] rounded-full animate-spin" />
             </div>
           ) : !effectiveAuthenticated ? (
-            <div className="flex-1 flex flex-col items-center justify-center space-y-12 text-center">
-              <div className="space-y-6">
-                <div className="w-28 h-28 bg-gradient-to-tr from-[var(--color-primary)] to-[var(--color-accent)] flex items-center justify-center mx-auto shadow-[0_25px_50px_-12px_rgba(0,242,254,0.5)] rotate-[15deg] transition-transform hover:rotate-0 duration-500">
-                  <svg className="w-14 h-14 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+            <div className="flex-1 flex flex-col items-center justify-center space-y-8 text-center">
+              <div className="space-y-4">
+                <div className="w-16 h-16 bg-[var(--color-primary)] flex items-center justify-center mx-auto">
+                  <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
                   </svg>
                 </div>
-                <div className="space-y-2">
-                  <h2 className="text-4xl font-black text-white tracking-tighter uppercase">Sonic Mood.</h2>
-                  <p className="text-[var(--color-text-secondary)] text-lg font-medium opacity-60 uppercase tracking-widest">Connect your soul to your library.</p>
+                <div className="space-y-1">
+                  <h2 className="text-2xl font-bold text-[var(--color-text-primary)]">Moodverter</h2>
+                  <p className="text-sm text-[var(--color-text-secondary)]">Müziğini ruh haline göre dinle</p>
                 </div>
               </div>
               <button
                 onClick={effectiveLogin}
-                className="w-full px-8 py-5 btn-primary text-white font-black text-xl active:scale-95 transition-all shadow-2xl uppercase tracking-widest"
+                className="w-full py-3 bg-[var(--color-primary)] text-white font-medium hover:bg-[var(--color-primary-dark)] active:scale-[0.98] transition-all"
               >
-                Get Started
+                Başla
               </button>
             </div>
           ) : needsLibrarySync && settings.provider === 'spotify' ? (
@@ -254,32 +255,25 @@ function App() {
               />
             </div>
           ) : (
-            <div className="space-y-10 flex-1 flex flex-col justify-center">
-              {/* Top Meta */}
-              <div data-tauri-drag-region className="flex items-center justify-between no-select px-2">
-                <div data-tauri-drag-region className="flex flex-col">
-                  <span data-tauri-drag-region className="text-[10px] font-black uppercase tracking-widest text-[var(--color-primary)]">
-                    {settings.provider} active
-                  </span>
-                  <span data-tauri-drag-region className="text-[9px] font-bold text-white/30 uppercase tracking-widest">
-                    {libraryTracks.length} tracks synced
-                  </span>
-                </div>
+            <div className="flex-1 flex flex-col">
+              {/* Status bar */}
+              <div className="flex items-center justify-between text-xs text-[var(--color-text-secondary)] mb-4">
+                <span>{settings.provider} • {libraryTracks.length} şarkı</span>
                 {engineStatus?.ollamaRunning && (
-                  <span className="text-vibe text-[10px] font-black uppercase tracking-widest animate-pulse bg-white/5 px-3 py-1 border border-white/5">
-                    Neural Engine
-                  </span>
+                  <span className="text-[var(--color-primary)]">AI Aktif</span>
                 )}
               </div>
 
-              {/* Mood input */}
-              <MoodInput
-                onMoodSubmit={handleMoodSubmit}
-                isProcessing={moodState.isProcessing}
-              />
+              {/* Mood input - TOP */}
+              <div className="mb-auto">
+                <MoodInput
+                  onMoodSubmit={handleMoodSubmit}
+                  isProcessing={moodState.isProcessing}
+                />
+              </div>
 
-              {/* Player Section */}
-              <div className="space-y-10">
+              {/* Player Section - BOTTOM */}
+              <div className="mt-auto space-y-4">
                 <NowPlaying
                   track={currentTrack}
                   progress={progress}
@@ -288,22 +282,22 @@ function App() {
                   isAnalyzing={isAnalyzingAudio}
                 />
 
-                <div className="flex justify-center items-center gap-12">
-                  <button onClick={skipPrevious} className="text-white/20 hover:text-white transition-all active:scale-90">
-                    <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+                <div className="flex justify-center items-center gap-8">
+                  <button onClick={skipPrevious} className="p-2 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors">
+                    <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
                   </button>
-                  <button 
+                  <button
                     onClick={handlePlayPause}
-                    className="w-24 h-24 btn-primary flex items-center justify-center text-white shadow-[0_20px_40px_-5px_rgba(0,242,254,0.4)] hover:scale-105 active:scale-95 transition-all"
+                    className="w-14 h-14 bg-[var(--color-primary)] flex items-center justify-center text-white hover:bg-[var(--color-primary-dark)] active:scale-95 transition-all"
                   >
                     {isPlaying ? (
-                      <svg className="w-12 h-12" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                      <svg className="w-7 h-7" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
                     ) : (
-                      <svg className="w-12 h-12 ml-1.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7L8 5z"/></svg>
+                      <svg className="w-7 h-7 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7L8 5z"/></svg>
                     )}
                   </button>
-                  <button onClick={skipNext} className="text-white/20 hover:text-white transition-all active:scale-90">
-                    <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+                  <button onClick={skipNext} className="p-2 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors">
+                    <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
                   </button>
                 </div>
               </div>

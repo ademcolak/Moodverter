@@ -2,15 +2,15 @@
 
 /* Custom CSS Variables */
 :root {
-  --color-primary: #00f2fe; /* Bright neon cyan */
-  --color-primary-dark: #4facfe; /* Deep blue */
-  --color-accent: #f093fb; /* Soft purple */
-  --color-background: #0a0a0c; /* Deep space black */
-  --color-surface: #15151a; /* Dark gray surface */
-  --color-surface-hover: #1c1c24;
-  --color-surface-light: #252530;
-  --color-text-primary: #f8f9fa;
-  --color-text-secondary: #94a3b8;
+  --color-primary: #3b82f6; /* Clean blue */
+  --color-primary-dark: #2563eb; /* Darker blue */
+  --color-accent: #8b5cf6; /* Soft violet */
+  --color-background: #09090b; /* Near black */
+  --color-surface: #18181b; /* Zinc 900 */
+  --color-surface-hover: #27272a; /* Zinc 800 */
+  --color-surface-light: #3f3f46; /* Zinc 700 */
+  --color-text-primary: #fafafa; /* Zinc 50 */
+  --color-text-secondary: #a1a1aa; /* Zinc 400 */
   --radius-none: 0px;
 }
 
@@ -38,52 +38,36 @@ body {
   border-radius: 0;
 }
 
+/* Minimal border effect */
 .glow-border {
-  position: relative;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.glow-border::after {
-  content: '';
-  position: absolute;
-  inset: -1px;
-  background: linear-gradient(45deg, var(--color-primary), var(--color-accent));
-  border-radius: 0;
-  z-index: -1;
-  opacity: 0.3;
-  transition: opacity 0.3s;
-}
-
-.glow-border:hover::after {
-  opacity: 0.6;
+.glow-border:hover {
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
 /* Typography */
 .text-gradient {
-  background: linear-gradient(135deg, #fff 0%, #94a3b8 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--color-text-primary);
 }
 
 .text-vibe {
-  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--color-primary);
 }
 
 /* Controls */
 .btn-primary {
-  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
-  box-shadow: 0 4px 15px rgba(0, 242, 254, 0.3);
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  background: var(--color-primary);
+  transition: all 0.15s ease;
 }
 
 .btn-primary:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(0, 242, 254, 0.4);
+  background: var(--color-primary-dark);
 }
 
 .btn-primary:active {
-  transform: translateY(0);
+  transform: scale(0.98);
 }
 
 /* Prevent text selection on drag */
@@ -131,17 +115,8 @@ body {
 }
 
 /* Animation utilities */
-@keyframes pulse-glow {
-  0%, 100% {
-    box-shadow: 0 0 5px var(--color-primary);
-  }
-  50% {
-    box-shadow: 0 0 20px var(--color-primary);
-  }
-}
-
 .animate-pulse-glow {
-  animation: pulse-glow 2s ease-in-out infinite;
+  /* Removed glow animation */
 }
 
 /* Glassmorphism effect */
