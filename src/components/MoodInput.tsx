@@ -74,21 +74,21 @@ export const MoodInput = ({ onMoodSubmit, isProcessing }: MoodInputProps) => {
       </div>
 
       {/* Preset mood buttons - BOTTOM */}
-      <div className="flex flex-wrap gap-2 justify-center">
+      <div className="grid grid-cols-3 gap-1.5">
         {PRESET_MOODS.map((preset) => (
           <button
             key={preset.label}
             onClick={() => handlePresetClick(preset.mood)}
             disabled={isProcessing}
-            className="px-3 py-2 bg-[var(--color-surface)] border border-white/10
-                       text-xs font-medium text-[var(--color-text-secondary)]
+            className="px-2 py-1.5 bg-[var(--color-surface)] border border-white/10
+                       text-[11px] font-medium text-[var(--color-text-secondary)]
                        hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] hover:border-white/20
                        active:scale-95 transition-all
                        disabled:opacity-50 disabled:cursor-not-allowed
-                       flex items-center gap-1.5"
+                       flex items-center justify-center gap-1"
             title={preset.mood}
           >
-            <span className="text-sm">{preset.icon}</span>
+            <span className="text-xs">{preset.icon}</span>
             <span>{preset.label}</span>
           </button>
         ))}

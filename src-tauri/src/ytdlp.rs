@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
-use tauri::Manager;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 

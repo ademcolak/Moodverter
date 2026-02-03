@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { MoodInput, NowPlaying, Settings, LibrarySync, LibrarySearch, Recommendations } from './components';
 import { useSpotify, usePlayback, useMood, useProvider, TrackChangeEvent } from './hooks';
 import { Track } from './types/track';
@@ -46,7 +46,6 @@ function App() {
     login: providerLogin,
     switchProvider,
     playbackState: providerPlaybackState,
-    play: providerPlay,
     pause: providerPause,
     resume: providerResume,
     skip: providerSkip,
@@ -64,6 +63,12 @@ function App() {
   const effectiveAuthenticated = settings.provider === 'spotify' ? isAuthenticated : providerAuthenticated;
   const effectiveLoading = settings.provider === 'spotify' ? authLoading : providerLoading;
   const effectiveLogin = settings.provider === 'spotify' ? login : providerLogin;
+
+  // Recent tracks for diversity (avoid repeating)
+  const [recentTracks, setRecentTracks] = useState<Track[]>([]);
+
+  // Refs to hold playTrack function (avoids circular dependency)
+  const playTrackRef = useRef<(uri: string) => Promise<void>>(() => Promise.resolve());
 
   // Handle track changes (skip, manual selection, etc.)
   const handleTrackChange = useCallback(async (event: TrackChangeEvent) => {
@@ -85,6 +90,8 @@ function App() {
             tempo: event.previousTrack.tempo,
           }
         );
+        // Add to recent tracks
+        setRecentTracks(prev => [...prev.slice(-19), event.previousTrack!]);
       } else if (event.type !== 'app_initiated') {
         recordSkip(
           event.previousTrack.spotifyId,
@@ -95,7 +102,42 @@ function App() {
       }
     }
 
-    if (event.type === 'natural' || event.type === 'app_initiated') return;
+    // Auto-play next track when current track ends naturally
+    if (event.type === 'natural' && libraryTracks.length > 0) {
+      try {
+        const { selectNextTrack } = await import('./services/navigator/selector');
+
+        // Use current mood params or fallback to the ended track's features
+        const currentMood = moodState.current || {
+          energy: event.previousTrack?.energy ?? 0.5,
+          valence: event.previousTrack?.valence ?? 0.5,
+          danceability: event.previousTrack?.danceability ?? 0.5,
+          acousticness: event.previousTrack?.acousticness ?? 0.5,
+          tempo_min: Math.max(60, (event.previousTrack?.tempo ?? 120) - 20),
+          tempo_max: Math.min(200, (event.previousTrack?.tempo ?? 120) + 20),
+        };
+
+        const selection = selectNextTrack(libraryTracks, {
+          moodParams: currentMood,
+          currentTrack: event.previousTrack,
+          recentTracks,
+          includeRecommendations: settings.openToNewSongs,
+        });
+
+        if (selection) {
+          if (settings.provider === 'spotify' && playTrackRef.current) {
+            await playTrackRef.current(`spotify:track:${selection.track.spotifyId}`);
+          } else if (provider) {
+            await provider.play(selection.track.spotifyId);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to auto-play next track:', err);
+      }
+      return;
+    }
+
+    if (event.type === 'app_initiated') return;
 
     try {
       setIsAnalyzingAudio(true);
@@ -137,7 +179,7 @@ function App() {
     } finally {
       setIsAnalyzingAudio(false);
     }
-  }, [accessToken, isMockMode, settings.provider, setMoodParameters]);
+  }, [accessToken, isMockMode, settings.provider, settings.openToNewSongs, setMoodParameters, libraryTracks, recentTracks, moodState.current, provider]);
 
   const {
     isPlaying,
@@ -151,6 +193,11 @@ function App() {
     seek,
     playTrack,
   } = usePlayback(accessToken, { onTrackChange: handleTrackChange });
+
+  // Update ref after playTrack is available (for auto-play next)
+  useEffect(() => {
+    playTrackRef.current = playTrack;
+  }, [playTrack]);
 
   const useProviderPlayback = settings.provider === 'youtube';
 
@@ -411,7 +458,7 @@ function App() {
                   <div className="text-[10px] text-[var(--color-text-secondary)] uppercase tracking-wide mb-2">
                     YouTube Kutuphanesi
                   </div>
-                  <div className="h-56 border border-white/10 bg-[var(--color-surface)]">
+                  <div className="max-h-40 border border-white/10 bg-[var(--color-surface)] overflow-hidden">
                     <LibrarySearch
                       currentMood={currentMoodInput}
                       onTrackSelect={handleYouTubeTrackSelect}
@@ -430,13 +477,17 @@ function App() {
               </div>
 
               {/* Player Section - BOTTOM */}
-              <div className="mt-auto space-y-4">
+              <div className="mt-auto space-y-3 shrink-0">
                 <NowPlaying
                   track={effectiveCurrentTrack}
                   progress={effectiveProgress}
                   duration={effectiveDuration}
                   onSeek={effectiveSeek}
                   isAnalyzing={isAnalyzingAudio}
+                  isPlaying={effectiveIsPlaying}
+                  onPlayPause={handlePlayPause}
+                  onSkipNext={effectiveSkipNext}
+                  onSkipPrevious={effectiveSkipPrevious}
                 />
 
                 <Recommendations
@@ -447,25 +498,6 @@ function App() {
                   onAddToQueue={settings.provider === 'spotify' ? handleRecommendationAddToQueue : undefined}
                   maxItems={5}
                 />
-
-                <div className="flex justify-center items-center gap-8">
-                  <button onClick={effectiveSkipPrevious} className="p-2 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors">
-                    <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
-                  </button>
-                  <button
-                    onClick={handlePlayPause}
-                    className="w-14 h-14 bg-[var(--color-primary)] flex items-center justify-center text-white hover:bg-[var(--color-primary-dark)] active:scale-95 transition-all"
-                  >
-                    {effectiveIsPlaying ? (
-                      <svg className="w-7 h-7" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                    ) : (
-                      <svg className="w-7 h-7 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7L8 5z"/></svg>
-                    )}
-                  </button>
-                  <button onClick={effectiveSkipNext} className="p-2 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors">
-                    <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
-                  </button>
-                </div>
               </div>
             </div>
           )}

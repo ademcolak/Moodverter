@@ -155,8 +155,8 @@ export const Settings = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="w-full max-w-sm bg-[var(--color-surface)] border border-white/10 flex flex-col max-h-[75vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-2">
+      <div className="w-[calc(100%-1rem)] max-w-sm bg-[var(--color-surface)] border border-white/10 flex flex-col max-h-[80vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
           <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Ayarlar</h2>
