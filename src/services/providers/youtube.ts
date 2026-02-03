@@ -16,6 +16,7 @@ import {
   getVideoInfo,
   getPlaylist,
   addToPlaylist,
+  updatePlaylistTrack,
   removeFromPlaylist,
   addToRecentlyPlayed,
   type PlaylistTrack,
@@ -24,6 +25,7 @@ import {
   getCachedAnalysis,
   generateSyntheticFeatures,
 } from '../audio/analyzer';
+import { analyzeTrack } from '../mood/engine';
 import { registerProvider, DEFAULT_AUDIO_FEATURES } from './index';
 
 export class YouTubeProvider implements MusicProvider {
@@ -33,6 +35,7 @@ export class YouTubeProvider implements MusicProvider {
   private volume = 100;
   private currentTrack: UnifiedTrack | null = null;
   private library: UnifiedTrack[] = [];
+  private analysisInFlight = new Map<string, Promise<void>>();
 
   constructor() {
     this.loadLibraryFromStorage();
@@ -41,6 +44,80 @@ export class YouTubeProvider implements MusicProvider {
   private loadLibraryFromStorage(): void {
     const playlist = getPlaylist();
     this.library = playlist.map(track => this.playlistTrackToUnified(track));
+  }
+
+  private async ensureTrackAnalysis(
+    videoId: string,
+    title: string,
+    artist: string
+  ): Promise<void> {
+    const existing = this.library.find(t => t.id === videoId);
+    if (existing?.audioFeatures && existing.providerData?.analysis) {
+      return;
+    }
+    if (this.analysisInFlight.has(videoId)) {
+      return this.analysisInFlight.get(videoId)!;
+    }
+
+    const task = (async () => {
+      try {
+        const result = await analyzeTrack(title, artist, videoId);
+
+        updatePlaylistTrack(videoId, {
+          audioFeatures: result.audioFeatures,
+          analysis: {
+            suggestedMood: result.suggestedMood,
+            confidence: result.confidence,
+            genres: result.genres,
+            moods: result.moods,
+            method: result.method,
+          },
+        });
+
+        // Update in-memory library entry
+        const index = this.library.findIndex(t => t.id === videoId);
+        if (index >= 0) {
+          this.library[index] = {
+            ...this.library[index],
+            audioFeatures: result.audioFeatures,
+            providerData: {
+              ...(this.library[index].providerData || {}),
+              analysis: {
+                suggestedMood: result.suggestedMood,
+                confidence: result.confidence,
+                genres: result.genres,
+                moods: result.moods,
+                method: result.method,
+              },
+            },
+          };
+        }
+
+        if (this.currentTrack?.id === videoId) {
+          this.currentTrack = {
+            ...this.currentTrack,
+            audioFeatures: result.audioFeatures,
+            providerData: {
+              ...(this.currentTrack.providerData || {}),
+              analysis: {
+                suggestedMood: result.suggestedMood,
+                confidence: result.confidence,
+                genres: result.genres,
+                moods: result.moods,
+                method: result.method,
+              },
+            },
+          };
+        }
+      } catch (error) {
+        console.warn('Failed to analyze track metadata:', error);
+      }
+    })().finally(() => {
+      this.analysisInFlight.delete(videoId);
+    });
+
+    this.analysisInFlight.set(videoId, task);
+    await task;
   }
 
   private async ensureInitialized(): Promise<void> {
@@ -158,6 +235,9 @@ export class YouTubeProvider implements MusicProvider {
         // Add to playlist
         addToPlaylist(info);
         this.loadLibraryFromStorage();
+
+        // Analyze metadata in background
+        void this.ensureTrackAnalysis(trackId, info.title, info.artist);
       }
     }
 
@@ -318,12 +398,17 @@ export class YouTubeProvider implements MusicProvider {
       return cached;
     }
 
+    const existing = this.library.find(t => t.id === videoId);
+    if (existing?.audioFeatures) {
+      return existing.audioFeatures;
+    }
+
     // Generate synthetic features from metadata
     return generateSyntheticFeatures(title, artist);
   }
 
   private playlistTrackToUnified(track: PlaylistTrack): UnifiedTrack {
-    const features = this.getOrGenerateFeatures(
+    const features = track.audioFeatures || this.getOrGenerateFeatures(
       track.videoId,
       track.title,
       track.artist
@@ -335,11 +420,12 @@ export class YouTubeProvider implements MusicProvider {
       name: track.title,
       artist: track.artist,
       albumArt: track.thumbnail,
-      durationMs: (track.duration ?? 0) * 1000,
+      durationMs: track.duration ?? 0,
       playCount: 0,
       audioFeatures: features,
       providerData: {
         addedAt: track.addedAt,
+        analysis: track.analysis,
       },
     };
   }
@@ -352,8 +438,14 @@ export class YouTubeProvider implements MusicProvider {
       title: track.name,
       artist: track.artist,
       thumbnail: track.albumArt ?? '',
+      duration: track.durationMs,
+      audioFeatures: track.audioFeatures,
     });
     this.loadLibraryFromStorage();
+
+    if (!track.audioFeatures) {
+      void this.ensureTrackAnalysis(track.id, track.name, track.artist);
+    }
   }
 
   removeTrackFromLibrary(trackId: string): void {

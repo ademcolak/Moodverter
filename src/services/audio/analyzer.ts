@@ -1,7 +1,9 @@
-// Audio Analyzer - Extract audio features using Web Audio API
+// Audio Analyzer - Extract audio features using Web Audio API and Meyda
 // Provides Spotify-compatible audio features for YouTube videos
+// Supports hybrid analysis combining multiple methods
 
 import type { AudioFeatures } from '../../types/provider';
+import { analyzeAudioBuffer } from './meydaAnalyzer';
 
 export interface AnalysisResult extends AudioFeatures {
   // Additional metadata
@@ -399,4 +401,115 @@ export function generateSyntheticFeatures(
 export function clearAnalysisCache(): void {
   analysisCache.clear();
   localStorage.removeItem('moodverter_audio_cache');
+}
+
+// =============================================================================
+// Hybrid Analysis - Combines Meyda + WebAudio + Synthetic
+// =============================================================================
+
+export interface EnhancedAnalysis extends AudioFeatures {
+  tempo: number;           // BPM with improved accuracy
+  key: number;             // Chroma-based key detection
+  mode: number;            // Major/minor
+
+  // Additional features
+  energy: number;
+  valence: number;
+  danceability: number;
+
+  // Meta
+  analysisMethod: 'meyda' | 'webaudio' | 'synthetic' | 'hybrid';
+  confidence: number;
+  analyzedAt: number;
+}
+
+/**
+ * Perform hybrid analysis combining multiple methods
+ * Priority: Meyda > WebAudio > Synthetic
+ */
+export async function analyzeHybrid(
+  audioBuffer: AudioBuffer | null,
+  title: string,
+  artist: string,
+  videoId: string
+): Promise<EnhancedAnalysis> {
+  // Try Meyda analysis first
+  if (audioBuffer) {
+    try {
+      const meydaResult = await analyzeAudioBuffer(audioBuffer);
+
+      if (meydaResult.confidence > 0.5) {
+        return {
+          ...meydaResult,
+          analysisMethod: 'meyda',
+          analyzedAt: Date.now(),
+        };
+      }
+    } catch (error) {
+      console.warn('Meyda analysis failed:', error);
+    }
+  }
+
+  // Check cache for WebAudio analysis
+  const cached = getCachedAnalysis(videoId);
+  if (cached && cached.sampleCount > 50) {
+    return {
+      ...cached,
+      analysisMethod: 'webaudio',
+      confidence: Math.min(1, cached.sampleCount / 100),
+      analyzedAt: cached.analyzedAt,
+    };
+  }
+
+  // Fall back to synthetic analysis
+  const synthetic = generateSyntheticFeatures(title, artist);
+  return {
+    ...synthetic,
+    analysisMethod: 'synthetic',
+    confidence: 0.3,
+    analyzedAt: Date.now(),
+  };
+}
+
+/**
+ * Analyze audio from ArrayBuffer (for fetched audio data)
+ */
+export async function analyzeFromArrayBuffer(
+  arrayBuffer: ArrayBuffer,
+  title: string,
+  artist: string,
+  videoId: string
+): Promise<EnhancedAnalysis> {
+  try {
+    const audioContext = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    const result = await analyzeHybrid(audioBuffer, title, artist, videoId);
+    await audioContext.close();
+    return result;
+  } catch (error) {
+    console.error('Failed to analyze from ArrayBuffer:', error);
+    const synthetic = generateSyntheticFeatures(title, artist);
+    return {
+      ...synthetic,
+      analysisMethod: 'synthetic',
+      confidence: 0.2,
+      analyzedAt: Date.now(),
+    };
+  }
+}
+
+/**
+ * Get analysis method description
+ */
+export function getAnalysisMethodDescription(method: EnhancedAnalysis['analysisMethod']): string {
+  switch (method) {
+    case 'meyda':
+      return 'Meyda spektral analiz';
+    case 'webaudio':
+      return 'Web Audio API analiz';
+    case 'synthetic':
+      return 'Metadata tahmini';
+    case 'hybrid':
+      return 'Hibrit analiz';
+  }
 }

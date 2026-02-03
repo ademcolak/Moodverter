@@ -1,6 +1,6 @@
 import { MoodParameters } from '../../types/mood';
 import { Track, TrackScore } from '../../types/track';
-import { calculateTotalScore, calculateMoodScore } from './scorer';
+import { calculateEnhancedScore, calculateMoodScore } from './scorer';
 
 interface SelectionOptions {
   moodParams: MoodParameters;
@@ -49,19 +49,22 @@ const selectFromPool = (
 ): TrackScore | null => {
   // Score all tracks
   const scoredTracks: TrackScore[] = pool.map(track => {
-    const totalScore = calculateTotalScore(
+    const enhanced = calculateEnhancedScore(
       track,
       moodParams,
       currentTrack,
-      recentArtists
+      recentArtists,
+      {
+        preferenceWeight: 0.1,
+      }
     );
     const moodScore = calculateMoodScore(track, moodParams);
-    
+
     return {
       track,
       moodScore,
-      transitionScore: totalScore - moodScore * 0.6, // Extract transition portion
-      totalScore,
+      transitionScore: enhanced.transition,
+      totalScore: enhanced.total,
     };
   });
 

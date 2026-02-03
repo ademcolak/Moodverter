@@ -11,8 +11,10 @@ import {
 } from './embedMatcher';
 import { parseMoodWithLLM, isLLMAvailable } from './ollamaParser';
 import { mapMoodFromKeywords } from './mapper';
+import { analyzeSongMetadata, clearAnalysisCache as clearMetadataCache } from './metadataAnalyzer';
 import { getOllamaStatus } from '../ai/ollama';
 import type { MoodParams, MoodParameters } from '../../types/mood';
+import type { AudioFeatures } from '../../types/provider';
 
 export type ParseMethod = 'preset' | 'embedding' | 'llm' | 'keyword' | 'default';
 
@@ -201,6 +203,78 @@ function cacheResult(key: string, result: MoodParseResult): void {
 export function clearCache(): void {
   parseCache.clear();
   clearEmbeddingCache();
+  clearMetadataCache();
+}
+
+// =============================================================================
+// Track Analysis - Analyze individual tracks for mood
+// =============================================================================
+
+export interface TrackAnalysisResult {
+  suggestedMood: string;
+  moodParams: MoodParams;
+  audioFeatures: AudioFeatures;
+  confidence: number;
+  genres: string[];
+  moods: string[];
+  method: 'embedding' | 'keyword' | 'fallback';
+}
+
+/**
+ * Analyze a track to determine its mood based on metadata
+ * Used when adding new tracks to library
+ */
+export async function analyzeTrack(
+  title: string,
+  artist: string,
+  videoId?: string
+): Promise<TrackAnalysisResult> {
+  const analysis = await analyzeSongMetadata(title, artist, videoId);
+
+  return {
+    suggestedMood: analysis.suggestedMood,
+    moodParams: {
+      energy: analysis.audioParams.energy,
+      valence: analysis.audioParams.valence,
+      danceability: analysis.audioParams.danceability,
+      tempo: {
+        min: Math.max(60, analysis.audioParams.tempo - 15),
+        max: Math.min(200, analysis.audioParams.tempo + 15),
+      },
+      acousticness: analysis.audioParams.acousticness,
+    },
+    audioFeatures: analysis.audioParams,
+    confidence: analysis.confidence,
+    genres: analysis.genres,
+    moods: analysis.moods,
+    method: analysis.method,
+  };
+}
+
+/**
+ * Batch analyze multiple tracks
+ */
+export async function analyzeTracksBatch(
+  tracks: Array<{ title: string; artist: string; videoId?: string }>,
+  onProgress?: (completed: number, total: number) => void
+): Promise<Map<string, TrackAnalysisResult>> {
+  const results = new Map<string, TrackAnalysisResult>();
+
+  for (let i = 0; i < tracks.length; i++) {
+    const track = tracks[i];
+    const key = track.videoId || `${track.title}|${track.artist}`;
+
+    try {
+      const result = await analyzeTrack(track.title, track.artist, track.videoId);
+      results.set(key, result);
+    } catch (error) {
+      console.warn(`Failed to analyze track ${track.title}:`, error);
+    }
+
+    onProgress?.(i + 1, tracks.length);
+  }
+
+  return results;
 }
 
 export function getCacheSize(): number {

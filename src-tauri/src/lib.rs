@@ -6,6 +6,8 @@ use tauri::{
 };
 use tauri_plugin_autostart::MacosLauncher;
 
+mod ytdlp;
+
 // Global state for hide-on-blur behavior
 static HIDE_ON_BLUR: AtomicBool = AtomicBool::new(true);
 
@@ -43,11 +45,16 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
+        .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             set_hide_on_blur,
             get_hide_on_blur,
             set_autostart,
-            get_autostart
+            get_autostart,
+            ytdlp::search_youtube,
+            ytdlp::get_video_info,
+            ytdlp::get_audio_url,
+            ytdlp::fetch_audio_data
         ])
         .setup(|app| {
             // Create tray menu items

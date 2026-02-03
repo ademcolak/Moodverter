@@ -15,11 +15,13 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\"",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "generate:embeddings": "npx tsx scripts/generate-embeddings.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
+    "meyda": "^5.6.3",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

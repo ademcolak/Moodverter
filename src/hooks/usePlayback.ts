@@ -22,6 +22,8 @@ export interface TrackChangeEvent {
   previousTrack: Track | null;
   newTrack: Track;
   timestamp: number;
+  previousProgressMs: number;
+  previousDurationMs: number;
 }
 
 interface UsePlaybackOptions {
@@ -156,6 +158,8 @@ export const usePlayback = (
             previousTrack: prevTrack,
             newTrack,
             timestamp: Date.now(),
+            previousProgressMs: previousProgressRef.current,
+            previousDurationMs: prevTrack?.durationMs || newTrack.durationMs,
           };
 
           setLastTrackChange(changeEvent);
@@ -200,6 +204,8 @@ export const usePlayback = (
               previousTrack: prevTrack,
               newTrack,
               timestamp: Date.now(),
+              previousProgressMs: prevProgress,
+              previousDurationMs: prevTrack?.durationMs || state.item.duration_ms,
             };
 
             setLastTrackChange(changeEvent);

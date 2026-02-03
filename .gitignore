@@ -30,3 +30,7 @@ dist-ssr
 
 # Tauri
 src-tauri/target
+
+# yt-dlp binaries (download manually per platform)
+src-tauri/binaries/yt-dlp-*
+!src-tauri/binaries/README.md

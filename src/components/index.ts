@@ -5,4 +5,6 @@ export { PlayerControls } from './PlayerControls';
 export { Settings } from './Settings';
 export { MoodDeviationDialog } from './MoodDeviationDialog';
 export { LibrarySync } from './LibrarySync';
+export { LibrarySearch } from './LibrarySearch';
+export { Recommendations } from './Recommendations';
 export { ErrorBoundary } from './ErrorBoundary';

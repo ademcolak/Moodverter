@@ -1,5 +1,6 @@
 import { MoodParameters } from '../../types/mood';
 import { Track, CAMELOT_WHEEL, KEY_COMPATIBILITY } from '../../types/track';
+import { getPreferenceScore } from '../memory/preferences';
 
 // Weights for mood matching
 const MOOD_WEIGHTS = {
@@ -152,7 +153,7 @@ export const calculateTotalScore = (
   transitionWeight = 0.4
 ): number => {
   const moodScore = calculateMoodScore(track, moodParams);
-  
+
   let transitionScore = 1; // Default if no current track
   if (currentTrack) {
     transitionScore = calculateTransitionScore(currentTrack, track, recentArtists);
@@ -160,3 +161,143 @@ export const calculateTotalScore = (
 
   return moodWeight * moodScore + transitionWeight * transitionScore;
 };
+
+// =============================================================================
+// Enhanced Scoring with User Preferences
+// =============================================================================
+
+export interface EnhancedScoringOptions {
+  moodWeight?: number;
+  transitionWeight?: number;
+  preferenceWeight?: number;
+  genres?: string[];
+}
+
+/**
+ * Calculate total score including user preference adjustments
+ * Preference bonus/penalty range: -0.5 to +0.5
+ */
+export const calculateEnhancedScore = (
+  track: Track,
+  moodParams: MoodParameters,
+  currentTrack: Track | null,
+  recentArtists: Set<string> = new Set(),
+  options: EnhancedScoringOptions = {}
+): { total: number; mood: number; transition: number; preference: number } => {
+  const {
+    moodWeight = 0.55,
+    transitionWeight = 0.35,
+    preferenceWeight = 0.10,
+    genres = [],
+  } = options;
+
+  // Base scores
+  const moodScore = calculateMoodScore(track, moodParams);
+
+  let transitionScore = 1;
+  if (currentTrack) {
+    transitionScore = calculateTransitionScore(currentTrack, track, recentArtists);
+  }
+
+  // Get preference adjustment
+  const preferenceAdjustment = getPreferenceScore(
+    track.spotifyId,
+    track.artist,
+    genres,
+    {
+      energy: track.energy,
+      valence: track.valence,
+      tempo: track.tempo,
+    }
+  );
+
+  // Normalize preference to 0-1 range (from -0.5 to 0.5)
+  const preferenceScore = (preferenceAdjustment + 0.5);
+
+  // Calculate weighted total
+  const total = (
+    moodWeight * moodScore +
+    transitionWeight * transitionScore +
+    preferenceWeight * preferenceScore
+  );
+
+  return {
+    total: Math.max(0, Math.min(1, total)),
+    mood: moodScore,
+    transition: transitionScore,
+    preference: preferenceAdjustment,
+  };
+};
+
+/**
+ * Get score breakdown for debugging/display
+ */
+export const getScoreBreakdown = (
+  track: Track,
+  moodParams: MoodParameters,
+  currentTrack: Track | null,
+  recentArtists: Set<string> = new Set()
+): {
+  energy: number;
+  valence: number;
+  danceability: number;
+  tempo: number;
+  keyCompatibility: number;
+  bpmProximity: number;
+  energyFlow: number;
+  diversity: number;
+} => {
+  const energyScore = 1 - Math.abs(track.energy - moodParams.energy);
+  const valenceScore = 1 - Math.abs(track.valence - moodParams.valence);
+  const danceabilityScore = 1 - Math.abs(track.danceability - moodParams.danceability);
+
+  let tempoScore = 0;
+  if (track.tempo >= moodParams.tempo_min && track.tempo <= moodParams.tempo_max) {
+    tempoScore = 1;
+  } else if (track.tempo < moodParams.tempo_min) {
+    tempoScore = Math.max(0, 1 - (moodParams.tempo_min - track.tempo) / 30);
+  } else {
+    tempoScore = Math.max(0, 1 - (track.tempo - moodParams.tempo_max) / 30);
+  }
+
+  let keyScore = 0.5;
+  let bpmScore = 1;
+  let energyFlowScore = 1;
+  let diversityScore = 1;
+
+  if (currentTrack) {
+    const currentKey = getCamelotKey(currentTrack);
+    const nextKey = getCamelotKey(track);
+
+    if (currentKey && nextKey) {
+      const compatibleKeys = KEY_COMPATIBILITY[currentKey] || [];
+      if (nextKey === currentKey) keyScore = 1;
+      else if (compatibleKeys.includes(nextKey)) keyScore = 0.85;
+      else {
+        const currentNum = parseInt(currentKey.replace(/[AB]/, ''));
+        const nextNum = parseInt(nextKey.replace(/[AB]/, ''));
+        const distance = Math.min(
+          Math.abs(currentNum - nextNum),
+          12 - Math.abs(currentNum - nextNum)
+        );
+        keyScore = Math.max(0, 1 - distance * 0.15);
+      }
+    }
+
+    bpmScore = calculateBpmProximity(currentTrack, track);
+    energyFlowScore = calculateEnergyFlow(currentTrack, track);
+    diversityScore = recentArtists.has(track.artist) ? 0 : 1;
+  }
+
+  return {
+    energy: energyScore,
+    valence: valenceScore,
+    danceability: danceabilityScore,
+    tempo: tempoScore,
+    keyCompatibility: keyScore,
+    bpmProximity: bpmScore,
+    energyFlow: energyFlowScore,
+    diversity: diversityScore,
+  };
+};
+
