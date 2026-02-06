@@ -5,6 +5,8 @@ import type {
   UnifiedTrack,
   AudioFeatures,
   PlaybackState,
+  PlaybackEvent,
+  PlaybackEventListener,
 } from '../../types/provider';
 import type { Track } from '../../types/track';
 import {
@@ -27,14 +29,54 @@ export class MockProvider implements MusicProvider {
   readonly name = 'mock' as const;
   private volume = 100;
   private stateChangeCallback: ((state: PlaybackState) => void) | null = null;
+  private playbackEventListeners = new Set<PlaybackEventListener>();
+  private previousTrackId: string | null = null;
+  private previousIsPlaying = false;
 
   constructor() {
     // Subscribe to mock state changes
     onMockStateChange(state => {
+      const currentTrack = state.library[state.currentTrackIndex];
+      const currentTrackId = currentTrack?.spotifyId ?? null;
+
+      if (this.previousIsPlaying && !state.isPlaying) {
+        this.emitPlaybackEvent({ type: 'playback_paused' });
+      } else if (!this.previousIsPlaying && state.isPlaying) {
+        this.emitPlaybackEvent({ type: 'playback_resumed' });
+      }
+
+      if (this.previousTrackId && currentTrackId && this.previousTrackId !== currentTrackId) {
+        const previousTrack = state.library.find(track => track.spotifyId === this.previousTrackId) ?? null;
+        if (previousTrack) {
+          this.emitPlaybackEvent({
+            type: 'track_ended',
+            reason: 'skip',
+            previousTrack: this.legacyTrackToUnified(previousTrack),
+          });
+        }
+        this.emitPlaybackEvent({
+          type: 'track_started',
+          reason: 'manual',
+          track: this.legacyTrackToUnified(currentTrack),
+        });
+      }
+
+      this.previousTrackId = currentTrackId;
+      this.previousIsPlaying = state.isPlaying;
+
       if (this.stateChangeCallback) {
         this.stateChangeCallback(this.mockStateToPlaybackState(state));
       }
     });
+  }
+
+  private emitPlaybackEvent(event: Omit<PlaybackEvent, 'provider' | 'timestamp'>): void {
+    const payload: PlaybackEvent = {
+      ...event,
+      provider: this.name,
+      timestamp: Date.now(),
+    };
+    this.playbackEventListeners.forEach((listener) => listener(payload));
   }
 
   // Authentication (always authenticated in mock mode)
@@ -75,22 +117,32 @@ export class MockProvider implements MusicProvider {
 
   async play(trackId: string): Promise<void> {
     mockPlayTrack(trackId);
+    const track = MOCK_TRACKS.find((item) => item.spotifyId === trackId);
+    this.emitPlaybackEvent({
+      type: 'track_started',
+      reason: 'manual',
+      track: track ? this.legacyTrackToUnified(track) : null,
+    });
   }
 
   async pause(): Promise<void> {
     mockPause();
+    this.emitPlaybackEvent({ type: 'playback_paused' });
   }
 
   async resume(): Promise<void> {
     mockPlay();
+    this.emitPlaybackEvent({ type: 'playback_resumed' });
   }
 
   async skip(): Promise<void> {
     mockSkipNext();
+    this.emitPlaybackEvent({ type: 'track_ended', reason: 'skip' });
   }
 
   async previous(): Promise<void> {
     mockSkipPrevious();
+    this.emitPlaybackEvent({ type: 'track_ended', reason: 'previous' });
   }
 
   async seek(positionMs: number): Promise<void> {
@@ -112,6 +164,13 @@ export class MockProvider implements MusicProvider {
   async getPlaybackState(): Promise<PlaybackState | null> {
     const state = getMockState();
     return this.mockStateToPlaybackState(state);
+  }
+
+  onPlaybackEvent(listener: PlaybackEventListener): () => void {
+    this.playbackEventListeners.add(listener);
+    return () => {
+      this.playbackEventListeners.delete(listener);
+    };
   }
 
   // Audio features

@@ -11,7 +11,7 @@ vi.mock('../../../services/audio/analyzer');
 
 describe('YouTubeProvider', () => {
   let provider: YouTubeProvider;
-  let mockPlayer: any;
+  let mockPlayer: ReturnType<typeof playerService.getYouTubePlayer>;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -31,10 +31,9 @@ describe('YouTubeProvider', () => {
         volume: 100,
         videoId: null,
       }),
-      onStateChange: vi.fn(),
-    };
+      onStateChange: vi.fn(() => () => undefined),
+    } as unknown as ReturnType<typeof playerService.getYouTubePlayer>;
 
-    // @ts-ignore
     vi.spyOn(playerService, 'getYouTubePlayer').mockReturnValue(mockPlayer);
     
     // Mock getCachedAnalysis to return null by default

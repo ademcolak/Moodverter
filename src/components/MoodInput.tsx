@@ -3,6 +3,7 @@ import { useState, KeyboardEvent } from 'react';
 interface MoodInputProps {
   onMoodSubmit: (mood: string) => void;
   isProcessing: boolean;
+  inputClassName?: string;
 }
 
 // Preset mood options with icons
@@ -15,7 +16,7 @@ const PRESET_MOODS = [
   { label: 'Sad', icon: '💙', mood: 'sad melancholic emotional' },
 ];
 
-export const MoodInput = ({ onMoodSubmit, isProcessing }: MoodInputProps) => {
+export const MoodInput = ({ onMoodSubmit, isProcessing, inputClassName }: MoodInputProps) => {
   const [mood, setMood] = useState('');
 
   const handleSubmit = () => {
@@ -48,12 +49,12 @@ export const MoodInput = ({ onMoodSubmit, isProcessing }: MoodInputProps) => {
           onKeyDown={handleKeyDown}
           placeholder="Bugün nasıl hissediyorsun?"
           disabled={isProcessing}
-          className="flex-1 px-4 py-3 bg-[var(--color-surface)]
+          className={`flex-1 px-4 py-3 bg-[var(--color-surface)]
                      text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)]/50
                      border border-white/10 focus:border-[var(--color-primary)]
                      focus:outline-none transition-colors
                      disabled:opacity-50 disabled:cursor-not-allowed
-                     text-sm"
+                     text-sm ${inputClassName ?? ''}`}
         />
         <button
           onClick={handleSubmit}

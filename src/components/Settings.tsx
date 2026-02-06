@@ -1,8 +1,11 @@
 import { useState, useEffect, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { ProviderType } from '../types/provider';
+import type { DiscoveryMode, DiscoverySettings } from '../types/discovery';
+import { DISCOVERY_MODE_INFO } from '../types/discovery';
 import type { EngineStatus } from '../services/mood/engine';
 import { getEngineStatus } from '../services/mood/engine';
+import { InfoTooltip } from './InfoTooltip';
 
 interface SettingsProps {
   isOpen: boolean;
@@ -12,6 +15,7 @@ interface SettingsProps {
     spotifyConnected: boolean;
     openAiApiKey: string;
     provider: ProviderType;
+    discovery: DiscoverySettings;
   };
   onSettingsChange: (settings: Partial<SettingsProps['settings']>) => void;
   onClearCache: () => void;
@@ -52,7 +56,7 @@ const PROVIDER_INFO: Record<ProviderType, { name: string; description: string; i
   },
 };
 
-type TabType = 'general' | 'behavior' | 'source' | 'engine' | 'data';
+type TabType = 'general' | 'behavior' | 'discovery' | 'source' | 'engine' | 'data';
 
 const TABS: { id: TabType; label: string; icon: ReactNode }[] = [
   {
@@ -71,6 +75,15 @@ const TABS: { id: TabType; label: string; icon: ReactNode }[] = [
       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+      </svg>
+    ),
+  },
+  {
+    id: 'discovery',
+    label: 'Kesif',
+    icon: (
+      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
       </svg>
     ),
   },
@@ -152,6 +165,15 @@ export const Settings = ({
   const handleProviderChange = (provider: ProviderType) => {
     onSettingsChange({ provider });
     onProviderChange?.(provider);
+  };
+
+  const updateDiscoverySettings = (updates: Partial<DiscoverySettings>) => {
+    onSettingsChange({
+      discovery: {
+        ...settings.discovery,
+        ...updates,
+      },
+    });
   };
 
   return (
@@ -247,6 +269,193 @@ export const Settings = ({
                     autostart ? 'translate-x-4' : ''
                   }`} />
                 </button>
+              </div>
+            </div>
+          )}
+
+          {/* Discovery Tab */}
+          {activeTab === 'discovery' && (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-secondary)]">
+                  Temel
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-[var(--color-text-primary)]">Kesif Modu</span>
+                    <InfoTooltip
+                      title="Kesif Modu"
+                      description="Kutuphane az oldugunda Moodverter'in YouTube kesfini nasil kullanacagini belirler."
+                      variant="info"
+                    />
+                  </div>
+                  <div className="border border-white/5 divide-y divide-white/5 bg-white/5">
+                    {(Object.keys(DISCOVERY_MODE_INFO) as DiscoveryMode[]).map((mode) => {
+                      const info = DISCOVERY_MODE_INFO[mode];
+                      const active = settings.discovery.mode === mode;
+                      return (
+                        <label
+                          key={mode}
+                          className={`flex items-start gap-2 p-2 cursor-pointer ${active ? 'bg-[var(--color-primary)]/10' : ''}`}
+                        >
+                          <input
+                            type="radio"
+                            name="discovery_mode"
+                            checked={active}
+                            onChange={() => updateDiscoverySettings({ mode })}
+                            className="mt-0.5 accent-[var(--color-primary)]"
+                          />
+                          <div className="min-w-0">
+                            <div className="text-xs text-[var(--color-text-primary)]">
+                              {info.icon} {info.title}
+                            </div>
+                            <div className="text-[10px] text-[var(--color-text-secondary)]">
+                              {info.description}
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-[var(--color-text-primary)]">Kesif Esigi</span>
+                    <InfoTooltip
+                      title="Kesif Esigi"
+                      description="Kutuphane bu sayinin altinda kalirsa kesif modlari aktiflesir."
+                      variant="tip"
+                    />
+                  </div>
+                  <div className="p-2 border border-white/5 bg-white/5">
+                    <label className="text-[10px] text-[var(--color-text-secondary)]">
+                      Kutuphanede
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={settings.discovery.minLibraryThreshold}
+                        onChange={(e) => {
+                          const value = Number.parseInt(e.target.value, 10);
+                          updateDiscoverySettings({
+                            minLibraryThreshold: Number.isNaN(value) ? 5 : Math.max(1, Math.min(100, value)),
+                          });
+                        }}
+                        className="mx-1 w-12 px-1 py-0.5 bg-black/20 border border-white/10 text-[var(--color-text-primary)]"
+                      />
+                      sarkidan az varsa
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2 pt-2 border-t border-white/5">
+                <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-secondary)]">
+                  Gelismis
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between p-2 border border-white/5 bg-white/5">
+                    <div className="flex items-center gap-2">
+                      <div>
+                        <div className="text-xs text-[var(--color-text-primary)]">Begeniyi otomatik ekle</div>
+                        <div className="text-[10px] text-[var(--color-text-secondary)]">Auto modda YouTube kesfini kutuphaneye kaydeder</div>
+                      </div>
+                      <InfoTooltip
+                        title="Otomatik Ekleme"
+                        description="Auto discover ile bulunan sarki calindiginda kutuphaneye otomatik eklenir."
+                        variant="warning"
+                      />
+                    </div>
+                    <button
+                      onClick={() => updateDiscoverySettings({ autoAddToLibrary: !settings.discovery.autoAddToLibrary })}
+                      className={`relative w-9 h-5 rounded-full transition-colors ${
+                        settings.discovery.autoAddToLibrary ? 'bg-[var(--color-primary)]' : 'bg-white/20'
+                      }`}
+                    >
+                      <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
+                        settings.discovery.autoAddToLibrary ? 'translate-x-4' : ''
+                      }`} />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between p-2 border border-white/5 bg-white/5">
+                    <div className="flex items-center gap-2">
+                      <div>
+                        <div className="text-xs text-[var(--color-text-primary)]">Benzer sanatciyi tercih et</div>
+                        <div className="text-[10px] text-[var(--color-text-secondary)]">Mevcut sarkiya yakin sanatcilari one cikarir</div>
+                      </div>
+                      <InfoTooltip
+                        title="Benzer Sanatci"
+                        description="Kesif sorgusu mevcut sanatciyi da icerir, daha tutarli bir akis olusturur."
+                        variant="info"
+                      />
+                    </div>
+                    <button
+                      onClick={() => updateDiscoverySettings({ preferSimilarArtists: !settings.discovery.preferSimilarArtists })}
+                      className={`relative w-9 h-5 rounded-full transition-colors ${
+                        settings.discovery.preferSimilarArtists ? 'bg-[var(--color-primary)]' : 'bg-white/20'
+                      }`}
+                    >
+                      <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
+                        settings.discovery.preferSimilarArtists ? 'translate-x-4' : ''
+                      }`} />
+                    </button>
+                  </div>
+
+                  <div className="p-2 border border-white/5 bg-white/5 space-y-2">
+                    <label className="block text-[10px] text-[var(--color-text-secondary)]">
+                      Oneri limiti (her dongu)
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={settings.discovery.maxSuggestionsPerCycle}
+                        onChange={(e) => {
+                          const value = Number.parseInt(e.target.value, 10);
+                          updateDiscoverySettings({
+                            maxSuggestionsPerCycle: Number.isNaN(value) ? 5 : Math.max(1, Math.min(20, value)),
+                          });
+                        }}
+                        className="mt-1 w-full px-2 py-1 bg-black/20 border border-white/10 text-xs text-[var(--color-text-primary)]"
+                      />
+                    </label>
+
+                    {settings.discovery.mode === 'suggest' && (
+                      <>
+                        <label className="block text-[10px] text-[var(--color-text-secondary)]">
+                          Suggest davranisi
+                          <select
+                            value={settings.discovery.suggestBehavior}
+                            onChange={(e) => updateDiscoverySettings({ suggestBehavior: e.target.value as DiscoverySettings['suggestBehavior'] })}
+                            className="mt-1 w-full px-2 py-1 bg-black/20 border border-white/10 text-xs text-[var(--color-text-primary)]"
+                          >
+                            <option value="show_with_autoplay_fallback">Goster + otomatik fallback</option>
+                            <option value="show_only">Sadece goster</option>
+                          </select>
+                        </label>
+
+                        <label className="block text-[10px] text-[var(--color-text-secondary)]">
+                          Fallback autoplay gecikmesi (sn)
+                          <input
+                            type="number"
+                            min={3}
+                            max={30}
+                            value={settings.discovery.suggestAutoplayDelaySec}
+                            onChange={(e) => {
+                              const value = Number.parseInt(e.target.value, 10);
+                              updateDiscoverySettings({
+                                suggestAutoplayDelaySec: Number.isNaN(value) ? 8 : Math.max(3, Math.min(30, value)),
+                              });
+                            }}
+                            className="mt-1 w-full px-2 py-1 bg-black/20 border border-white/10 text-xs text-[var(--color-text-primary)]"
+                          />
+                        </label>
+                      </>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           )}

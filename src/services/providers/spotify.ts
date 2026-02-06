@@ -5,6 +5,8 @@ import type {
   UnifiedTrack,
   AudioFeatures,
   PlaybackState,
+  PlaybackEvent,
+  PlaybackEventListener,
 } from '../../types/provider';
 import type {
   SpotifyTrack,
@@ -20,6 +22,7 @@ export class SpotifyProvider implements MusicProvider {
   readonly name = 'spotify' as const;
   private tokens: SpotifyTokens | null = null;
   private deviceId: string | null = null;
+  private playbackEventListeners = new Set<PlaybackEventListener>();
 
   constructor() {
     this.loadTokens();
@@ -48,6 +51,18 @@ export class SpotifyProvider implements MusicProvider {
     }
 
     return this.tokens.access_token;
+  }
+
+  private emitPlaybackEvent(event: Omit<PlaybackEvent, 'provider' | 'timestamp'>): void {
+    const payload: PlaybackEvent = {
+      ...event,
+      provider: this.name,
+      timestamp: Date.now(),
+    };
+
+    this.playbackEventListeners.forEach((listener) => {
+      listener(payload);
+    });
   }
 
   // Authentication
@@ -90,26 +105,42 @@ export class SpotifyProvider implements MusicProvider {
     const accessToken = await this.getAccessToken();
     const trackUri = `spotify:track:${trackId}`;
     await playback.playTrack(accessToken, trackUri, this.deviceId ?? undefined);
+    this.emitPlaybackEvent({
+      type: 'track_started',
+      reason: 'manual',
+      track: {
+        id: trackId,
+        provider: 'spotify',
+        name: '',
+        artist: '',
+        durationMs: 0,
+        playCount: 0,
+      },
+    });
   }
 
   async pause(): Promise<void> {
     const accessToken = await this.getAccessToken();
     await playback.pause(accessToken, this.deviceId ?? undefined);
+    this.emitPlaybackEvent({ type: 'playback_paused' });
   }
 
   async resume(): Promise<void> {
     const accessToken = await this.getAccessToken();
     await playback.play(accessToken, this.deviceId ?? undefined);
+    this.emitPlaybackEvent({ type: 'playback_resumed' });
   }
 
   async skip(): Promise<void> {
     const accessToken = await this.getAccessToken();
     await playback.skipToNext(accessToken, this.deviceId ?? undefined);
+    this.emitPlaybackEvent({ type: 'track_ended', reason: 'skip' });
   }
 
   async previous(): Promise<void> {
     const accessToken = await this.getAccessToken();
     await playback.skipToPrevious(accessToken, this.deviceId ?? undefined);
+    this.emitPlaybackEvent({ type: 'track_ended', reason: 'previous' });
   }
 
   async seek(positionMs: number): Promise<void> {
@@ -155,6 +186,13 @@ export class SpotifyProvider implements MusicProvider {
       durationMs: state.item?.duration_ms ?? 0,
       volume: state.device?.volume_percent ?? 100,
       deviceName: state.device?.name,
+    };
+  }
+
+  onPlaybackEvent(listener: PlaybackEventListener): () => void {
+    this.playbackEventListeners.add(listener);
+    return () => {
+      this.playbackEventListeners.delete(listener);
     };
   }
 

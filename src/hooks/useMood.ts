@@ -46,11 +46,6 @@ export const useMood = (_apiKey?: string | null): UseMoodReturn => {
   const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
   const [lastParseResult, setLastParseResult] = useState<MoodParseResult | null>(null);
 
-  // Check engine status on mount
-  useEffect(() => {
-    refreshEngineStatus();
-  }, []);
-
   const refreshEngineStatus = useCallback(async () => {
     try {
       const status = await getEngineStatus();
@@ -59,6 +54,11 @@ export const useMood = (_apiKey?: string | null): UseMoodReturn => {
       console.error('Failed to get engine status:', err);
     }
   }, []);
+
+  // Check engine status on mount
+  useEffect(() => {
+    void refreshEngineStatus();
+  }, [refreshEngineStatus]);
 
   // Full mood processing with AI fallback chain
   const processMood = useCallback(async (text: string): Promise<MoodParameters | null> => {
@@ -152,6 +152,7 @@ export const useMood = (_apiKey?: string | null): UseMoodReturn => {
   }, []);
 
   const setMoodParameters = useCallback((parameters: MoodParameters, method: string = 'manual') => {
+    const parseMethod = (method === 'manual' ? 'keyword' : method) as MoodParseResult['method'];
     setLastParseResult({
       params: {
         energy: parameters.energy,
@@ -160,7 +161,7 @@ export const useMood = (_apiKey?: string | null): UseMoodReturn => {
         tempo: { min: parameters.tempo_min, max: parameters.tempo_max },
         acousticness: parameters.acousticness,
       },
-      method: method as any,
+      method: parseMethod,
       confidence: 1.0,
       processingTimeMs: 0,
     });
@@ -173,7 +174,7 @@ export const useMood = (_apiKey?: string | null): UseMoodReturn => {
     }));
   }, []);
 
-  const calculateDeviation = useCallback((track: Track): MoodDeviation | null => {
+  const calculateDeviation = (track: Track): MoodDeviation | null => {
     if (!moodState.current) return null;
 
     const trackParams = {
@@ -203,7 +204,7 @@ export const useMood = (_apiKey?: string | null): UseMoodReturn => {
       deviationScore,
       isSignificant: deviationScore > SIGNIFICANT_DEVIATION_THRESHOLD,
     };
-  }, [moodState.current]);
+  };
 
   const clearMood = useCallback(() => {
     setMoodState({

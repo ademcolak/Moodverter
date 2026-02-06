@@ -78,7 +78,7 @@ export async function analyzeAudioBuffer(
       if (features) {
         frameFeatures.push(features);
       }
-    } catch (error) {
+    } catch {
       // Skip frames with errors
       continue;
     }

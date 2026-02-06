@@ -5,6 +5,8 @@ import type {
   UnifiedTrack,
   AudioFeatures,
   PlaybackState,
+  PlaybackEvent,
+  PlaybackEventListener,
 } from '../../types/provider';
 import {
   YouTubePlayer,
@@ -36,6 +38,9 @@ export class YouTubeProvider implements MusicProvider {
   private currentTrack: UnifiedTrack | null = null;
   private library: UnifiedTrack[] = [];
   private analysisInFlight = new Map<string, Promise<void>>();
+  private playbackEventListeners = new Set<PlaybackEventListener>();
+  private previousPlayerSnapshot: { isPlaying: boolean; currentTime: number; duration: number; videoId: string | null } | null = null;
+  private lastEndedSignature: string | null = null;
 
   constructor() {
     this.loadLibraryFromStorage();
@@ -143,10 +148,58 @@ export class YouTubeProvider implements MusicProvider {
 
     // Subscribe to state changes
     this.player.onStateChange((state) => {
-      if (state.videoId && state.videoId !== this.currentTrack?.id) {
-        // Track changed externally
-      }
+      this.handlePlayerStateChange(state);
     });
+  }
+
+  private emitPlaybackEvent(event: Omit<PlaybackEvent, 'provider' | 'timestamp'>): void {
+    const payload: PlaybackEvent = {
+      ...event,
+      provider: this.name,
+      timestamp: Date.now(),
+    };
+
+    this.playbackEventListeners.forEach((listener) => listener(payload));
+  }
+
+  private handlePlayerStateChange(state: {
+    isPlaying: boolean;
+    videoId: string | null;
+    currentTime: number;
+    duration: number;
+  }): void {
+    const previous = this.previousPlayerSnapshot;
+
+    if (previous && previous.isPlaying && !state.isPlaying) {
+      const reachedEnd = state.duration > 0 && state.currentTime >= state.duration - 0.75;
+      const endedTrackId = this.currentTrack?.id ?? previous.videoId;
+      const signature = endedTrackId ? `${endedTrackId}:${Math.floor(state.duration)}` : null;
+
+      if (reachedEnd && signature && signature !== this.lastEndedSignature) {
+        this.lastEndedSignature = signature;
+        this.emitPlaybackEvent({
+          type: 'track_ended',
+          reason: 'natural',
+          track: this.currentTrack,
+          progressMs: Math.max(0, state.currentTime * 1000),
+          durationMs: Math.max(0, state.duration * 1000),
+        });
+      } else {
+        this.emitPlaybackEvent({ type: 'playback_paused' });
+      }
+    } else if (previous && !previous.isPlaying && state.isPlaying) {
+      this.emitPlaybackEvent({
+        type: 'playback_resumed',
+        track: this.currentTrack,
+      });
+    }
+
+    this.previousPlayerSnapshot = {
+      isPlaying: state.isPlaying,
+      currentTime: state.currentTime,
+      duration: state.duration,
+      videoId: state.videoId,
+    };
   }
 
   // Authentication (YouTube doesn't require auth for basic playback)
@@ -166,6 +219,8 @@ export class YouTubeProvider implements MusicProvider {
       this.isInitialized = false;
     }
     this.currentTrack = null;
+    this.previousPlayerSnapshot = null;
+    this.lastEndedSignature = null;
   }
 
   // Library access
@@ -251,16 +306,23 @@ export class YouTubeProvider implements MusicProvider {
     }
 
     this.player.loadVideo(trackId, true);
+    this.emitPlaybackEvent({
+      type: 'track_started',
+      reason: 'manual',
+      track: this.currentTrack,
+    });
   }
 
   async pause(): Promise<void> {
     if (!this.player) return;
     this.player.pause();
+    this.emitPlaybackEvent({ type: 'playback_paused', track: this.currentTrack });
   }
 
   async resume(): Promise<void> {
     if (!this.player) return;
     this.player.play();
+    this.emitPlaybackEvent({ type: 'playback_resumed', track: this.currentTrack });
   }
 
   async skip(): Promise<void> {
@@ -272,6 +334,11 @@ export class YouTubeProvider implements MusicProvider {
     const nextTrack = this.library[nextIndex];
 
     if (nextTrack) {
+      this.emitPlaybackEvent({
+        type: 'track_ended',
+        reason: 'skip',
+        previousTrack: this.currentTrack,
+      });
       await this.play(nextTrack.id);
     }
   }
@@ -285,6 +352,11 @@ export class YouTubeProvider implements MusicProvider {
     const prevTrack = this.library[prevIndex];
 
     if (prevTrack) {
+      this.emitPlaybackEvent({
+        type: 'track_ended',
+        reason: 'previous',
+        previousTrack: this.currentTrack,
+      });
       await this.play(prevTrack.id);
     }
   }
@@ -343,6 +415,13 @@ export class YouTubeProvider implements MusicProvider {
       durationMs: state.duration * 1000,
       volume: state.volume,
       deviceName: 'YouTube Player',
+    };
+  }
+
+  onPlaybackEvent(listener: PlaybackEventListener): () => void {
+    this.playbackEventListeners.add(listener);
+    return () => {
+      this.playbackEventListeners.delete(listener);
     };
   }
 

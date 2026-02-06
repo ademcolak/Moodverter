@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parseMood, parseMoodQuick } from '../../services/mood/engine';
+import { parseMood } from '../../services/mood/engine';
 import * as ollamaService from '../../services/ai/ollama';
 import * as embedMatcher from '../../services/mood/embedMatcher';
 

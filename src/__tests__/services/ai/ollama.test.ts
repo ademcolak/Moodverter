@@ -4,9 +4,13 @@ import { isOllamaRunning, generate, embed } from '../../../services/ai/ollama';
 describe('Ollama Service', () => {
   // Mock fetch global
   const originalFetch = global.fetch;
+  const response = (body: unknown, ok = true): Response => ({
+    ok,
+    json: async () => body,
+  } as Response);
 
   beforeEach(() => {
-    global.fetch = vi.fn();
+    global.fetch = vi.fn() as typeof fetch;
   });
 
   afterEach(() => {
@@ -17,10 +21,7 @@ describe('Ollama Service', () => {
   describe('isOllamaRunning', () => {
     it('should return true when Ollama is reachable', async () => {
       // Mock successful response
-      (global.fetch as any).mockResolvedValue({
-        ok: true,
-        json: async () => ({ status: 'ok' }), // Ollama usually returns something simple
-      });
+      vi.mocked(global.fetch).mockResolvedValue(response({ status: 'ok' }));
 
       const running = await isOllamaRunning();
       expect(running).toBe(true);
@@ -28,7 +29,7 @@ describe('Ollama Service', () => {
 
     it('should return false when Ollama is unreachable', async () => {
       // Mock network error
-      (global.fetch as any).mockRejectedValue(new Error('Connection refused'));
+      vi.mocked(global.fetch).mockRejectedValue(new Error('Connection refused'));
 
       const running = await isOllamaRunning();
       expect(running).toBe(false);
@@ -37,10 +38,7 @@ describe('Ollama Service', () => {
 
   describe('generate', () => {
     it('should return generated text', async () => {
-      (global.fetch as any).mockResolvedValue({
-        ok: true,
-        json: async () => ({ response: 'Generated text' }),
-      });
+      vi.mocked(global.fetch).mockResolvedValue(response({ response: 'Generated text' }));
 
       const result = await generate('test prompt');
       expect(result).toBe('Generated text');
@@ -54,7 +52,7 @@ describe('Ollama Service', () => {
     });
 
     it('should throw error on failure', async () => {
-      (global.fetch as any).mockRejectedValue(new Error('API Error'));
+      vi.mocked(global.fetch).mockRejectedValue(new Error('API Error'));
 
       await expect(generate('test')).rejects.toThrow('API Error');
     });
@@ -63,10 +61,7 @@ describe('Ollama Service', () => {
   describe('embed', () => {
     it('should return embeddings', async () => {
       const mockEmbedding = [0.1, 0.2, 0.3];
-      (global.fetch as any).mockResolvedValue({
-        ok: true,
-        json: async () => ({ embedding: mockEmbedding }),
-      });
+      vi.mocked(global.fetch).mockResolvedValue(response({ embedding: mockEmbedding }));
 
       const result = await embed('test text');
       expect(result).toEqual(mockEmbedding);

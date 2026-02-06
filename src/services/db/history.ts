@@ -1,9 +1,10 @@
-import { Track } from '../../types/track';
-import { MoodParameters } from '../../types/mood';
+import type { Track } from '../../types/track';
+import type { MoodParameters } from '../../types/mood';
+import type { HistoryEntry } from '../../types/history';
+import { legacyTrackToUnified } from '../providers';
+import { addToHistory, getHistory, clearHistory } from '../history';
 
-const HISTORY_KEY = 'moodverter_play_history';
 const MOOD_HISTORY_KEY = 'moodverter_mood_history';
-const MAX_HISTORY_LENGTH = 1000;
 
 interface PlayHistoryEntry {
   trackId: string;
@@ -21,119 +22,78 @@ interface MoodHistoryEntry {
   createdAt: number;
 }
 
-// Add track to play history
+function toPlayHistoryEntry(entry: HistoryEntry): PlayHistoryEntry {
+  return {
+    trackId: entry.track.id,
+    trackName: entry.track.name,
+    artist: entry.track.artist,
+    playedAt: entry.playedAt,
+    skipped: entry.completedPercent < 80,
+    skipPositionMs: entry.listenDuration,
+  };
+}
+
 export const addToPlayHistory = (
   track: Track,
   moodParams?: MoodParameters,
   skipped = false,
   skipPositionMs?: number
 ): void => {
-  try {
-    const data = localStorage.getItem(HISTORY_KEY);
-    let history: PlayHistoryEntry[] = data ? JSON.parse(data) : [];
+  const duration = track.durationMs || 1;
+  const listenDuration = skipped ? (skipPositionMs ?? Math.min(duration, duration * 0.2)) : duration;
+  const completedPercent = Math.max(0, Math.min(100, (listenDuration / duration) * 100));
 
-    // Add new entry
-    history.unshift({
-      trackId: track.spotifyId,
-      trackName: track.name,
-      artist: track.artist,
-      playedAt: Date.now(),
-      moodParams,
-      skipped,
-      skipPositionMs,
-    });
-
-    // Limit history length
-    if (history.length > MAX_HISTORY_LENGTH) {
-      history = history.slice(0, MAX_HISTORY_LENGTH);
-    }
-
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
-  } catch (err) {
-    console.error('Failed to save play history:', err);
-  }
+  addToHistory({
+    track: legacyTrackToUnified(track, 'spotify'),
+    listenDuration,
+    completedPercent,
+    mood: moodParams ? JSON.stringify(moodParams) : undefined,
+    source: 'library',
+    decisionSource: skipped ? 'manual' : 'library_selector',
+    algorithmVersion: 'phase4-v1',
+  });
 };
 
-// Get play history
 export const getPlayHistory = (limit = 50): PlayHistoryEntry[] => {
-  try {
-    const data = localStorage.getItem(HISTORY_KEY);
-    if (!data) return [];
-
-    const history: PlayHistoryEntry[] = JSON.parse(data);
-    return history.slice(0, limit);
-  } catch {
-    return [];
-  }
+  return getHistory(limit).map(toPlayHistoryEntry);
 };
 
-// Get recently played track IDs
 export const getRecentlyPlayedIds = (limit = 20): string[] => {
-  const history = getPlayHistory(limit);
-  return history.map(h => h.trackId);
+  return getHistory(limit).map((entry) => entry.track.id);
 };
 
-// Check if track was recently played
 export const wasRecentlyPlayed = (trackId: string, withinMinutes = 60): boolean => {
-  const history = getPlayHistory(100);
   const cutoff = Date.now() - withinMinutes * 60 * 1000;
-
-  return history.some(
-    h => h.trackId === trackId && h.playedAt > cutoff
-  );
+  return getHistory(200).some((entry) => entry.track.id === trackId && entry.playedAt > cutoff);
 };
 
-// Get skip statistics for a track
 export const getSkipStats = (trackId: string): { playCount: number; skipCount: number; skipRate: number } => {
-  try {
-    const data = localStorage.getItem(HISTORY_KEY);
-    if (!data) return { playCount: 0, skipCount: 0, skipRate: 0 };
+  const entries = getHistory(1000).filter((entry) => entry.track.id === trackId);
+  const playCount = entries.length;
+  const skipCount = entries.filter((entry) => entry.completedPercent < 80).length;
 
-    const history: PlayHistoryEntry[] = JSON.parse(data);
-    const trackHistory = history.filter(h => h.trackId === trackId);
-    
-    const playCount = trackHistory.length;
-    const skipCount = trackHistory.filter(h => h.skipped).length;
-    
-    return {
-      playCount,
-      skipCount,
-      skipRate: playCount > 0 ? skipCount / playCount : 0,
-    };
-  } catch {
-    return { playCount: 0, skipCount: 0, skipRate: 0 };
-  }
+  return {
+    playCount,
+    skipCount,
+    skipRate: playCount > 0 ? skipCount / playCount : 0,
+  };
 };
 
-// Add mood to history
 export const addToMoodHistory = (text: string, params: MoodParameters): void => {
   try {
     const data = localStorage.getItem(MOOD_HISTORY_KEY);
-    let history: MoodHistoryEntry[] = data ? JSON.parse(data) : [];
-
-    history.unshift({
-      text,
-      params,
-      createdAt: Date.now(),
-    });
-
-    // Keep only last 50 moods
-    if (history.length > 50) {
-      history = history.slice(0, 50);
-    }
-
-    localStorage.setItem(MOOD_HISTORY_KEY, JSON.stringify(history));
+    const history: MoodHistoryEntry[] = data ? JSON.parse(data) : [];
+    const next = [{ text, params, createdAt: Date.now() }, ...history].slice(0, 50);
+    localStorage.setItem(MOOD_HISTORY_KEY, JSON.stringify(next));
   } catch (err) {
     console.error('Failed to save mood history:', err);
   }
 };
 
-// Get mood history
 export const getMoodHistory = (limit = 10): MoodHistoryEntry[] => {
   try {
     const data = localStorage.getItem(MOOD_HISTORY_KEY);
     if (!data) return [];
-
     const history: MoodHistoryEntry[] = JSON.parse(data);
     return history.slice(0, limit);
   } catch {
@@ -141,19 +101,16 @@ export const getMoodHistory = (limit = 10): MoodHistoryEntry[] => {
   }
 };
 
-// Get last mood
 export const getLastMood = (): MoodHistoryEntry | null => {
   const history = getMoodHistory(1);
   return history[0] || null;
 };
 
-// Clear all history
 export const clearAllHistory = (): void => {
-  localStorage.removeItem(HISTORY_KEY);
+  clearHistory();
   localStorage.removeItem(MOOD_HISTORY_KEY);
 };
 
-// Get listening analytics
 export const getListeningAnalytics = (): {
   totalPlays: number;
   totalSkips: number;
@@ -161,52 +118,29 @@ export const getListeningAnalytics = (): {
   topArtists: { artist: string; count: number }[];
   listeningByHour: number[];
 } => {
-  try {
-    const data = localStorage.getItem(HISTORY_KEY);
-    if (!data) {
-      return {
-        totalPlays: 0,
-        totalSkips: 0,
-        averageSkipRate: 0,
-        topArtists: [],
-        listeningByHour: new Array(24).fill(0),
-      };
-    }
+  const entries = getHistory(1000);
+  const totalPlays = entries.length;
+  const totalSkips = entries.filter((entry) => entry.completedPercent < 80).length;
+  const listeningByHour = new Array(24).fill(0);
+  const artistCounts = new Map<string, number>();
 
-    const history: PlayHistoryEntry[] = JSON.parse(data);
-    
-    const totalPlays = history.length;
-    const totalSkips = history.filter(h => h.skipped).length;
-    
-    // Count artists
-    const artistCounts: Record<string, number> = {};
-    const listeningByHour = new Array(24).fill(0);
-    
-    for (const entry of history) {
-      artistCounts[entry.artist] = (artistCounts[entry.artist] || 0) + 1;
-      const hour = new Date(entry.playedAt).getHours();
-      listeningByHour[hour]++;
-    }
-    
-    const topArtists = Object.entries(artistCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10)
-      .map(([artist, count]) => ({ artist, count }));
-
-    return {
-      totalPlays,
-      totalSkips,
-      averageSkipRate: totalPlays > 0 ? totalSkips / totalPlays : 0,
-      topArtists,
-      listeningByHour,
-    };
-  } catch {
-    return {
-      totalPlays: 0,
-      totalSkips: 0,
-      averageSkipRate: 0,
-      topArtists: [],
-      listeningByHour: new Array(24).fill(0),
-    };
+  for (const entry of entries) {
+    const artist = entry.track.artist || 'Unknown';
+    artistCounts.set(artist, (artistCounts.get(artist) || 0) + 1);
+    const hour = new Date(entry.playedAt).getHours();
+    listeningByHour[hour] += 1;
   }
+
+  const topArtists = Array.from(artistCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([artist, count]) => ({ artist, count }));
+
+  return {
+    totalPlays,
+    totalSkips,
+    averageSkipRate: totalPlays > 0 ? totalSkips / totalPlays : 0,
+    topArtists,
+    listeningByHour,
+  };
 };

@@ -317,15 +317,15 @@ Hafta 4: Öneri Sistemi
 ## Test Planı
 
 ### Unit Tests
-- [ ] yt-dlp wrapper (mock subprocess)
-- [ ] Metadata parser
-- [ ] Embedding similarity
-- [ ] Audio analyzer (Meyda)
+- [x] yt-dlp wrapper (mock subprocess)
+- [x] Metadata parser
+- [x] Embedding similarity
+- [x] Audio analyzer (Meyda)
 
 ### Integration Tests
-- [ ] Search → Add → Analyze → Play flow
-- [ ] Recommendation accuracy
-- [ ] Fallback zincirleri
+- [x] Search → Add → Analyze → Play flow
+- [x] Recommendation accuracy
+- [x] Fallback zincirleri
 
 ### Manual Tests
 - [ ] macOS + Windows binary çalışıyor

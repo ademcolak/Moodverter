@@ -2,6 +2,27 @@
 
 export type ProviderType = 'spotify' | 'youtube' | 'mock';
 
+export type PlaybackEventType =
+  | 'track_started'
+  | 'track_ended'
+  | 'playback_paused'
+  | 'playback_resumed'
+  | 'playback_error';
+
+export interface PlaybackEvent {
+  type: PlaybackEventType;
+  provider: ProviderType;
+  timestamp: number;
+  track?: UnifiedTrack | null;
+  previousTrack?: UnifiedTrack | null;
+  reason?: 'natural' | 'skip' | 'previous' | 'manual' | 'error';
+  progressMs?: number;
+  durationMs?: number;
+  details?: Record<string, unknown>;
+}
+
+export type PlaybackEventListener = (event: PlaybackEvent) => void;
+
 // Standardized audio features (0-1 normalized where applicable)
 export interface AudioFeatures {
   energy: number;          // 0-1
@@ -75,6 +96,7 @@ export interface MusicProvider {
   // State
   getCurrentTrack(): Promise<UnifiedTrack | null>;
   getPlaybackState(): Promise<PlaybackState | null>;
+  onPlaybackEvent(listener: PlaybackEventListener): () => void;
 
   // Audio features
   getAudioFeatures(trackId: string): Promise<AudioFeatures | null>;

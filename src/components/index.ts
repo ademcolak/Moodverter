@@ -1,10 +1,12 @@
 export { MoodInput } from './MoodInput';
 export { NowPlaying } from './NowPlaying';
-export { NextTrack } from './NextTrack';
-export { PlayerControls } from './PlayerControls';
 export { Settings } from './Settings';
-export { MoodDeviationDialog } from './MoodDeviationDialog';
 export { LibrarySync } from './LibrarySync';
 export { LibrarySearch } from './LibrarySearch';
 export { Recommendations } from './Recommendations';
 export { ErrorBoundary } from './ErrorBoundary';
+export { InfoTooltip } from './InfoTooltip';
+export { DiscoverySuggestions } from './DiscoverySuggestions';
+export { KeyboardHelp } from './KeyboardHelp';
+export { QueuePanel } from './QueuePanel';
+export { HistoryPanel } from './HistoryPanel';

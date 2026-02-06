@@ -260,7 +260,7 @@ export function parseVideoTitle(
   uploader?: string | null
 ): { artist: string; title: string } {
   // Remove common suffixes
-  let cleanTitle = title
+  const cleanTitle = title
     .replace(/\(Official\s*(Music\s*)?Video\)/gi, '')
     .replace(/\(Official\s*Audio\)/gi, '')
     .replace(/\(Lyric\s*Video\)/gi, '')

@@ -6,6 +6,7 @@ import type {
   ProviderType,
   PlaybackState,
   UnifiedTrack,
+  PlaybackEvent,
 } from '../types/provider';
 import {
   createProvider,
@@ -36,6 +37,7 @@ export interface UseProviderReturn {
 
   // Playback state (reactive)
   playbackState: PlaybackState | null;
+  lastPlaybackEvent: PlaybackEvent | null;
 
   // Library
   getLibrary: () => Promise<UnifiedTrack[]>;
@@ -79,6 +81,7 @@ export function useProvider(
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [playbackState, setPlaybackState] = useState<PlaybackState | null>(null);
+  const [lastPlaybackEvent, setLastPlaybackEvent] = useState<PlaybackEvent | null>(null);
 
   const isMountedRef = useRef(true);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -172,6 +175,18 @@ export function useProvider(
       }
     };
   }, [provider, isAuthenticated]);
+
+  // Subscribe to provider playback events
+  useEffect(() => {
+    if (!provider) return;
+
+    const unsubscribe = provider.onPlaybackEvent((event) => {
+      if (!isMountedRef.current) return;
+      setLastPlaybackEvent(event);
+    });
+
+    return unsubscribe;
+  }, [provider]);
 
   // Actions
 
@@ -319,6 +334,7 @@ export function useProvider(
     logout,
     switchProvider,
     playbackState,
+    lastPlaybackEvent,
     getLibrary,
     search,
     play,

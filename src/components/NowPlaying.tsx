@@ -8,10 +8,14 @@ interface NowPlayingProps {
   transitionPoint?: number;
   isAnalyzing?: boolean;
   isPlaying?: boolean;
+  sourceLabel?: string;
+  showQueueToggle?: boolean;
+  queueCount?: number;
   onSeek?: (positionMs: number) => void;
   onPlayPause?: () => void;
   onSkipNext?: () => void;
   onSkipPrevious?: () => void;
+  onToggleQueue?: () => void;
 }
 
 export const NowPlaying = memo(function NowPlaying({
@@ -20,10 +24,14 @@ export const NowPlaying = memo(function NowPlaying({
   duration,
   isAnalyzing,
   isPlaying,
+  sourceLabel,
+  showQueueToggle,
+  queueCount = 0,
   onSeek,
   onPlayPause,
   onSkipNext,
   onSkipPrevious,
+  onToggleQueue,
 }: NowPlayingProps) {
   const progressBarRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -151,6 +159,12 @@ export const NowPlaying = memo(function NowPlaying({
           >
             {track.artist}
           </p>
+          {sourceLabel && (
+            <div className="mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 bg-white/5 border border-white/10 text-[10px] text-[var(--color-text-secondary)]">
+              <span>🔍</span>
+              <span>{sourceLabel}</span>
+            </div>
+          )}
         </div>
 
         {/* Playback controls */}
@@ -178,6 +192,22 @@ export const NowPlaying = memo(function NowPlaying({
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
             </button>
+            {showQueueToggle && onToggleQueue && (
+              <button
+                onClick={onToggleQueue}
+                className="relative p-1.5 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/5 transition-colors"
+                title="Sirayi goster"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+                {queueCount > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 bg-[var(--color-primary)] text-[10px] leading-4 text-white text-center rounded-full">
+                    {queueCount}
+                  </span>
+                )}
+              </button>
+            )}
           </div>
         )}
       </div>

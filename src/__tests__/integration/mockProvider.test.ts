@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { MockProvider } from '../../services/providers/mock';
 import { parseMoodQuick, moodParamsToLegacy } from '../../services/mood/engine';
 import { calculateMoodScore } from '../../services/navigator/scorer';
-import { UnifiedTrack } from '../../types/provider';
+import { unifiedToLegacyTrack } from '../../services/providers';
 
 describe('Integration: Mock Provider & Mood Engine', () => {
   let provider: MockProvider;
@@ -28,12 +28,7 @@ describe('Integration: Mock Provider & Mood Engine', () => {
     
     // 4. Score tracks against mood
     const scoredTracks = library.map(track => {
-        // MockProvider tracks have audio features
-        if (!track.audioFeatures) return { track, score: 0 };
-        
-        // Cast audioFeatures to any because it matches the shape required for scoring (energy, valence, etc.)
-        // even though it's not a full Track object
-        const score = calculateMoodScore(track.audioFeatures as any, moodParams);
+        const score = calculateMoodScore(unifiedToLegacyTrack(track), moodParams);
         return { track, score };
     });
     
@@ -44,7 +39,7 @@ describe('Integration: Mock Provider & Mood Engine', () => {
     const bestMatch = scoredTracks[0];
     expect(bestMatch.score).toBeGreaterThan(0.5); // Should find a decent match
     
-    console.log(`Best match for '${userInput}': ${bestMatch.track.name} (Score: ${bestMatch.score})`);
+    expect(bestMatch.track.name).toBeTruthy();
   });
 
   it('should switch tracks in Mock Provider', async () => {

@@ -61,10 +61,10 @@ export const DISCOVERY_MODE_INFO: Record<DiscoveryMode, {
 ```
 
 **Yapılacaklar:**
-- [ ] `src/types/discovery.ts` oluştur
-- [ ] Discovery mode enum ve interface tanımla
-- [ ] Mode açıklamaları için DISCOVERY_MODE_INFO objesi
-- [ ] Default settings: `{ mode: 'suggest', minLibraryThreshold: 5 }`
+- [x] `src/types/discovery.ts` oluştur
+- [x] Discovery mode enum ve interface tanımla
+- [x] Mode açıklamaları için DISCOVERY_MODE_INFO objesi
+- [x] Default settings: `{ mode: 'suggest', minLibraryThreshold: 5 }`
 
 ---
 
@@ -88,9 +88,9 @@ const [settings, setSettings] = useState({
 ```
 
 **Yapılacaklar:**
-- [ ] App.tsx'de settings state'ine discovery ekle
-- [ ] localStorage'dan discovery settings oku/yaz
-- [ ] Settings değiştiğinde persist et
+- [x] App.tsx'de settings state'ine discovery ekle
+- [x] localStorage'dan discovery settings oku/yaz
+- [x] Settings değiştiğinde persist et
 
 ---
 
@@ -144,11 +144,11 @@ const [settings, setSettings] = useState({
 ```
 
 **Yapılacaklar:**
-- [ ] Settings.tsx'e 'discovery' tab ekle
-- [ ] Radio button group ile mode seçimi
-- [ ] Number input ile threshold ayarı
-- [ ] Toggle switch'ler ile ek ayarlar
-- [ ] Her ayarın yanında [i] info butonu
+- [x] Settings.tsx'e 'discovery' tab ekle
+- [x] Radio button group ile mode seçimi
+- [x] Number input ile threshold ayarı
+- [x] Toggle switch'ler ile ek ayarlar
+- [x] Her ayarın yanında [i] info butonu
 
 ---
 
@@ -194,11 +194,11 @@ export const InfoTooltip = ({ title, description, position = 'top' }: InfoToolti
 ```
 
 **Yapılacaklar:**
-- [ ] `src/components/InfoTooltip.tsx` oluştur
-- [ ] Click-to-open/close mekanizması
-- [ ] Dışarı tıklayınca kapansın
-- [ ] Position prop ile yön ayarı
-- [ ] components/index.ts'e export ekle
+- [x] `src/components/InfoTooltip.tsx` oluştur
+- [x] Click-to-open/close mekanizması
+- [x] Dışarı tıklayınca kapansın
+- [x] Position prop ile yön ayarı
+- [x] components/index.ts'e export ekle
 
 ---
 
@@ -297,11 +297,11 @@ function buildMoodSearchQuery(mood: MoodParameters, current: UnifiedTrack | null
 ```
 
 **Yapılacaklar:**
-- [ ] `src/services/discovery/index.ts` oluştur
-- [ ] `discoverNextTrack()` ana fonksiyonu
-- [ ] `buildMoodSearchQuery()` - mood'dan arama query'si
-- [ ] `selectBestYouTubeMatch()` - sonuçlar arasından seç
-- [ ] Kütüphane threshold kontrolü
+- [x] `src/services/discovery/index.ts` oluştur
+- [x] `discoverNextTrack()` ana fonksiyonu
+- [x] `buildMoodSearchQuery()` - mood'dan arama query'si
+- [x] `selectBestYouTubeMatch()` - sonuçlar arasından seç
+- [x] Kütüphane threshold kontrolü
 
 ---
 
@@ -341,12 +341,12 @@ interface DiscoverySuggestionsProps {
 ```
 
 **Yapılacaklar:**
-- [ ] `src/components/DiscoverySuggestions.tsx` oluştur
-- [ ] Önerileri liste halinde göster
-- [ ] Her öneride: çal, kütüphaneye ekle butonları
-- [ ] Dismiss butonu ile kapat
-- [ ] Loading state
-- [ ] "Daha fazla" butonu ile pagination
+- [x] `src/components/DiscoverySuggestions.tsx` oluştur
+- [x] Önerileri liste halinde göster
+- [x] Her öneride: çal, kütüphaneye ekle butonları
+- [x] Dismiss butonu ile kapat
+- [x] Loading state
+- [x] "Daha fazla" butonu ile pagination
 
 ---
 
@@ -387,10 +387,10 @@ if (event.type === 'natural' && settings.discovery.mode !== 'library_only') {
 ```
 
 **Yapılacaklar:**
-- [ ] App.tsx'de discovery entegrasyonu
-- [ ] Auto-discover modunda otomatik çalma
-- [ ] Suggest modunda panel gösterme
-- [ ] autoAddToLibrary desteği
+- [x] App.tsx'de discovery entegrasyonu
+- [x] Auto-discover modunda otomatik çalma
+- [x] Suggest modunda panel gösterme
+- [x] autoAddToLibrary desteği
 
 ---
 
@@ -410,9 +410,9 @@ if (event.type === 'natural' && settings.discovery.mode !== 'library_only') {
 ```
 
 **Yapılacaklar:**
-- [ ] NowPlaying'e source badge ekle
-- [ ] "Kütüphanenden" / "YouTube keşif" göster
-- [ ] Küçük ve unobtrusive tasarım
+- [x] NowPlaying'e source badge ekle
+- [x] "Kütüphanenden" / "YouTube keşif" göster
+- [x] Küçük ve unobtrusive tasarım
 
 ---
 
@@ -460,10 +460,10 @@ export function useKeyboardShortcuts(shortcuts: Partial<KeyboardShortcuts>) {
 ```
 
 **Yapılacaklar:**
-- [ ] `src/hooks/useKeyboardShortcuts.ts` oluştur
-- [ ] Input alanlarında devre dışı kalmalı
-- [ ] preventDefault ile browser default'larını engelle
-- [ ] hooks/index.ts'e export ekle
+- [x] `src/hooks/useKeyboardShortcuts.ts` oluştur
+- [x] Input alanlarında devre dışı kalmalı
+- [x] preventDefault ile browser default'larını engelle
+- [x] hooks/index.ts'e export ekle
 
 ---
 
@@ -482,9 +482,9 @@ useKeyboardShortcuts({
 ```
 
 **Yapılacaklar:**
-- [ ] App.tsx'de useKeyboardShortcuts kullan
-- [ ] Temel kısayolları bağla
-- [ ] MoodInput'a className ekle (focus için)
+- [x] App.tsx'de useKeyboardShortcuts kullan
+- [x] Temel kısayolları bağla
+- [x] MoodInput'a className ekle (focus için)
 
 ---
 
@@ -508,10 +508,10 @@ Tıklanınca:
 ```
 
 **Yapılacaklar:**
-- [ ] `src/components/KeyboardHelp.tsx` oluştur
-- [ ] Sağ alt köşede "?" butonu
-- [ ] Hover veya click ile panel aç
-- [ ] Kısayol listesi
+- [x] `src/components/KeyboardHelp.tsx` oluştur
+- [x] Sağ alt köşede "?" butonu
+- [x] Hover veya click ile panel aç
+- [x] Kısayol listesi
 
 ---
 
@@ -537,9 +537,9 @@ export interface QueueState {
 ```
 
 **Yapılacaklar:**
-- [ ] `src/types/queue.ts` oluştur
-- [ ] QueueItem ve QueueState interface'leri
-- [ ] App.tsx'de queue state ekle
+- [x] `src/types/queue.ts` oluştur
+- [x] QueueItem ve QueueState interface'leri
+- [x] App.tsx'de queue state ekle
 
 ---
 
@@ -567,10 +567,10 @@ export function createQueueManager(initialState?: QueueState) {
 ```
 
 **Yapılacaklar:**
-- [ ] `src/services/queue/index.ts` oluştur
-- [ ] Queue yönetim fonksiyonları
-- [ ] Reorder (sürükle-bırak için)
-- [ ] History tracking
+- [x] `src/services/queue/index.ts` oluştur
+- [x] Queue yönetim fonksiyonları
+- [x] Reorder (sürükle-bırak için)
+- [x] History tracking
 
 ---
 
@@ -595,12 +595,12 @@ NowPlaying'in altında veya yanında açılır panel
 ```
 
 **Yapılacaklar:**
-- [ ] `src/components/QueuePanel.tsx` oluştur
-- [ ] Sıradaki şarkıları listele
-- [ ] Sürükle-bırak ile sıralama (react-beautiful-dnd veya native)
-- [ ] Şarkı silme butonu
-- [ ] Temizle butonu
-- [ ] Collapse/expand özelliği
+- [x] `src/components/QueuePanel.tsx` oluştur
+- [x] Sıradaki şarkıları listele
+- [x] Sürükle-bırak ile sıralama (react-beautiful-dnd veya native)
+- [x] Şarkı silme butonu
+- [x] Temizle butonu
+- [x] Collapse/expand özelliği
 
 ---
 
@@ -627,9 +627,9 @@ NowPlaying'in altında veya yanında açılır panel
 ```
 
 **Yapılacaklar:**
-- [ ] NowPlaying'e queue toggle butonu ekle
-- [ ] Badge ile sıradaki şarkı sayısı
-- [ ] Panel açma/kapama state'i
+- [x] NowPlaying'e queue toggle butonu ekle
+- [x] Badge ile sıradaki şarkı sayısı
+- [x] Panel açma/kapama state'i
 
 ---
 
@@ -650,9 +650,9 @@ export interface HistoryEntry {
 ```
 
 **Yapılacaklar:**
-- [ ] `src/types/history.ts` oluştur
-- [ ] HistoryEntry interface
-- [ ] localStorage persistence
+- [x] `src/types/history.ts` oluştur
+- [x] HistoryEntry interface
+- [x] localStorage persistence
 
 ---
 
@@ -675,10 +675,10 @@ export function getHistoryStats(): {
 ```
 
 **Yapılacaklar:**
-- [ ] `src/services/history/index.ts` oluştur
-- [ ] History CRUD fonksiyonları
-- [ ] İstatistik hesaplama
-- [ ] localStorage persist/load
+- [x] `src/services/history/index.ts` oluştur
+- [x] History CRUD fonksiyonları
+- [x] İstatistik hesaplama
+- [x] localStorage persist/load
 
 ---
 
@@ -702,10 +702,10 @@ Queue panelinin yanında tab olarak veya ayrı panel
 ```
 
 **Yapılacaklar:**
-- [ ] `src/components/HistoryPanel.tsx` oluştur
-- [ ] Tarihe göre grupla
-- [ ] Tekrar çal butonu
-- [ ] Geçmişi temizle
+- [x] `src/components/HistoryPanel.tsx` oluştur
+- [x] Tarihe göre grupla
+- [x] Tekrar çal butonu
+- [x] Geçmişi temizle
 
 ---
 
@@ -725,9 +725,9 @@ function calculatePosition(
 ```
 
 **Yapılacaklar:**
-- [ ] InfoTooltip'e akıllı pozisyonlama ekle
-- [ ] Viewport boundary detection
-- [ ] Auto-flip (yer yoksa ters tarafa)
+- [x] InfoTooltip'e akıllı pozisyonlama ekle
+- [x] Viewport boundary detection
+- [x] Auto-flip (yer yoksa ters tarafa)
 
 ---
 
@@ -744,9 +744,9 @@ interface TooltipContent {
 ```
 
 **Yapılacaklar:**
-- [ ] Variant bazlı stil (info=mavi, warning=sarı, tip=yeşil)
-- [ ] Opsiyonel "Daha fazla bilgi" linki
-- [ ] Animasyonlu açılış
+- [x] Variant bazlı stil (info=mavi, warning=sarı, tip=yeşil)
+- [x] Opsiyonel "Daha fazla bilgi" linki
+- [x] Animasyonlu açılış
 
 ---
 

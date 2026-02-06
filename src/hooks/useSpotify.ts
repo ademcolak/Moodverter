@@ -6,6 +6,8 @@ import type { SpotifyUser, SpotifyTokens } from '../types/spotify';
 import { useProvider } from './useProvider';
 import { isMockMode, MOCK_USER } from '../services/mock';
 
+const STATIC_EXPIRES_AT = 4_102_444_800_000; // 2100-01-01T00:00:00.000Z
+
 export interface UseSpotifyReturn {
   isAuthenticated: boolean;
   isLoading: boolean;
@@ -59,7 +61,7 @@ export const useSpotify = (): UseSpotifyReturn => {
         access_token: 'mock-token',
         refresh_token: 'mock-refresh',
         expires_in: 3600,
-        expires_at: Date.now() + 3600000,
+        expires_at: STATIC_EXPIRES_AT,
         token_type: 'Bearer',
         scope: 'mock',
       };
@@ -71,7 +73,7 @@ export const useSpotify = (): UseSpotifyReturn => {
       access_token: 'managed-by-provider',
       refresh_token: 'managed-by-provider',
       expires_in: 3600,
-      expires_at: Date.now() + 3600000,
+      expires_at: STATIC_EXPIRES_AT,
       token_type: 'Bearer',
       scope: 'user-read-private user-library-read streaming',
     };
