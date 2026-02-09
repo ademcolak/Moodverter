@@ -18,7 +18,9 @@ import {
   getVideoInfo,
   removeFromPlaylist,
   type PlaylistTrack,
+  updatePlaylistTrack,
 } from '../youtube/search';
+import { analyzeTrackWithHeuristicV1 } from '../transition';
 
 export class YouTubeProvider implements MusicProvider {
   readonly name = 'youtube' as const;
@@ -121,6 +123,17 @@ export class YouTubeProvider implements MusicProvider {
     };
   }
 
+  private scheduleTransitionAnalysis(track: UnifiedTrack): void {
+    void analyzeTrackWithHeuristicV1({
+      id: track.id,
+      durationMs: track.durationMs,
+      name: track.name,
+      artist: track.artist,
+    }).catch((error) => {
+      console.error('Transition analysis failed:', error);
+    });
+  }
+
   isAuthenticated(): boolean {
     return true;
   }
@@ -188,6 +201,7 @@ export class YouTubeProvider implements MusicProvider {
         thumbnail: info.thumbnail,
       });
       this.reloadLibrary();
+      this.scheduleTransitionAnalysis(this.currentTrack);
     }
 
     addToRecentlyPlayed({
@@ -296,6 +310,7 @@ export class YouTubeProvider implements MusicProvider {
       duration: track.durationMs,
     });
     this.reloadLibrary();
+    this.scheduleTransitionAnalysis(track);
   }
 
   removeTrackFromLibrary(trackId: string): void {
@@ -307,20 +322,43 @@ export class YouTubeProvider implements MusicProvider {
     const videoId = extractVideoId(url);
     if (!videoId) return null;
 
-    const info = await getVideoInfo(videoId);
-    if (!info) return null;
-
     const track: UnifiedTrack = {
       id: videoId,
       provider: 'youtube',
-      name: info.title,
-      artist: info.artist,
-      albumArt: info.thumbnail,
+      name: `YouTube ${videoId}`,
+      artist: 'Unknown Artist',
+      albumArt: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
       durationMs: 0,
       playCount: 0,
     };
 
     this.addTrackToLibrary(track);
+
+    // Enrich metadata asynchronously so URL add does not block UI responsiveness.
+    void getVideoInfo(videoId)
+      .then((info) => {
+        if (!info) return;
+
+        updatePlaylistTrack(videoId, {
+          title: info.title,
+          artist: info.artist,
+          thumbnail: info.thumbnail,
+        });
+
+        this.reloadLibrary();
+        if (this.currentTrack?.id === videoId) {
+          this.currentTrack = {
+            ...this.currentTrack,
+            name: info.title,
+            artist: info.artist,
+            albumArt: info.thumbnail,
+          };
+        }
+      })
+      .catch((error) => {
+        console.warn('Video metadata enrich failed:', error);
+      });
+
     return track;
   }
 }

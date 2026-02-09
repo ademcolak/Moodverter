@@ -35,12 +35,15 @@ export function useProvider(): UseProviderReturn {
       setIsLoading(true);
       setError(null);
 
+      const youtubeProvider = getYouTubeProvider();
+      if (isMountedRef.current) {
+        setProvider(youtubeProvider);
+      }
+
       try {
-        const youtubeProvider = getYouTubeProvider();
         await youtubeProvider.authenticate();
         if (!isMountedRef.current) return;
 
-        setProvider(youtubeProvider);
         await refreshPlaybackState(youtubeProvider);
       } catch (err) {
         if (!isMountedRef.current) return;

@@ -5,7 +5,6 @@ import {
   searchVideos,
   type YouTubeSearchResult,
 } from '../services/youtube/search';
-import { isYtDlpAvailable } from '../services/youtube/ytdlp';
 
 interface LibrarySearchProps {
   onTrackSelect?: (track: YouTubeSearchResult) => void;
@@ -19,12 +18,11 @@ export const LibrarySearch = ({ onTrackSelect, onAddToLibrary }: LibrarySearchPr
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const [ytdlpAvailable, setYtdlpAvailable] = useState<boolean | null>(null);
 
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeSearchRequestRef = useRef(0);
 
   useEffect(() => {
-    isYtDlpAvailable().then(setYtdlpAvailable);
     setSuggestions(getSearchSuggestions(5));
   }, []);
 
@@ -36,20 +34,25 @@ export const LibrarySearch = ({ onTrackSelect, onAddToLibrary }: LibrarySearchPr
       return;
     }
 
+    const requestId = ++activeSearchRequestRef.current;
     setLoading(true);
     setError(null);
     try {
-      const searchResults = await searchVideos(normalized, 10);
+      const searchResults = await searchVideos(normalized, 6);
+      if (requestId !== activeSearchRequestRef.current) return;
       setResults(searchResults);
       if (searchResults.length === 0) {
         setError('Sonuc bulunamadi.');
       }
     } catch (err) {
+      if (requestId !== activeSearchRequestRef.current) return;
       console.error('Search failed:', err);
       setResults([]);
       setError('Arama basarisiz oldu.');
     } finally {
-      setLoading(false);
+      if (requestId === activeSearchRequestRef.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -63,9 +66,15 @@ export const LibrarySearch = ({ onTrackSelect, onAddToLibrary }: LibrarySearchPr
       return;
     }
 
+    if (value.trim().length < 3) {
+      setResults([]);
+      setError(null);
+      return;
+    }
+
     searchTimeoutRef.current = setTimeout(() => {
       void performSearch(value);
-    }, 300);
+    }, 450);
   };
 
   const handleSubmit = (event: React.FormEvent) => {
@@ -101,8 +110,7 @@ export const LibrarySearch = ({ onTrackSelect, onAddToLibrary }: LibrarySearchPr
           onChange={(event) => handleInputChange(event.target.value)}
           onFocus={() => setShowSuggestions(true)}
           onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
-          placeholder={ytdlpAvailable === false ? 'yt-dlp bulunamadi' : 'YouTube sarki ara...'}
-          disabled={ytdlpAvailable === false}
+          placeholder="YouTube sarki ara..."
           className="w-full px-3 py-2 bg-white/5 border border-white/10 text-sm text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] focus:outline-none focus:border-[var(--color-primary)] disabled:opacity-60"
         />
 

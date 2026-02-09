@@ -24,7 +24,7 @@ Deliver a stable and simple YouTube-first flow:
 - [x] Remove unused legacy feature files from src.
 - [x] Remove audio analysis pipeline and keep playback-only flow.
 - [x] Remove unused scripts/dependencies from the clean-start branch.
-- [ ] Polish UX details for add/search/library sections.
+- [x] Polish UX details for add/search/library sections.
 - [ ] Add focused smoke tests for YouTube core path.
 
 ## Acceptance

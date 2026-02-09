@@ -1,4 +1,4 @@
-import { isYtDlpAvailable, searchYouTube, type SearchResult as YtDlpSearchResult } from './ytdlp';
+import { searchYouTube, type SearchResult as YtDlpSearchResult } from './ytdlp';
 import type { UnifiedTrack } from '../../types/provider';
 
 export interface YouTubeSearchResult {
@@ -15,6 +15,14 @@ const RECENT_KEY = 'moodverter_youtube_recent';
 const SEARCH_HISTORY_KEY = 'moodverter_youtube_search_history';
 const MAX_RECENT = 20;
 const MAX_SEARCH_HISTORY = 10;
+const SEARCH_CACHE_TTL_MS = 60_000;
+
+interface SearchCacheEntry {
+  savedAt: number;
+  results: YouTubeSearchResult[];
+}
+
+const searchCache = new Map<string, SearchCacheEntry>();
 
 export interface PlaylistTrack extends YouTubeSearchResult {
   addedAt: number;
@@ -65,6 +73,27 @@ export function addToPlaylist(track: YouTubeSearchResult & Partial<PlaylistTrack
   localStorage.setItem(PLAYLIST_KEY, JSON.stringify(playlist));
 }
 
+export function updatePlaylistTrack(
+  videoId: string,
+  patch: Partial<Pick<PlaylistTrack, 'title' | 'artist' | 'thumbnail' | 'duration'>>
+): void {
+  const playlist = getPlaylist();
+  let updated = false;
+
+  const nextPlaylist = playlist.map((item) => {
+    if (item.videoId !== videoId) return item;
+    updated = true;
+    return {
+      ...item,
+      ...patch,
+    };
+  });
+
+  if (updated) {
+    localStorage.setItem(PLAYLIST_KEY, JSON.stringify(nextPlaylist));
+  }
+}
+
 export function removeFromPlaylist(videoId: string): void {
   const playlist = getPlaylist();
   const filtered = playlist.filter((item) => item.videoId !== videoId);
@@ -112,16 +141,47 @@ export function getSearchSuggestions(limit = 5): string[] {
   }
 }
 
-export async function searchVideos(query: string, limit = 10): Promise<YouTubeSearchResult[]> {
-  if (!query.trim()) return [];
+export function clearYouTubeLocalData(): void {
+  localStorage.removeItem(PLAYLIST_KEY);
+  localStorage.removeItem(RECENT_KEY);
+  localStorage.removeItem(SEARCH_HISTORY_KEY);
 
-  if (!(await isYtDlpAvailable())) {
-    return [];
+  // Legacy cleanup from previous iterations.
+  const legacyKeys: string[] = [];
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const key = localStorage.key(i);
+    if (!key) continue;
+    if (
+      key.startsWith('moodverter_') &&
+      key !== 'moodverter_data_reset_20260209'
+    ) {
+      legacyKeys.push(key);
+    }
+  }
+  legacyKeys.forEach((key) => localStorage.removeItem(key));
+
+  searchCache.clear();
+}
+
+export async function searchVideos(query: string, limit = 10): Promise<YouTubeSearchResult[]> {
+  const normalized = query.trim();
+  if (!normalized) return [];
+  if (normalized.length < 3) return [];
+
+  const cacheKey = `${normalized.toLowerCase()}::${limit}`;
+  const cached = searchCache.get(cacheKey);
+  if (cached && Date.now() - cached.savedAt <= SEARCH_CACHE_TTL_MS) {
+    return cached.results;
   }
 
   try {
-    const results = await searchYouTube(query, limit);
-    return results.map(ytdlpResultToSearchResult);
+    const results = await searchYouTube(normalized, limit);
+    const mapped = results.map(ytdlpResultToSearchResult);
+    searchCache.set(cacheKey, {
+      savedAt: Date.now(),
+      results: mapped,
+    });
+    return mapped;
   } catch (error) {
     console.warn('yt-dlp search failed:', error);
     return [];
