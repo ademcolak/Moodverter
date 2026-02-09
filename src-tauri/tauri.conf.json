@@ -28,7 +28,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' https://www.youtube.com; img-src 'self' https://i.scdn.co https://i.ytimg.com https://img.youtube.com data:; connect-src 'self' https://api.spotify.com https://accounts.spotify.com https://api.openai.com https://www.youtube.com https://noembed.com http://localhost:11434; style-src 'self' 'unsafe-inline'; frame-src https://www.youtube.com"
+      "csp": "default-src 'self'; script-src 'self' https://www.youtube.com; img-src 'self' https://i.ytimg.com https://img.youtube.com data:; connect-src 'self' https://www.youtube.com; style-src 'self' 'unsafe-inline'; frame-src https://www.youtube.com"
     }
   },
   "bundle": {
