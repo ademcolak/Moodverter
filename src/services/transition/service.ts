@@ -10,6 +10,7 @@ import type {
   TransitionNode,
 } from './types';
 import { extractTransitionNodesV1 } from './analyzer';
+import { computeHitAtK } from './metrics';
 import type { UnifiedTrack } from '../../types/provider';
 
 const ANALYSIS_VERSION = 2;
@@ -487,14 +488,36 @@ export async function runBaselineEvaluation(
   const seedTrackIds = (input.seedTrackIds ?? readyTrackIds)
     .map((trackId) => trackId.trim())
     .filter((trackId) => trackId.length > 0 && readyTrackIds.includes(trackId));
+  const relevantTargetsBySeed = Object.fromEntries(
+    Object.entries(input.relevantTargetsBySeed ?? {}).map(([seedTrackId, targetTrackIds]) => [
+      seedTrackId.trim(),
+      Array.from(
+        new Set(
+          (Array.isArray(targetTrackIds) ? targetTrackIds : [])
+            .map((targetTrackId) => targetTrackId.trim())
+            .filter((targetTrackId) => targetTrackId.length > 0)
+        )
+      ),
+    ])
+  );
 
   let seedWithCandidates = 0;
+  let labeledSeedCount = 0;
   let top1Total = 0;
   let topKMeanTotal = 0;
   let goodSeedCount = 0;
+  let hitAt3Total = 0;
+  let hitAt5Total = 0;
 
   for (const trackId of seedTrackIds) {
     const candidates = await findTransitionCandidates({ trackId, limit });
+    const relevantTargetTrackIds = relevantTargetsBySeed[trackId] ?? [];
+    if (relevantTargetTrackIds.length > 0) {
+      labeledSeedCount += 1;
+      hitAt3Total += computeHitAtK(candidates, relevantTargetTrackIds, 3);
+      hitAt5Total += computeHitAtK(candidates, relevantTargetTrackIds, 5);
+    }
+
     if (candidates.length === 0) continue;
 
     seedWithCandidates += 1;
@@ -516,10 +539,13 @@ export async function runBaselineEvaluation(
     runAt: nowIsoString(),
     seedCount: seedTrackIds.length,
     seedWithCandidates,
+    labeledSeedCount,
     coverageRate: safeDiv(seedWithCandidates, seedTrackIds.length),
     meanTop1Score: safeDiv(top1Total, seedWithCandidates),
     meanTopKScore: safeDiv(topKMeanTotal, seedWithCandidates),
     goodCandidateRate: safeDiv(goodSeedCount, seedWithCandidates),
+    hitAt3: labeledSeedCount === 0 ? null : safeDiv(hitAt3Total, labeledSeedCount),
+    hitAt5: labeledSeedCount === 0 ? null : safeDiv(hitAt5Total, labeledSeedCount),
     limit,
     goodThreshold,
   };

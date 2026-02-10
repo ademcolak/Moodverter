@@ -25,7 +25,15 @@ Moodverter, YouTube'dan şarkı bulup çalan ve seçilen şarkıya en iyi uyumlu
 - [x] Seed track secimi ve top transition adaylarini UI'da gosterim
 - [x] Aday satirindan hedef ana direkt cal/seek aksiyonu
 - [x] In-app baseline evaluation runner (coverage/top score)
+- [x] Relevance etiketleme (`Relevant/Unlabel`) + local persistence
+- [x] Baseline metriklerine `Hit@3` / `Hit@5` entegrasyonu
+- [x] `Seed Baseline` ve `Tum Seed Baseline` scope ayrimi
 - [x] Curated seed set ile kalite baseline ölçümü
+
+## Guncel Odak
+
+- Labelled seed sayisini artis (>=10) ve daha guvenilir Hit@K olcumu
+- Dusuk performansli seed'lerde scoring/penalty tuning
 
 ## Hızlı Başlangıç
 
@@ -44,6 +52,7 @@ pnpm dev
 pnpm tauri dev
 pnpm lint
 pnpm build
+pnpm smoke:test
 ```
 
 ## Plan

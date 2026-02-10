@@ -55,16 +55,20 @@ export interface BaselineEvaluationInput {
   seedTrackIds?: string[];
   limit?: number;
   goodThreshold?: number;
+  relevantTargetsBySeed?: Record<string, string[]>;
 }
 
 export interface BaselineEvaluationResult {
   runAt: string;
   seedCount: number;
   seedWithCandidates: number;
+  labeledSeedCount: number;
   coverageRate: number;
   meanTop1Score: number;
   meanTopKScore: number;
   goodCandidateRate: number;
+  hitAt3: number | null;
+  hitAt5: number | null;
   limit: number;
   goodThreshold: number;
 }

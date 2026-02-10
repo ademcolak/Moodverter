@@ -1,6 +1,6 @@
 # Moodverter Genel Plan (YouTube + Perfect Transition)
 
-> Son güncelleme: 9 Şubat 2026
+> Son güncelleme: 10 Şubat 2026
 > Kapsam: YouTube core playback + moment-level transition discovery
 
 ## Özet
@@ -42,7 +42,7 @@ Kabul kriterleri:
 - [x] UI sadeleştirme ve playback akışı.
 - [x] YouTube-only provider path.
 - [x] Legacy dosya/bağımlılık temizliği.
-- [ ] Smoke test senaryolarını kodlaştırma.
+- [x] Smoke test senaryolarını kodlaştırma.
 
 ### Phase 02 - Transition Graph
 - [x] Transition type/model şemaları.
@@ -52,18 +52,26 @@ Kabul kriterleri:
 - [x] Transition adaylarını seed bazlı UI'da görünür kılma.
 - [x] Baseline metric yardımcıları + evaluation checklist.
 - [x] Curated seed set ile ilk baseline sonuçlarını kaydetme.
+- [x] Labeled relevance akışı (`Relevant/Unlabel`) + local persistence.
+- [x] Baseline çıktısına `Hit@3` / `Hit@5` entegrasyonu.
+- [x] Baseline scope ayrımı: `Seed Baseline` ve `Tum Seed Baseline`.
+
+## Durum Özeti (2026-02-10)
+- YouTube core smoke testleri eklendi ve kalite kapıları (`lint`, `tsc`, `build`, `smoke:test`) geçiyor.
+- Transition değerlendirme katmanında relevance label tabanlı metrik akışı aktif.
+- İlk Kaggle parity run dokümana işlendi (küçük örneklem: 5 seed / 3 labelled).
+- Kritik öğrenim: küçük örneklemde metrikler optimistic; karar için daha büyük labelled set gerekiyor.
 
 ## Next
-### 1) Phase 02 implementasyonu
-- Analysis queue
-- Moment extraction
-- Embedding index
-- Top-N transition candidate API
+### 1) Evaluation güvenilirliğini artır
+- Labelled seed sayısını en az 10'a çıkar.
+- Seed başına minimum 2 relevant target etiketi topla.
+- `Seed Baseline` ile düşük performanslı seedleri netleştir.
 
-### 2) İlk kalite metrikleri
-- Hit@K
-- Mean transition score
-- Manuel dinleme checklist sonuçları
+### 2) Scoring tuning (hata çözümü odaklı)
+- En düşük 3 seed için score breakdown analizi yap.
+- `eventMatch` / `artifactPenalty` ağırlıklarını kontrollü ayarla.
+- Her tuning sonrası aynı seed set ile tekrar baseline çalıştır.
 
 ## Later
 ### 1) Geçiş kalitesi iyileştirme

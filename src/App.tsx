@@ -6,18 +6,23 @@ import { clearYouTubeLocalData, searchResultToUnifiedTrack } from './services/yo
 import { getYouTubeProvider } from './services/providers/youtube';
 import { useProvider } from './hooks/useProvider';
 import {
+  addRelevantTarget,
   analyzeTrackWithHeuristicV1,
   clearTransitionData,
   computeMeanTransitionScore,
   findTransitionCandidates,
   getAnalysisState,
+  getTransitionRelevanceMap,
+  removeRelevantTarget,
   type AnalysisState,
   type BaselineEvaluationResult,
+  type TransitionRelevanceMap,
   runBaselineEvaluation,
   type TransitionCandidate,
 } from './services/transition';
 
 const ONE_TIME_DATA_RESET_KEY = 'moodverter_data_reset_20260209';
+type BaselineScope = 'selected' | 'all';
 
 function formatTime(ms: number): string {
   if (!ms || ms < 0) return '0:00';
@@ -30,6 +35,11 @@ function formatTime(ms: number): string {
 function formatPercent(value: number): string {
   if (!Number.isFinite(value)) return '--';
   return `${Math.round(value * 100)}%`;
+}
+
+function formatOptionalPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return 'N/A';
+  return formatPercent(value);
 }
 
 function wait(ms: number): Promise<void> {
@@ -70,6 +80,8 @@ function App() {
   const [showTransitionPanel, setShowTransitionPanel] = useState(false);
   const [isBaselineLoading, setIsBaselineLoading] = useState(false);
   const [baselineResult, setBaselineResult] = useState<BaselineEvaluationResult | null>(null);
+  const [baselineScope, setBaselineScope] = useState<BaselineScope>('selected');
+  const [relevanceMap, setRelevanceMap] = useState<TransitionRelevanceMap>({});
 
   const refreshLibrary = useCallback(async () => {
     try {
@@ -87,6 +99,10 @@ function App() {
   }, [refreshLibrary]);
 
   useEffect(() => {
+    setRelevanceMap(getTransitionRelevanceMap());
+  }, []);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
     if (window.localStorage.getItem(ONE_TIME_DATA_RESET_KEY) === '1') return;
 
@@ -100,6 +116,7 @@ function App() {
     setTransitionCandidates([]);
     setBaselineResult(null);
     setTransitionError(null);
+    setRelevanceMap({});
     void refreshLibrary();
   }, [refreshLibrary]);
 
@@ -157,6 +174,11 @@ function App() {
     if (!showTransitionPanel) return;
     void refreshTransitionCandidates();
   }, [refreshTransitionCandidates, showTransitionPanel]);
+
+  useEffect(() => {
+    if (baselineScope !== 'selected') return;
+    setBaselineResult(null);
+  }, [baselineScope, seedTrackId]);
 
   const handlePlayPause = useCallback(async () => {
     if (playbackState?.isPlaying) {
@@ -304,14 +326,32 @@ function App() {
     () => computeMeanTransitionScore(transitionCandidates),
     [transitionCandidates]
   );
+  const selectedSeedRelevantTargets = useMemo(
+    () => (seedTrackId ? relevanceMap[seedTrackId] ?? [] : []),
+    [relevanceMap, seedTrackId]
+  );
 
-  const handleRunBaseline = useCallback(async () => {
+  const handleRunBaseline = useCallback(async (scope: BaselineScope) => {
+    const seedTrackIds =
+      scope === 'selected'
+        ? (seedTrackId ? [seedTrackId] : [])
+        : sortedLibrary.map((track) => track.id);
+
+    if (seedTrackIds.length === 0) {
+      setUiError(scope === 'selected'
+        ? 'Seed baseline icin once bir seed sec.'
+        : 'Baseline icin once kutuphaneye sarki ekle.');
+      return;
+    }
+
+    setBaselineScope(scope);
     setIsBaselineLoading(true);
     try {
       const result = await runBaselineEvaluation({
-        seedTrackIds: sortedLibrary.map((track) => track.id),
+        seedTrackIds,
         limit: 5,
         goodThreshold: 0.6,
+        relevantTargetsBySeed: relevanceMap,
       });
       setBaselineResult(result);
     } catch (error) {
@@ -320,7 +360,16 @@ function App() {
     } finally {
       setIsBaselineLoading(false);
     }
-  }, [sortedLibrary]);
+  }, [relevanceMap, seedTrackId, sortedLibrary]);
+
+  const handleToggleRelevantTarget = useCallback((seedId: string, targetId: string) => {
+    const existingTargets = relevanceMap[seedId] ?? [];
+    const hasTarget = existingTargets.includes(targetId);
+    const nextMap = hasTarget
+      ? removeRelevantTarget(seedId, targetId)
+      : addRelevantTarget(seedId, targetId);
+    setRelevanceMap(nextMap);
+  }, [relevanceMap]);
 
   const handleResetAllData = useCallback(async () => {
     try {
@@ -457,18 +506,28 @@ function App() {
               <div className="text-[10px] text-[var(--color-text-secondary)]">
                 MeanScore@{transitionCandidates.length}: {formatPercent(meanCandidateScore)}
               </div>
+              <div className="text-[10px] text-[var(--color-text-secondary)]">
+                Labelled Target (Seed): {selectedSeedRelevantTargets.length}
+              </div>
 
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => void handleRunBaseline()}
+                  onClick={() => void handleRunBaseline('selected')}
+                  disabled={isBaselineLoading || !seedTrackId}
+                  className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+                >
+                  {isBaselineLoading && baselineScope === 'selected' ? 'Baseline...' : 'Seed Baseline'}
+                </button>
+                <button
+                  onClick={() => void handleRunBaseline('all')}
                   disabled={isBaselineLoading || sortedLibrary.length === 0}
                   className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
                 >
-                  {isBaselineLoading ? 'Baseline...' : 'Baseline Calistir'}
+                  {isBaselineLoading && baselineScope === 'all' ? 'Baseline...' : 'Tum Seed Baseline'}
                 </button>
                 {baselineResult && (
                   <div className="text-[10px] text-[var(--color-text-secondary)]">
-                    Coverage {formatPercent(baselineResult.coverageRate)} | Good {formatPercent(baselineResult.goodCandidateRate)}
+                    Scope {baselineScope === 'selected' ? 'Seed' : 'Tum'} | Coverage {formatPercent(baselineResult.coverageRate)} | Good {formatPercent(baselineResult.goodCandidateRate)}
                   </div>
                 )}
               </div>
@@ -476,6 +535,11 @@ function App() {
               {baselineResult && (
                 <div className="text-[10px] text-[var(--color-text-secondary)] border border-white/10 bg-white/5 px-2 py-1">
                   Top1 {formatPercent(baselineResult.meanTop1Score)} | Top{baselineResult.limit} {formatPercent(baselineResult.meanTopKScore)} | Seed {baselineResult.seedWithCandidates}/{baselineResult.seedCount}
+                </div>
+              )}
+              {baselineResult && (
+                <div className="text-[10px] text-[var(--color-text-secondary)] border border-white/10 bg-white/5 px-2 py-1">
+                  Hit@3 {formatOptionalPercent(baselineResult.hitAt3)} | Hit@5 {formatOptionalPercent(baselineResult.hitAt5)} | Labelled Seed {baselineResult.labeledSeedCount}
                 </div>
               )}
 
@@ -488,6 +552,9 @@ function App() {
                   {transitionCandidates.map((candidate, index) => {
                     const sourceTrack = libraryTrackMap.get(candidate.sourceTrackId);
                     const targetTrack = libraryTrackMap.get(candidate.targetTrackId);
+                    const candidateIsRelevant = seedTrackId
+                      ? (relevanceMap[seedTrackId] ?? []).includes(candidate.targetTrackId)
+                      : false;
                     const sourceTimeMs = clampTimeToTrackDuration(
                       candidate.sourceTimeMs,
                       sourceTrack?.durationMs
@@ -511,6 +578,17 @@ function App() {
                             title="Bu adayi cal"
                           >
                             Cal
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (!seedTrackId) return;
+                              handleToggleRelevantTarget(seedTrackId, candidate.targetTrackId);
+                            }}
+                            disabled={!seedTrackId}
+                            className="px-2 py-0.5 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+                            title="Bu hedefi seed icin relevant olarak isaretle"
+                          >
+                            {candidateIsRelevant ? 'Unlabel' : 'Relevant'}
                           </button>
                         </div>
                       </div>

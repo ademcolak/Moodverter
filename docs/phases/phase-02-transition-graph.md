@@ -95,6 +95,14 @@ Notes:
 - [x] Add manual listening checklist doc for Phase 02.
 - [x] Add in-app baseline evaluation runner (coverage/top score summary).
 - [x] Record first baseline run results on a curated seed set.
+- [x] Add labeled relevance storage and UI actions (`Relevant` / `Unlabel`).
+- [x] Wire labeled relevance into baseline output (`Hit@3`, `Hit@5`, `labeledSeedCount`).
+- [x] Split baseline run scope (`Seed Baseline` vs `Tum Seed Baseline`) to avoid metric confusion.
+
+## Recent Notes (2026-02-10)
+- Baseline values staying constant while switching seed was caused by global run scope, not a scoring bug.
+- Scope split in UI fixed interpretation: seed-level checks and full-set checks are now explicit.
+- Current bottleneck is data quality (label coverage), not missing evaluation infrastructure.
 
 ## Acceptance
 - Given one seed track, system returns ranked transition candidates.

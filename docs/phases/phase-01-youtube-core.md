@@ -25,7 +25,7 @@ Deliver a stable and simple YouTube-first flow:
 - [x] Remove audio analysis pipeline and keep playback-only flow.
 - [x] Remove unused scripts/dependencies from the clean-start branch.
 - [x] Polish UX details for add/search/library sections.
-- [ ] Add focused smoke tests for YouTube core path.
+- [x] Add focused smoke tests for YouTube core path.
 
 ## Acceptance
 - App starts directly on YouTube core UI.
@@ -33,3 +33,9 @@ Deliver a stable and simple YouTube-first flow:
 - User can search YouTube and play/add results.
 - Basic transport controls and seek bar work.
 - Typecheck, lint and build pass.
+
+## Verification (2026-02-10)
+- `pnpm -s lint`
+- `pnpm -s tsc --noEmit`
+- `pnpm -s build`
+- `pnpm -s smoke:test`
