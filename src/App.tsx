@@ -12,10 +12,12 @@ import {
   computeMeanTransitionScore,
   findTransitionCandidates,
   getAnalysisState,
+  getBaselineRunHistory,
   getTransitionRelevanceMap,
   removeRelevantTarget,
   type AnalysisState,
   type BaselineEvaluationResult,
+  type BaselineRunArtifact,
   type TransitionRelevanceMap,
   runBaselineEvaluation,
   type TransitionCandidate,
@@ -80,6 +82,7 @@ function App() {
   const [showTransitionPanel, setShowTransitionPanel] = useState(false);
   const [isBaselineLoading, setIsBaselineLoading] = useState(false);
   const [baselineResult, setBaselineResult] = useState<BaselineEvaluationResult | null>(null);
+  const [baselineHistory, setBaselineHistory] = useState<BaselineRunArtifact[]>([]);
   const [baselineScope, setBaselineScope] = useState<BaselineScope>('selected');
   const [relevanceMap, setRelevanceMap] = useState<TransitionRelevanceMap>({});
 
@@ -100,6 +103,7 @@ function App() {
 
   useEffect(() => {
     setRelevanceMap(getTransitionRelevanceMap());
+    setBaselineHistory(getBaselineRunHistory(5));
   }, []);
 
   useEffect(() => {
@@ -115,6 +119,7 @@ function App() {
     setSeedTrackId(null);
     setTransitionCandidates([]);
     setBaselineResult(null);
+    setBaselineHistory([]);
     setTransitionError(null);
     setRelevanceMap({});
     void refreshLibrary();
@@ -330,6 +335,23 @@ function App() {
     () => (seedTrackId ? relevanceMap[seedTrackId] ?? [] : []),
     [relevanceMap, seedTrackId]
   );
+  const baselineRegressionNote = useMemo(() => {
+    if (baselineHistory.length < 2) return null;
+    const latest = baselineHistory[0];
+    const previous = baselineHistory[1];
+    const droppedHitAt3 = (
+      latest.hitAt3 !== null
+      && previous.hitAt3 !== null
+      && latest.hitAt3 < previous.hitAt3
+    );
+    const droppedHitAt5 = (
+      latest.hitAt5 !== null
+      && previous.hitAt5 !== null
+      && latest.hitAt5 < previous.hitAt5
+    );
+    if (!droppedHitAt3 && !droppedHitAt5) return null;
+    return `Regression uyarisi: onceki runa gore ${droppedHitAt3 ? 'Hit@3 ' : ''}${droppedHitAt5 ? 'Hit@5' : ''} dustu.`;
+  }, [baselineHistory]);
 
   const handleRunBaseline = useCallback(async (scope: BaselineScope) => {
     const seedTrackIds =
@@ -354,6 +376,7 @@ function App() {
         relevantTargetsBySeed: relevanceMap,
       });
       setBaselineResult(result);
+      setBaselineHistory(getBaselineRunHistory(5));
     } catch (error) {
       console.error('Failed to run baseline evaluation:', error);
       setUiError('Baseline degerlendirmesi basarisiz oldu.');
@@ -384,6 +407,7 @@ function App() {
       setSeedTrackId(null);
       setTransitionCandidates([]);
       setBaselineResult(null);
+      setBaselineHistory([]);
       setTransitionError(null);
       setUiError(null);
       setUrlInput('');
@@ -542,6 +566,16 @@ function App() {
                   Hit@3 {formatOptionalPercent(baselineResult.hitAt3)} | Hit@5 {formatOptionalPercent(baselineResult.hitAt5)} | Labelled Seed {baselineResult.labeledSeedCount}
                 </div>
               )}
+              {baselineHistory.length > 0 && (
+                <div className="text-[10px] text-[var(--color-text-secondary)] border border-white/10 bg-white/5 px-2 py-1">
+                  Son runlar: {baselineHistory.length} | Son Hit@3 {formatOptionalPercent(baselineHistory[0].hitAt3)} | Son Hit@5 {formatOptionalPercent(baselineHistory[0].hitAt5)}
+                </div>
+              )}
+              {baselineRegressionNote && (
+                <div className="text-[10px] text-amber-400 border border-amber-400/30 bg-amber-500/10 px-2 py-1">
+                  {baselineRegressionNote}
+                </div>
+              )}
 
               {isTransitionLoading ? (
                 <div className="text-xs text-[var(--color-text-secondary)]">Transition adaylari hesaplanıyor...</div>
@@ -570,7 +604,7 @@ function App() {
                         </div>
                         <div className="flex items-center justify-between gap-2">
                           <div className="text-[var(--color-text-secondary)] truncate">
-                            Score {formatPercent(candidate.score.finalScore)} | Event {formatPercent(candidate.score.eventMatchScore)}
+                            Score {formatPercent(candidate.score.finalScore)} | Event {formatPercent(candidate.score.eventMatchScore)} | Driver {candidate.diagnostic.primaryDriver}
                           </div>
                           <button
                             onClick={() => void handlePlayTransitionCandidate(candidate)}
@@ -590,6 +624,9 @@ function App() {
                           >
                             {candidateIsRelevant ? 'Unlabel' : 'Relevant'}
                           </button>
+                        </div>
+                        <div className="text-[var(--color-text-secondary)] truncate">
+                          {candidate.diagnostic.summary}
                         </div>
                       </div>
                     );

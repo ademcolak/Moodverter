@@ -111,3 +111,30 @@ const browser_mocks_1 = require("./helpers/browser-mocks");
     map = (0, transition_1.removeRelevantTarget)('seed-track-3', 'target-track-d');
     strict_1.default.equal(map['seed-track-3'], undefined);
 });
+(0, node_test_1.default)('baseline run history persists latest runs', async () => {
+    await (0, transition_1.analyzeTrackWithHeuristicV1)({
+        id: 'seed-track-history',
+        name: 'Seed Track History',
+        artist: 'Seed Artist History',
+        durationMs: 180000,
+    });
+    await (0, transition_1.analyzeTrackWithHeuristicV1)({
+        id: 'target-track-history',
+        name: 'Target Track History',
+        artist: 'Target Artist History',
+        durationMs: 182000,
+    });
+    const first = await (0, transition_1.runBaselineEvaluation)({
+        seedTrackIds: ['seed-track-history'],
+        limit: 5,
+    });
+    const second = await (0, transition_1.runBaselineEvaluation)({
+        seedTrackIds: ['seed-track-history'],
+        limit: 3,
+    });
+    const history = (0, transition_1.getBaselineRunHistory)(5);
+    strict_1.default.equal(history.length, 2);
+    strict_1.default.equal(history[0].runAt, second.runAt);
+    strict_1.default.equal(history[1].runAt, first.runAt);
+    strict_1.default.deepEqual(history[0].seedTrackIds, ['seed-track-history']);
+});

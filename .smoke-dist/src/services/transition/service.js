@@ -10,6 +10,7 @@ exports.getAnalyzedNodes = getAnalyzedNodes;
 exports.analyzeTrackWithHeuristicV1 = analyzeTrackWithHeuristicV1;
 exports.findTransitionCandidates = findTransitionCandidates;
 exports.runBaselineEvaluation = runBaselineEvaluation;
+exports.getBaselineRunHistory = getBaselineRunHistory;
 exports.clearTransitionData = clearTransitionData;
 const analyzer_1 = require("./analyzer");
 const metrics_1 = require("./metrics");
@@ -18,6 +19,7 @@ const STORAGE_KEYS = {
     queue: 'moodverter_transition_analysis_queue',
     states: 'moodverter_transition_analysis_states',
     nodes: 'moodverter_transition_nodes',
+    baselineRuns: 'moodverter_transition_baseline_runs',
 };
 const SCORE_WEIGHTS = {
     eventMatch: 0.35,
@@ -80,6 +82,7 @@ let isHydrated = false;
 let analysisQueue = [];
 let analysisStates = {};
 let nodesByTrack = {};
+let baselineRunHistory = [];
 function normalizeTrackId(trackId) {
     const normalized = trackId.trim();
     if (!normalized) {
@@ -143,6 +146,15 @@ function hydrateFromStorage() {
     analysisQueue = readStorage(STORAGE_KEYS.queue, []);
     analysisStates = readStorage(STORAGE_KEYS.states, {});
     const rawNodesByTrack = readStorage(STORAGE_KEYS.nodes, {});
+    baselineRunHistory = readStorage(STORAGE_KEYS.baselineRuns, [])
+        .filter((run) => typeof run?.runAt === 'string' && Array.isArray(run?.seedTrackIds))
+        .map((run) => ({
+        ...run,
+        seedTrackIds: run.seedTrackIds
+            .map((trackId) => trackId.trim())
+            .filter((trackId) => trackId.length > 0),
+    }))
+        .slice(-100);
     nodesByTrack = Object.fromEntries(Object.entries(rawNodesByTrack).map(([trackId, nodes]) => [
         trackId,
         (Array.isArray(nodes) ? nodes : []).map((node) => sanitizeNode(trackId, node)),
@@ -163,6 +175,7 @@ function persistStorage() {
     writeStorage(STORAGE_KEYS.queue, analysisQueue);
     writeStorage(STORAGE_KEYS.states, analysisStates);
     writeStorage(STORAGE_KEYS.nodes, nodesByTrack);
+    writeStorage(STORAGE_KEYS.baselineRuns, baselineRunHistory);
 }
 function setAnalysisState(trackId, status, errorMessage) {
     const state = {
@@ -239,6 +252,28 @@ function scoreTransition(source, target) {
         loudnessContinuityScore,
         artifactPenalty,
         finalScore,
+    };
+}
+function formatPercentLabel(value) {
+    return `${Math.round(clamp(value, 0, 1) * 100)}%`;
+}
+function pickPrimaryDriver(score) {
+    const positiveDrivers = [
+        { key: 'event', value: SCORE_WEIGHTS.eventMatch * score.eventMatchScore },
+        { key: 'embedding', value: SCORE_WEIGHTS.embedding * score.embeddingSimilarity },
+        { key: 'rhythm', value: SCORE_WEIGHTS.rhythm * score.rhythmAlignmentScore },
+        { key: 'loudness', value: SCORE_WEIGHTS.loudness * score.loudnessContinuityScore },
+    ];
+    const topPositive = positiveDrivers.reduce((best, current) => current.value > best.value ? current : best);
+    const weightedPenalty = SCORE_WEIGHTS.artifactPenalty * score.artifactPenalty;
+    if (weightedPenalty > topPositive.value)
+        return 'penalty';
+    return topPositive.key;
+}
+function buildScoreDiagnostic(score) {
+    return {
+        primaryDriver: pickPrimaryDriver(score),
+        summary: `Event ${formatPercentLabel(score.eventMatchScore)} | Emb ${formatPercentLabel(score.embeddingSimilarity)} | Rhythm ${formatPercentLabel(score.rhythmAlignmentScore)} | Loud ${formatPercentLabel(score.loudnessContinuityScore)} | Penalty ${formatPercentLabel(score.artifactPenalty)}`,
     };
 }
 function sanitizeNode(trackId, node) {
@@ -352,6 +387,7 @@ async function findTransitionCandidates(input) {
                     targetTrackId,
                     targetTimeMs: targetNode.timeMs,
                     score,
+                    diagnostic: buildScoreDiagnostic(score),
                 });
             });
         });
@@ -441,7 +477,7 @@ async function runBaselineEvaluation(input = {}) {
         }
     }
     const safeDiv = (numerator, denominator) => denominator === 0 ? 0 : numerator / denominator;
-    return {
+    const result = {
         runAt: nowIsoString(),
         seedCount: seedTrackIds.length,
         seedWithCandidates,
@@ -455,13 +491,29 @@ async function runBaselineEvaluation(input = {}) {
         limit,
         goodThreshold,
     };
+    baselineRunHistory = [
+        ...baselineRunHistory,
+        {
+            ...result,
+            seedTrackIds,
+        },
+    ].slice(-100);
+    persistStorage();
+    return result;
+}
+function getBaselineRunHistory(limit = 10) {
+    hydrateFromStorage();
+    const boundedLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+    return baselineRunHistory.slice(-boundedLimit).reverse();
 }
 function clearTransitionData() {
     analysisQueue = [];
     analysisStates = {};
     nodesByTrack = {};
+    baselineRunHistory = [];
     isHydrated = true;
     removeStorage(STORAGE_KEYS.queue);
     removeStorage(STORAGE_KEYS.states);
     removeStorage(STORAGE_KEYS.nodes);
+    removeStorage(STORAGE_KEYS.baselineRuns);
 }

@@ -9,7 +9,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "smoke:test": "rm -rf .smoke-dist && tsc -p tsconfig.smoke.json && printf '{\"type\":\"commonjs\"}\\n' > .smoke-dist/package.json && node --test .smoke-dist/tests",
+    "smoke:test": "rm -rf .smoke-dist && tsc -p tsconfig.smoke.json && printf '{\"type\":\"commonjs\"}\\n' > .smoke-dist/package.json && node --test .smoke-dist/tests/*.test.js",
     "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "lint:fix": "eslint src --ext ts,tsx --fix",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",

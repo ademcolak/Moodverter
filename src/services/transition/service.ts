@@ -3,9 +3,12 @@ import type {
   AnalysisStatus,
   BaselineEvaluationInput,
   BaselineEvaluationResult,
+  BaselineRunArtifact,
   FindTransitionCandidatesInput,
   TransitionCandidate,
   TransitionEdgeScore,
+  TransitionScoreDiagnostic,
+  TransitionScoreDriver,
   TransitionEventType,
   TransitionNode,
 } from './types';
@@ -19,6 +22,7 @@ const STORAGE_KEYS = {
   queue: 'moodverter_transition_analysis_queue',
   states: 'moodverter_transition_analysis_states',
   nodes: 'moodverter_transition_nodes',
+  baselineRuns: 'moodverter_transition_baseline_runs',
 } as const;
 
 const SCORE_WEIGHTS = {
@@ -84,6 +88,7 @@ let isHydrated = false;
 let analysisQueue: string[] = [];
 let analysisStates: Record<string, AnalysisState> = {};
 let nodesByTrack: Record<string, TransitionNode[]> = {};
+let baselineRunHistory: BaselineRunArtifact[] = [];
 
 function normalizeTrackId(trackId: string): string {
   const normalized = trackId.trim();
@@ -151,6 +156,16 @@ function hydrateFromStorage(): void {
   analysisQueue = readStorage<string[]>(STORAGE_KEYS.queue, []);
   analysisStates = readStorage<Record<string, AnalysisState>>(STORAGE_KEYS.states, {});
   const rawNodesByTrack = readStorage<Record<string, TransitionNode[]>>(STORAGE_KEYS.nodes, {});
+  baselineRunHistory = readStorage<BaselineRunArtifact[]>(STORAGE_KEYS.baselineRuns, [])
+    .filter((run) => typeof run?.runAt === 'string' && Array.isArray(run?.seedTrackIds))
+    .map((run) => ({
+      ...run,
+      seedTrackIds: run.seedTrackIds
+        .map((trackId) => trackId.trim())
+        .filter((trackId) => trackId.length > 0),
+    }))
+    .slice(-100);
+
   nodesByTrack = Object.fromEntries(
     Object.entries(rawNodesByTrack).map(([trackId, nodes]) => [
       trackId,
@@ -179,6 +194,7 @@ function persistStorage(): void {
   writeStorage(STORAGE_KEYS.queue, analysisQueue);
   writeStorage(STORAGE_KEYS.states, analysisStates);
   writeStorage(STORAGE_KEYS.nodes, nodesByTrack);
+  writeStorage(STORAGE_KEYS.baselineRuns, baselineRunHistory);
 }
 
 function setAnalysisState(
@@ -282,6 +298,33 @@ function scoreTransition(source: TransitionNode, target: TransitionNode): Transi
     loudnessContinuityScore,
     artifactPenalty,
     finalScore,
+  };
+}
+
+function formatPercentLabel(value: number): string {
+  return `${Math.round(clamp(value, 0, 1) * 100)}%`;
+}
+
+function pickPrimaryDriver(score: TransitionEdgeScore): TransitionScoreDriver {
+  const positiveDrivers: Array<{ key: Exclude<TransitionScoreDriver, 'penalty'>; value: number }> = [
+    { key: 'event', value: SCORE_WEIGHTS.eventMatch * score.eventMatchScore },
+    { key: 'embedding', value: SCORE_WEIGHTS.embedding * score.embeddingSimilarity },
+    { key: 'rhythm', value: SCORE_WEIGHTS.rhythm * score.rhythmAlignmentScore },
+    { key: 'loudness', value: SCORE_WEIGHTS.loudness * score.loudnessContinuityScore },
+  ];
+
+  const topPositive = positiveDrivers.reduce((best, current) =>
+    current.value > best.value ? current : best
+  );
+  const weightedPenalty = SCORE_WEIGHTS.artifactPenalty * score.artifactPenalty;
+  if (weightedPenalty > topPositive.value) return 'penalty';
+  return topPositive.key;
+}
+
+function buildScoreDiagnostic(score: TransitionEdgeScore): TransitionScoreDiagnostic {
+  return {
+    primaryDriver: pickPrimaryDriver(score),
+    summary: `Event ${formatPercentLabel(score.eventMatchScore)} | Emb ${formatPercentLabel(score.embeddingSimilarity)} | Rhythm ${formatPercentLabel(score.rhythmAlignmentScore)} | Loud ${formatPercentLabel(score.loudnessContinuityScore)} | Penalty ${formatPercentLabel(score.artifactPenalty)}`,
   };
 }
 
@@ -426,6 +469,7 @@ export async function findTransitionCandidates(
           targetTrackId,
           targetTimeMs: targetNode.timeMs,
           score,
+          diagnostic: buildScoreDiagnostic(score),
         });
       });
     });
@@ -535,7 +579,7 @@ export async function runBaselineEvaluation(
   const safeDiv = (numerator: number, denominator: number): number =>
     denominator === 0 ? 0 : numerator / denominator;
 
-  return {
+  const result: BaselineEvaluationResult = {
     runAt: nowIsoString(),
     seedCount: seedTrackIds.length,
     seedWithCandidates,
@@ -549,15 +593,34 @@ export async function runBaselineEvaluation(
     limit,
     goodThreshold,
   };
+
+  baselineRunHistory = [
+    ...baselineRunHistory,
+    {
+      ...result,
+      seedTrackIds,
+    },
+  ].slice(-100);
+  persistStorage();
+
+  return result;
+}
+
+export function getBaselineRunHistory(limit = 10): BaselineRunArtifact[] {
+  hydrateFromStorage();
+  const boundedLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+  return baselineRunHistory.slice(-boundedLimit).reverse();
 }
 
 export function clearTransitionData(): void {
   analysisQueue = [];
   analysisStates = {};
   nodesByTrack = {};
+  baselineRunHistory = [];
   isHydrated = true;
 
   removeStorage(STORAGE_KEYS.queue);
   removeStorage(STORAGE_KEYS.states);
   removeStorage(STORAGE_KEYS.nodes);
+  removeStorage(STORAGE_KEYS.baselineRuns);
 }

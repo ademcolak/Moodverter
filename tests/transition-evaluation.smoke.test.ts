@@ -7,6 +7,7 @@ import {
   clearTransitionRelevanceMap,
   computeHitAtK,
   findTransitionCandidates,
+  getBaselineRunHistory,
   getTransitionRelevanceMap,
   removeRelevantTarget,
   runBaselineEvaluation,
@@ -94,4 +95,34 @@ test('relevance map helpers add and remove targets without duplicates', () => {
 
   map = removeRelevantTarget('seed-track-3', 'target-track-d');
   assert.equal(map['seed-track-3'], undefined);
+});
+
+test('baseline run history persists latest runs', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-history',
+    name: 'Seed Track History',
+    artist: 'Seed Artist History',
+    durationMs: 180_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-history',
+    name: 'Target Track History',
+    artist: 'Target Artist History',
+    durationMs: 182_000,
+  });
+
+  const first = await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-history'],
+    limit: 5,
+  });
+  const second = await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-history'],
+    limit: 3,
+  });
+
+  const history = getBaselineRunHistory(5);
+  assert.equal(history.length, 2);
+  assert.equal(history[0].runAt, second.runAt);
+  assert.equal(history[1].runAt, first.runAt);
+  assert.deepEqual(history[0].seedTrackIds, ['seed-track-history']);
 });

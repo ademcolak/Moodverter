@@ -1,6 +1,6 @@
 # Moodverter Genel Plan (YouTube + Perfect Transition)
 
-> Son güncelleme: 10 Şubat 2026
+> Son güncelleme: 11 Şubat 2026
 > Kapsam: YouTube core playback + moment-level transition discovery
 
 ## Özet
@@ -56,11 +56,26 @@ Kabul kriterleri:
 - [x] Baseline çıktısına `Hit@3` / `Hit@5` entegrasyonu.
 - [x] Baseline scope ayrımı: `Seed Baseline` ve `Tum Seed Baseline`.
 
+### Phase 03 - Impact-First Uplift (Sure Bagimsiz)
+- [ ] Scoring v1 icin minispec hazirla: formuller, sinir durumlari, pseudocode, test ornekleri.
+- [x] `scoreTransition` icin aciklama/diagnostic cikti modeli ekle (`why this candidate?`).
+- [ ] Dusuk performansli seed'ler icin kalici "Bottom-3 seed" takip akisi tanimla.
+- [ ] Hard-negative odakli rerank adimi ekle (aynı hedef/aynı event tekrarini cezalandir).
+- [ ] Source moment pinleme + A/B dinleme akisi ekle (`A@t1` ve `B@t2` hizli karsilastirma).
+- [x] Baseline run gecmisini yerel olarak sakla (run artifact + once/sonra karsilastirma).
+- [ ] Metrik regresyon kapisi tanimla (Hit@3/Hit@5 dususu oldugunda tuning'i reddet).
+- [ ] Relevance labeling kalitesini artir: seed basina min 2 relevant hedef zorunlulugu.
+- [ ] Transition analiz versiyonlama politikasini netlestir (`ANALYSIS_VERSION` artinca otomatik reanalysis).
+- [ ] YouTube/yt-dlp hata siniflarini tek modelde topla ve UI hata metinlerini standardize et.
+- [x] `smoke:test` scriptini Node surumlerinden bagimsiz calisacak sekilde duzelt.
+- [ ] Rust <-> TypeScript kontratini netlestir (invoke response schema + hata kodu sozlesmesi).
+
 ## Durum Özeti (2026-02-10)
-- YouTube core smoke testleri eklendi ve kalite kapıları (`lint`, `tsc`, `build`, `smoke:test`) geçiyor.
+- YouTube core smoke testleri eklendi; kalite kapilarinda `lint`, `tsc`, `build` geciyor.
 - Transition değerlendirme katmanında relevance label tabanlı metrik akışı aktif.
 - İlk Kaggle parity run dokümana işlendi (küçük örneklem: 5 seed / 3 labelled).
 - Kritik öğrenim: küçük örneklemde metrikler optimistic; karar için daha büyük labelled set gerekiyor.
+- `smoke:test` komutunda ortama bagli yol sorunu gorulebiliyor (Node v25 ile gozlemlendi); backlog'a alindi.
 
 ## Next
 ### 1) Evaluation güvenilirliğini artır
@@ -72,6 +87,11 @@ Kabul kriterleri:
 - En düşük 3 seed için score breakdown analizi yap.
 - `eventMatch` / `artifactPenalty` ağırlıklarını kontrollü ayarla.
 - Her tuning sonrası aynı seed set ile tekrar baseline çalıştır.
+
+### 3) Kalite ve urun etkisi yuksek teknik kaldiraclar
+- Scoring minispec + test fixture setini kodla birebir hizala.
+- Baseline run history + regresyon gate mekanizmasini devreye al.
+- Hata siniflama/mesaj standardini provider ve transition katmanina uygula.
 
 ## Later
 ### 1) Geçiş kalitesi iyileştirme

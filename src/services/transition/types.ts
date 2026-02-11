@@ -43,12 +43,25 @@ export interface FindTransitionCandidatesInput {
   limit?: number;
 }
 
+export type TransitionScoreDriver =
+  | 'event'
+  | 'embedding'
+  | 'rhythm'
+  | 'loudness'
+  | 'penalty';
+
+export interface TransitionScoreDiagnostic {
+  primaryDriver: TransitionScoreDriver;
+  summary: string;
+}
+
 export interface TransitionCandidate {
   sourceTrackId: string;
   sourceTimeMs: number;
   targetTrackId: string;
   targetTimeMs: number;
   score: TransitionEdgeScore;
+  diagnostic: TransitionScoreDiagnostic;
 }
 
 export interface BaselineEvaluationInput {
@@ -71,4 +84,8 @@ export interface BaselineEvaluationResult {
   hitAt5: number | null;
   limit: number;
   goodThreshold: number;
+}
+
+export interface BaselineRunArtifact extends BaselineEvaluationResult {
+  seedTrackIds: string[];
 }
