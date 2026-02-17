@@ -163,7 +163,7 @@ async function searchVideos(query, limit = 10) {
     }
     catch (error) {
         console.warn('yt-dlp search failed:', error);
-        return [];
+        throw new Error((0, ytdlp_1.getYtDlpUserMessage)(error));
     }
 }
 function ytdlpResultToSearchResult(result) {

@@ -7,6 +7,9 @@ import {
   clearTransitionRelevanceMap,
   computeHitAtK,
   findTransitionCandidates,
+  getAnalysisQueue,
+  getAnalysisState,
+  getAnalyzedNodes,
   getBaselineRunHistory,
   getTransitionRelevanceMap,
   removeRelevantTarget,
@@ -86,6 +89,85 @@ test('runBaselineEvaluation returns null Hit@K when no labels are provided', asy
   assert.equal(result.hitAt5, null);
 });
 
+test('findTransitionCandidates respects pinned source moment', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-pin',
+    name: 'Seed Track Pin',
+    artist: 'Seed Artist Pin',
+    durationMs: 180_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-pin-a',
+    name: 'Target Track Pin A',
+    artist: 'Target Artist Pin A',
+    durationMs: 176_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-pin-b',
+    name: 'Target Track Pin B',
+    artist: 'Target Artist Pin B',
+    durationMs: 188_000,
+  });
+
+  const seedNodes = getAnalyzedNodes('seed-track-pin');
+  assert.ok(seedNodes.length > 0);
+
+  const requestedSourceTimeMs = 95_000;
+  const expectedSourceNode = seedNodes.reduce((nearest, current) => {
+    const currentDiff = Math.abs(current.timeMs - requestedSourceTimeMs);
+    const nearestDiff = Math.abs(nearest.timeMs - requestedSourceTimeMs);
+    return currentDiff < nearestDiff ? current : nearest;
+  });
+
+  const pinnedCandidates = await findTransitionCandidates({
+    trackId: 'seed-track-pin',
+    sourceTimeMs: requestedSourceTimeMs,
+    limit: 5,
+  });
+
+  assert.ok(pinnedCandidates.length > 0);
+  const uniqueSourceTimes = new Set(pinnedCandidates.map((candidate) => candidate.sourceTimeMs));
+  assert.equal(uniqueSourceTimes.size, 1);
+  assert.equal(pinnedCandidates[0].sourceTimeMs, expectedSourceNode.timeMs);
+});
+
+test('hydrateFromStorage requeues stale analysis version for automatic reanalysis', () => {
+  const trackId = 'seed-track-stale';
+
+  localStorage.setItem('moodverter_transition_analysis_queue', JSON.stringify([]));
+  localStorage.setItem('moodverter_transition_analysis_states', JSON.stringify({
+    [trackId]: {
+      trackId,
+      status: 'ready',
+      updatedAt: '2026-02-09T00:00:00.000Z',
+      version: 1,
+    },
+  }));
+  localStorage.setItem('moodverter_transition_nodes', JSON.stringify({
+    [trackId]: [{
+      id: `${trackId}:1000`,
+      trackId,
+      timeMs: 1000,
+      eventType: 'drop',
+      eventConfidence: 0.95,
+      embedding: Array.from({ length: 16 }, () => 0.4),
+      bpmLocal: 124,
+      chroma: Array.from({ length: 12 }, () => 0.3),
+      loudnessRms: -10,
+    }],
+  }));
+
+  const state = getAnalysisState(trackId);
+  const queue = getAnalysisQueue();
+  const nodes = getAnalyzedNodes(trackId);
+
+  assert.ok(state);
+  assert.equal(state.status, 'pending');
+  assert.equal(state.version, 2);
+  assert.deepEqual(queue, [trackId]);
+  assert.equal(nodes.length, 0);
+});
+
 test('relevance map helpers add and remove targets without duplicates', () => {
   let map = addRelevantTarget('seed-track-3', 'target-track-d');
   map = addRelevantTarget('seed-track-3', 'target-track-d');
@@ -114,10 +196,12 @@ test('baseline run history persists latest runs', async () => {
   const first = await runBaselineEvaluation({
     seedTrackIds: ['seed-track-history'],
     limit: 5,
+    scopeLabel: 'selected',
   });
   const second = await runBaselineEvaluation({
     seedTrackIds: ['seed-track-history'],
     limit: 3,
+    scopeLabel: 'selected',
   });
 
   const history = getBaselineRunHistory(5);
@@ -125,4 +209,139 @@ test('baseline run history persists latest runs', async () => {
   assert.equal(history[0].runAt, second.runAt);
   assert.equal(history[1].runAt, first.runAt);
   assert.deepEqual(history[0].seedTrackIds, ['seed-track-history']);
+  assert.equal(history[0].scopeLabel, 'selected');
+});
+
+test('baseline evaluation reports bottom seeds and detects Hit@K regression per scope', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-regression',
+    name: 'Seed Track Regression',
+    artist: 'Seed Artist Regression',
+    durationMs: 180_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-regression-a',
+    name: 'Target Track Regression A',
+    artist: 'Target Artist Regression A',
+    durationMs: 182_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-regression-b',
+    name: 'Target Track Regression B',
+    artist: 'Target Artist Regression B',
+    durationMs: 184_000,
+  });
+
+  const candidates = await findTransitionCandidates({
+    trackId: 'seed-track-regression',
+    limit: 5,
+  });
+  assert.ok(candidates.length > 0);
+
+  const firstResult = await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-regression'],
+    limit: 5,
+    scopeLabel: 'all',
+    relevantTargetsBySeed: {
+      'seed-track-regression': [candidates[0].targetTrackId],
+    },
+  });
+  assert.equal(firstResult.regressionDetected, false);
+  assert.equal(firstResult.bottomSeeds.length, 1);
+  assert.equal(firstResult.bottomSeeds[0].trackId, 'seed-track-regression');
+
+  const secondResult = await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-regression'],
+    limit: 5,
+    scopeLabel: 'all',
+    relevantTargetsBySeed: {
+      'seed-track-regression': ['missing-track-id'],
+    },
+  });
+  assert.equal(secondResult.regressionDetected, true);
+  assert.ok(secondResult.regressionSummary?.includes('Hit@3'));
+});
+
+test('regression gate rejects baseline run when enforced and Hit@K drops', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-gate',
+    name: 'Seed Track Gate',
+    artist: 'Seed Artist Gate',
+    durationMs: 180_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-gate-a',
+    name: 'Target Track Gate A',
+    artist: 'Target Artist Gate A',
+    durationMs: 181_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-gate-b',
+    name: 'Target Track Gate B',
+    artist: 'Target Artist Gate B',
+    durationMs: 183_000,
+  });
+
+  const candidates = await findTransitionCandidates({
+    trackId: 'seed-track-gate',
+    limit: 5,
+  });
+  assert.ok(candidates.length > 0);
+
+  await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-gate'],
+    limit: 5,
+    scopeLabel: 'all',
+    relevantTargetsBySeed: {
+      'seed-track-gate': [candidates[0].targetTrackId],
+    },
+  });
+
+  await assert.rejects(
+    runBaselineEvaluation({
+      seedTrackIds: ['seed-track-gate'],
+      limit: 5,
+      scopeLabel: 'all',
+      enforceRegressionGate: true,
+      relevantTargetsBySeed: {
+        'seed-track-gate': ['missing-track-id'],
+      },
+    }),
+    /Regression gate failed/
+  );
+});
+
+test('relevance target gate rejects baseline run when enforced and labels are insufficient', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-label-gate',
+    name: 'Seed Track Label Gate',
+    artist: 'Seed Artist Label Gate',
+    durationMs: 180_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-label-gate-a',
+    name: 'Target Track Label Gate A',
+    artist: 'Target Artist Label Gate A',
+    durationMs: 181_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-label-gate-b',
+    name: 'Target Track Label Gate B',
+    artist: 'Target Artist Label Gate B',
+    durationMs: 182_000,
+  });
+
+  await assert.rejects(
+    runBaselineEvaluation({
+      seedTrackIds: ['seed-track-label-gate'],
+      limit: 5,
+      scopeLabel: 'selected',
+      requiredRelevantTargetsPerSeed: 2,
+      enforceRelevantTargetMinimum: true,
+      relevantTargetsBySeed: {
+        'seed-track-label-gate': ['target-track-label-gate-a'],
+      },
+    }),
+    /Label quality gate failed/
+  );
 });

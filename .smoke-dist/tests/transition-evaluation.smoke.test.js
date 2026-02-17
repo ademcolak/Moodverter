@@ -103,6 +103,76 @@ const browser_mocks_1 = require("./helpers/browser-mocks");
     strict_1.default.equal(result.hitAt3, null);
     strict_1.default.equal(result.hitAt5, null);
 });
+(0, node_test_1.default)('findTransitionCandidates respects pinned source moment', async () => {
+    await (0, transition_1.analyzeTrackWithHeuristicV1)({
+        id: 'seed-track-pin',
+        name: 'Seed Track Pin',
+        artist: 'Seed Artist Pin',
+        durationMs: 180000,
+    });
+    await (0, transition_1.analyzeTrackWithHeuristicV1)({
+        id: 'target-track-pin-a',
+        name: 'Target Track Pin A',
+        artist: 'Target Artist Pin A',
+        durationMs: 176000,
+    });
+    await (0, transition_1.analyzeTrackWithHeuristicV1)({
+        id: 'target-track-pin-b',
+        name: 'Target Track Pin B',
+        artist: 'Target Artist Pin B',
+        durationMs: 188000,
+    });
+    const seedNodes = (0, transition_1.getAnalyzedNodes)('seed-track-pin');
+    strict_1.default.ok(seedNodes.length > 0);
+    const requestedSourceTimeMs = 95000;
+    const expectedSourceNode = seedNodes.reduce((nearest, current) => {
+        const currentDiff = Math.abs(current.timeMs - requestedSourceTimeMs);
+        const nearestDiff = Math.abs(nearest.timeMs - requestedSourceTimeMs);
+        return currentDiff < nearestDiff ? current : nearest;
+    });
+    const pinnedCandidates = await (0, transition_1.findTransitionCandidates)({
+        trackId: 'seed-track-pin',
+        sourceTimeMs: requestedSourceTimeMs,
+        limit: 5,
+    });
+    strict_1.default.ok(pinnedCandidates.length > 0);
+    const uniqueSourceTimes = new Set(pinnedCandidates.map((candidate) => candidate.sourceTimeMs));
+    strict_1.default.equal(uniqueSourceTimes.size, 1);
+    strict_1.default.equal(pinnedCandidates[0].sourceTimeMs, expectedSourceNode.timeMs);
+});
+(0, node_test_1.default)('hydrateFromStorage requeues stale analysis version for automatic reanalysis', () => {
+    const trackId = 'seed-track-stale';
+    localStorage.setItem('moodverter_transition_analysis_queue', JSON.stringify([]));
+    localStorage.setItem('moodverter_transition_analysis_states', JSON.stringify({
+        [trackId]: {
+            trackId,
+            status: 'ready',
+            updatedAt: '2026-02-09T00:00:00.000Z',
+            version: 1,
+        },
+    }));
+    localStorage.setItem('moodverter_transition_nodes', JSON.stringify({
+        [trackId]: [{
+                id: `${trackId}:1000`,
+                trackId,
+                timeMs: 1000,
+                eventType: 'drop',
+                eventConfidence: 0.95,
+                embedding: Array.from({ length: 16 }, () => 0.4),
+                bpmLocal: 124,
+                chroma: Array.from({ length: 12 }, () => 0.3),
+                loudnessRms: -10,
+            }],
+    }));
+    const state = (0, transition_1.getAnalysisState)(trackId);
+    const queue = (0, transition_1.getAnalysisQueue)();
+    const nodes = (0, transition_1.getAnalyzedNodes)(trackId);
+    strict_1.default.ok(state);
+    strict_1.default.equal(state.status, 'pending');
+    strict_1.default.equal(state.version, 2);
+    strict_1.default.deepEqual(queue, [trackId]);
+    strict_1.default.equal(nodes.length, 0);
+});
 (0, node_test_1.default)('relevance map helpers add and remove targets without duplicates', () => {
     let map = (0, transition_1.addRelevantTarget)('seed-track-3', 'target-track-d');
     map = (0, transition_1.addRelevantTarget)('seed-track-3', 'target-track-d');
@@ -127,14 +197,135 @@ const browser_mocks_1 = require("./helpers/browser-mocks");
     const first = await (0, transition_1.runBaselineEvaluation)({
         seedTrackIds: ['seed-track-history'],
         limit: 5,
+        scopeLabel: 'selected',
     });
     const second = await (0, transition_1.runBaselineEvaluation)({
         seedTrackIds: ['seed-track-history'],
         limit: 3,
+        scopeLabel: 'selected',
     });
     const history = (0, transition_1.getBaselineRunHistory)(5);
     strict_1.default.equal(history.length, 2);
     strict_1.default.equal(history[0].runAt, second.runAt);
     strict_1.default.equal(history[1].runAt, first.runAt);
     strict_1.default.deepEqual(history[0].seedTrackIds, ['seed-track-history']);
+    strict_1.default.equal(history[0].scopeLabel, 'selected');
+});
+(0, node_test_1.default)('baseline evaluation reports bottom seeds and detects Hit@K regression per scope', async () => {
+    await (0, transition_1.analyzeTrackWithHeuristicV1)({
+        id: 'seed-track-regression',
+        name: 'Seed Track Regression',
+        artist: 'Seed Artist Regression',
+        durationMs: 180000,
+    });
+    await (0, transition_1.analyzeTrackWithHeuristicV1)({
+        id: 'target-track-regression-a',
+        name: 'Target Track Regression A',
+        artist: 'Target Artist Regression A',
+        durationMs: 182000,
+    });
+    await (0, transition_1.analyzeTrackWithHeuristicV1)({
+        id: 'target-track-regression-b',
+        name: 'Target Track Regression B',
+        artist: 'Target Artist Regression B',
+        durationMs: 184000,
+    });
+    const candidates = await (0, transition_1.findTransitionCandidates)({
+        trackId: 'seed-track-regression',
+        limit: 5,
+    });
+    strict_1.default.ok(candidates.length > 0);
+    const firstResult = await (0, transition_1.runBaselineEvaluation)({
+        seedTrackIds: ['seed-track-regression'],
+        limit: 5,
+        scopeLabel: 'all',
+        relevantTargetsBySeed: {
+            'seed-track-regression': [candidates[0].targetTrackId],
+        },
+    });
+    strict_1.default.equal(firstResult.regressionDetected, false);
+    strict_1.default.equal(firstResult.bottomSeeds.length, 1);
+    strict_1.default.equal(firstResult.bottomSeeds[0].trackId, 'seed-track-regression');
+    const secondResult = await (0, transition_1.runBaselineEvaluation)({
+        seedTrackIds: ['seed-track-regression'],
+        limit: 5,
+        scopeLabel: 'all',
+        relevantTargetsBySeed: {
+            'seed-track-regression': ['missing-track-id'],
+        },
+    });
+    strict_1.default.equal(secondResult.regressionDetected, true);
+    strict_1.default.ok(secondResult.regressionSummary?.includes('Hit@3'));
+});
+(0, node_test_1.default)('regression gate rejects baseline run when enforced and Hit@K drops', async () => {
+    await (0, transition_1.analyzeTrackWithHeuristicV1)({
+        id: 'seed-track-gate',
+        name: 'Seed Track Gate',
+        artist: 'Seed Artist Gate',
+        durationMs: 180000,
+    });
+    await (0, transition_1.analyzeTrackWithHeuristicV1)({
+        id: 'target-track-gate-a',
+        name: 'Target Track Gate A',
+        artist: 'Target Artist Gate A',
+        durationMs: 181000,
+    });
+    await (0, transition_1.analyzeTrackWithHeuristicV1)({
+        id: 'target-track-gate-b',
+        name: 'Target Track Gate B',
+        artist: 'Target Artist Gate B',
+        durationMs: 183000,
+    });
+    const candidates = await (0, transition_1.findTransitionCandidates)({
+        trackId: 'seed-track-gate',
+        limit: 5,
+    });
+    strict_1.default.ok(candidates.length > 0);
+    await (0, transition_1.runBaselineEvaluation)({
+        seedTrackIds: ['seed-track-gate'],
+        limit: 5,
+        scopeLabel: 'all',
+        relevantTargetsBySeed: {
+            'seed-track-gate': [candidates[0].targetTrackId],
+        },
+    });
+    await strict_1.default.rejects((0, transition_1.runBaselineEvaluation)({
+        seedTrackIds: ['seed-track-gate'],
+        limit: 5,
+        scopeLabel: 'all',
+        enforceRegressionGate: true,
+        relevantTargetsBySeed: {
+            'seed-track-gate': ['missing-track-id'],
+        },
+    }), /Regression gate failed/);
+});
+(0, node_test_1.default)('relevance target gate rejects baseline run when enforced and labels are insufficient', async () => {
+    await (0, transition_1.analyzeTrackWithHeuristicV1)({
+        id: 'seed-track-label-gate',
+        name: 'Seed Track Label Gate',
+        artist: 'Seed Artist Label Gate',
+        durationMs: 180000,
+    });
+    await (0, transition_1.analyzeTrackWithHeuristicV1)({
+        id: 'target-track-label-gate-a',
+        name: 'Target Track Label Gate A',
+        artist: 'Target Artist Label Gate A',
+        durationMs: 181000,
+    });
+    await (0, transition_1.analyzeTrackWithHeuristicV1)({
+        id: 'target-track-label-gate-b',
+        name: 'Target Track Label Gate B',
+        artist: 'Target Artist Label Gate B',
+        durationMs: 182000,
+    });
+    await strict_1.default.rejects((0, transition_1.runBaselineEvaluation)({
+        seedTrackIds: ['seed-track-label-gate'],
+        limit: 5,
+        scopeLabel: 'selected',
+        requiredRelevantTargetsPerSeed: 2,
+        enforceRelevantTargetMinimum: true,
+        relevantTargetsBySeed: {
+            'seed-track-label-gate': ['target-track-label-gate-a'],
+        },
+    }), /Label quality gate failed/);
 });

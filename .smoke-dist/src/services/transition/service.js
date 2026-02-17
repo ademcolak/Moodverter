@@ -148,26 +148,77 @@ function hydrateFromStorage() {
     const rawNodesByTrack = readStorage(STORAGE_KEYS.nodes, {});
     baselineRunHistory = readStorage(STORAGE_KEYS.baselineRuns, [])
         .filter((run) => typeof run?.runAt === 'string' && Array.isArray(run?.seedTrackIds))
-        .map((run) => ({
-        ...run,
-        seedTrackIds: run.seedTrackIds
-            .map((trackId) => trackId.trim())
-            .filter((trackId) => trackId.length > 0),
-    }))
+        .map((run) => {
+        const regressionDetected = Boolean(run.regressionDetected);
+        return {
+            ...run,
+            scopeLabel: (run.scopeLabel ?? 'custom'),
+            bottomSeeds: Array.isArray(run.bottomSeeds) ? run.bottomSeeds : [],
+            regressionDetected,
+            regressionSummary: typeof run.regressionSummary === 'string' ? run.regressionSummary : null,
+            regressionGateEnforced: Boolean(run.regressionGateEnforced),
+            regressionGatePassed: typeof run.regressionGatePassed === 'boolean'
+                ? run.regressionGatePassed
+                : !regressionDetected,
+            requiredRelevantTargetsPerSeed: Math.max(1, Math.floor(Number(run.requiredRelevantTargetsPerSeed ?? 2))),
+            relevanceTargetGateEnforced: Boolean(run.relevanceTargetGateEnforced),
+            relevanceTargetGatePassed: typeof run.relevanceTargetGatePassed === 'boolean'
+                ? run.relevanceTargetGatePassed
+                : true,
+            seedsBelowRelevantTargetMinimum: Array.isArray(run.seedsBelowRelevantTargetMinimum)
+                ? run.seedsBelowRelevantTargetMinimum
+                    .map((trackId) => (typeof trackId === 'string' ? trackId.trim() : ''))
+                    .filter((trackId) => trackId.length > 0)
+                : [],
+            relevanceTargetGateSummary: typeof run.relevanceTargetGateSummary === 'string'
+                ? run.relevanceTargetGateSummary
+                : null,
+            seedTrackIds: run.seedTrackIds
+                .map((trackId) => trackId.trim())
+                .filter((trackId) => trackId.length > 0),
+        };
+    })
         .slice(-100);
     nodesByTrack = Object.fromEntries(Object.entries(rawNodesByTrack).map(([trackId, nodes]) => [
         trackId,
         (Array.isArray(nodes) ? nodes : []).map((node) => sanitizeNode(trackId, node)),
     ]));
-    // Migrate any stale analysis status versions.
-    analysisStates = Object.fromEntries(Object.entries(analysisStates).map(([trackId, state]) => [
-        trackId,
-        {
-            ...state,
+    // Requeue stale analyses when analysis version changes.
+    const staleTrackIds = new Set();
+    const nextAnalysisStates = {};
+    Object.entries(analysisStates).forEach(([trackId, state]) => {
+        const normalizedTrackId = trackId.trim();
+        if (!normalizedTrackId)
+            return;
+        const normalizedStatus = state.status === 'ready' || state.status === 'failed' || state.status === 'pending'
+            ? state.status
+            : 'pending';
+        const storedVersion = Number.isFinite(state.version) ? Number(state.version) : 0;
+        if (storedVersion < ANALYSIS_VERSION) {
+            staleTrackIds.add(normalizedTrackId);
+            delete nodesByTrack[normalizedTrackId];
+            nextAnalysisStates[normalizedTrackId] = {
+                trackId: normalizedTrackId,
+                status: 'pending',
+                updatedAt: nowIsoString(),
+                version: ANALYSIS_VERSION,
+            };
+            return;
+        }
+        nextAnalysisStates[normalizedTrackId] = {
+            trackId: normalizedTrackId,
+            status: normalizedStatus,
+            updatedAt: typeof state.updatedAt === 'string' ? state.updatedAt : nowIsoString(),
             version: ANALYSIS_VERSION,
-        },
-    ]));
-    analysisQueue = analysisQueue.filter((trackId) => trackId in nodesByTrack || trackId in analysisStates);
+            ...(typeof state.errorMessage === 'string' ? { errorMessage: state.errorMessage } : {}),
+        };
+    });
+    analysisStates = nextAnalysisStates;
+    const queueSet = new Set(analysisQueue
+        .map((trackId) => trackId.trim())
+        .filter((trackId) => trackId.length > 0 && (trackId in nodesByTrack || trackId in analysisStates)));
+    staleTrackIds.forEach((trackId) => queueSet.add(trackId));
+    analysisQueue = [...queueSet];
     persistStorage();
     isHydrated = true;
 }
@@ -388,6 +439,8 @@ async function findTransitionCandidates(input) {
                     targetTimeMs: targetNode.timeMs,
                     score,
                     diagnostic: buildScoreDiagnostic(score),
+                    sourceEventType: sourceNode.eventType,
+                    targetEventType: targetNode.eventType,
                 });
             });
         });
@@ -396,6 +449,14 @@ async function findTransitionCandidates(input) {
     const reranked = [];
     const includedKeys = new Set();
     const uniqueTargetTrackIds = new Set();
+    const targetUseCount = new Map();
+    const eventPairUseCount = new Map();
+    const driverUseCount = new Map();
+    const getCandidateKey = (candidate) => `${candidate.targetTrackId}:${candidate.targetTimeMs}:${candidate.sourceTimeMs}`;
+    const getEventPairKey = (candidate) => `${candidate.sourceEventType}->${candidate.targetEventType}`;
+    const incrementMap = (counter, key) => {
+        counter.set(key, (counter.get(key) ?? 0) + 1);
+    };
     const includeCandidate = (candidate) => {
         const key = `${candidate.targetTrackId}:${candidate.targetTimeMs}:${candidate.sourceTimeMs}`;
         if (includedKeys.has(key))
@@ -403,6 +464,9 @@ async function findTransitionCandidates(input) {
         reranked.push(candidate);
         includedKeys.add(key);
         uniqueTargetTrackIds.add(candidate.targetTrackId);
+        incrementMap(targetUseCount, candidate.targetTrackId);
+        incrementMap(eventPairUseCount, getEventPairKey(candidate));
+        incrementMap(driverUseCount, candidate.diagnostic.primaryDriver);
         return true;
     };
     // Pass 1: when source time is not pinned, diversify by source transition points first.
@@ -426,18 +490,34 @@ async function findTransitionCandidates(input) {
             return;
         includeCandidate(candidate);
     });
-    // Pass 3: fill remaining slots with next best unique candidates.
-    sorted.forEach((candidate) => {
-        if (reranked.length >= limit)
-            return;
-        includeCandidate(candidate);
-    });
-    return reranked;
+    // Pass 3: hard-negative rerank. Prefer candidates that add diversity in target/event/driver.
+    const remaining = sorted.filter((candidate) => !includedKeys.has(getCandidateKey(candidate)));
+    while (reranked.length < limit && remaining.length > 0) {
+        let bestIndex = 0;
+        let bestAdjustedScore = Number.NEGATIVE_INFINITY;
+        remaining.forEach((candidate, index) => {
+            const targetPenalty = 0.08 * (targetUseCount.get(candidate.targetTrackId) ?? 0);
+            const eventPairPenalty = 0.06 * (eventPairUseCount.get(getEventPairKey(candidate)) ?? 0);
+            const driverPenalty = 0.04 * (driverUseCount.get(candidate.diagnostic.primaryDriver) ?? 0);
+            const adjustedScore = candidate.score.finalScore - targetPenalty - eventPairPenalty - driverPenalty;
+            if (adjustedScore > bestAdjustedScore) {
+                bestAdjustedScore = adjustedScore;
+                bestIndex = index;
+            }
+        });
+        const [bestCandidate] = remaining.splice(bestIndex, 1);
+        includeCandidate(bestCandidate);
+    }
+    return reranked.map(({ sourceEventType: _source, targetEventType: _target, ...candidate }) => candidate);
 }
 async function runBaselineEvaluation(input = {}) {
     hydrateFromStorage();
     const limit = clamp(input.limit ?? 5, 1, 20);
     const goodThreshold = clamp(input.goodThreshold ?? 0.6, 0, 1);
+    const scopeLabel = input.scopeLabel ?? 'custom';
+    const regressionGateEnforced = Boolean(input.enforceRegressionGate);
+    const requiredRelevantTargetsPerSeed = Math.max(1, Math.floor(input.requiredRelevantTargetsPerSeed ?? 2));
+    const relevanceTargetGateEnforced = Boolean(input.enforceRelevantTargetMinimum);
     const readyTrackIds = Object.values(analysisStates)
         .filter((state) => state.status === 'ready')
         .map((state) => state.trackId);
@@ -450,6 +530,7 @@ async function runBaselineEvaluation(input = {}) {
             .map((targetTrackId) => targetTrackId.trim())
             .filter((targetTrackId) => targetTrackId.length > 0))),
     ]));
+    const seedsBelowRelevantTargetMinimum = seedTrackIds.filter((trackId) => (relevantTargetsBySeed[trackId] ?? []).length < requiredRelevantTargetsPerSeed);
     let seedWithCandidates = 0;
     let labeledSeedCount = 0;
     let top1Total = 0;
@@ -457,28 +538,78 @@ async function runBaselineEvaluation(input = {}) {
     let goodSeedCount = 0;
     let hitAt3Total = 0;
     let hitAt5Total = 0;
+    const seedReports = [];
     for (const trackId of seedTrackIds) {
         const candidates = await findTransitionCandidates({ trackId, limit });
         const relevantTargetTrackIds = relevantTargetsBySeed[trackId] ?? [];
+        let seedHitAt3 = null;
+        let seedHitAt5 = null;
         if (relevantTargetTrackIds.length > 0) {
+            seedHitAt3 = (0, metrics_1.computeHitAtK)(candidates, relevantTargetTrackIds, 3);
+            seedHitAt5 = (0, metrics_1.computeHitAtK)(candidates, relevantTargetTrackIds, 5);
             labeledSeedCount += 1;
-            hitAt3Total += (0, metrics_1.computeHitAtK)(candidates, relevantTargetTrackIds, 3);
-            hitAt5Total += (0, metrics_1.computeHitAtK)(candidates, relevantTargetTrackIds, 5);
+            hitAt3Total += seedHitAt3;
+            hitAt5Total += seedHitAt5;
         }
-        if (candidates.length === 0)
+        if (candidates.length === 0) {
+            seedReports.push({
+                trackId,
+                candidateCount: 0,
+                top1Score: 0,
+                meanTopKScore: 0,
+                hasGoodCandidate: false,
+                hitAt3: seedHitAt3,
+                hitAt5: seedHitAt5,
+            });
             continue;
+        }
         seedWithCandidates += 1;
         top1Total += candidates[0].score.finalScore;
         const topKMean = candidates.reduce((sum, candidate) => sum + candidate.score.finalScore, 0) /
             candidates.length;
         topKMeanTotal += topKMean;
-        if (candidates.some((candidate) => candidate.score.finalScore >= goodThreshold)) {
+        const hasGoodCandidate = candidates.some((candidate) => candidate.score.finalScore >= goodThreshold);
+        if (hasGoodCandidate) {
             goodSeedCount += 1;
         }
+        seedReports.push({
+            trackId,
+            candidateCount: candidates.length,
+            top1Score: candidates[0].score.finalScore,
+            meanTopKScore: topKMean,
+            hasGoodCandidate,
+            hitAt3: seedHitAt3,
+            hitAt5: seedHitAt5,
+        });
     }
     const safeDiv = (numerator, denominator) => denominator === 0 ? 0 : numerator / denominator;
+    const bottomSeeds = seedReports
+        .filter((seed) => seed.candidateCount > 0)
+        .sort((a, b) => a.meanTopKScore - b.meanTopKScore || a.top1Score - b.top1Score)
+        .slice(0, 3);
+    const previousComparableRun = [...baselineRunHistory]
+        .reverse()
+        .find((run) => run.scopeLabel === scopeLabel);
+    const regressionReasons = [];
+    if (previousComparableRun
+        && previousComparableRun.hitAt3 !== null
+        && previousComparableRun.hitAt5 !== null) {
+        const nextHitAt3 = labeledSeedCount === 0 ? null : safeDiv(hitAt3Total, labeledSeedCount);
+        const nextHitAt5 = labeledSeedCount === 0 ? null : safeDiv(hitAt5Total, labeledSeedCount);
+        if (nextHitAt3 !== null && nextHitAt3 < previousComparableRun.hitAt3) {
+            regressionReasons.push(`Hit@3 ${formatPercentLabel(previousComparableRun.hitAt3)} -> ${formatPercentLabel(nextHitAt3)}`);
+        }
+        if (nextHitAt5 !== null && nextHitAt5 < previousComparableRun.hitAt5) {
+            regressionReasons.push(`Hit@5 ${formatPercentLabel(previousComparableRun.hitAt5)} -> ${formatPercentLabel(nextHitAt5)}`);
+        }
+    }
+    const relevanceTargetGatePassed = seedsBelowRelevantTargetMinimum.length === 0;
+    const relevanceTargetGateSummary = relevanceTargetGatePassed
+        ? null
+        : `Seed basina en az ${requiredRelevantTargetsPerSeed} relevant hedef gerekli. Eksik seed: ${seedsBelowRelevantTargetMinimum.join(', ')}`;
     const result = {
         runAt: nowIsoString(),
+        scopeLabel,
         seedCount: seedTrackIds.length,
         seedWithCandidates,
         labeledSeedCount,
@@ -488,6 +619,16 @@ async function runBaselineEvaluation(input = {}) {
         goodCandidateRate: safeDiv(goodSeedCount, seedWithCandidates),
         hitAt3: labeledSeedCount === 0 ? null : safeDiv(hitAt3Total, labeledSeedCount),
         hitAt5: labeledSeedCount === 0 ? null : safeDiv(hitAt5Total, labeledSeedCount),
+        bottomSeeds,
+        regressionDetected: regressionReasons.length > 0,
+        regressionSummary: regressionReasons.length > 0 ? regressionReasons.join(' | ') : null,
+        regressionGateEnforced,
+        regressionGatePassed: !regressionGateEnforced || regressionReasons.length === 0,
+        requiredRelevantTargetsPerSeed,
+        relevanceTargetGateEnforced,
+        relevanceTargetGatePassed,
+        seedsBelowRelevantTargetMinimum,
+        relevanceTargetGateSummary,
         limit,
         goodThreshold,
     };
@@ -499,6 +640,12 @@ async function runBaselineEvaluation(input = {}) {
         },
     ].slice(-100);
     persistStorage();
+    if (result.regressionGateEnforced && !result.regressionGatePassed) {
+        throw new Error(`Regression gate failed: ${result.regressionSummary ?? 'Hit@K degraded'}`);
+    }
+    if (result.relevanceTargetGateEnforced && !result.relevanceTargetGatePassed) {
+        throw new Error(`Label quality gate failed: ${result.relevanceTargetGateSummary ?? 'Not enough relevant targets'}`);
+    }
     return result;
 }
 function getBaselineRunHistory(limit = 10) {
@@ -511,7 +658,7 @@ function clearTransitionData() {
     analysisStates = {};
     nodesByTrack = {};
     baselineRunHistory = [];
-    isHydrated = true;
+    isHydrated = false;
     removeStorage(STORAGE_KEYS.queue);
     removeStorage(STORAGE_KEYS.states);
     removeStorage(STORAGE_KEYS.nodes);

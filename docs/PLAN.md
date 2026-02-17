@@ -1,6 +1,6 @@
 # Moodverter Genel Plan (YouTube + Perfect Transition)
 
-> Son güncelleme: 11 Şubat 2026
+> Son güncelleme: 17 Şubat 2026
 > Kapsam: YouTube core playback + moment-level transition discovery
 
 ## Özet
@@ -59,16 +59,45 @@ Kabul kriterleri:
 ### Phase 03 - Impact-First Uplift (Sure Bagimsiz)
 - [ ] Scoring v1 icin minispec hazirla: formuller, sinir durumlari, pseudocode, test ornekleri.
 - [x] `scoreTransition` icin aciklama/diagnostic cikti modeli ekle (`why this candidate?`).
-- [ ] Dusuk performansli seed'ler icin kalici "Bottom-3 seed" takip akisi tanimla.
-- [ ] Hard-negative odakli rerank adimi ekle (aynı hedef/aynı event tekrarini cezalandir).
-- [ ] Source moment pinleme + A/B dinleme akisi ekle (`A@t1` ve `B@t2` hizli karsilastirma).
+- [x] Dusuk performansli seed'ler icin kalici "Bottom-3 seed" takip akisi tanimla.
+- [x] Hard-negative odakli rerank adimi ekle (aynı hedef/aynı event tekrarini cezalandir).
+- [x] Source moment pinleme + A/B dinleme akisi ekle (`A@t1` ve `B@t2` hizli karsilastirma).
 - [x] Baseline run gecmisini yerel olarak sakla (run artifact + once/sonra karsilastirma).
-- [ ] Metrik regresyon kapisi tanimla (Hit@3/Hit@5 dususu oldugunda tuning'i reddet).
-- [ ] Relevance labeling kalitesini artir: seed basina min 2 relevant hedef zorunlulugu.
-- [ ] Transition analiz versiyonlama politikasini netlestir (`ANALYSIS_VERSION` artinca otomatik reanalysis).
-- [ ] YouTube/yt-dlp hata siniflarini tek modelde topla ve UI hata metinlerini standardize et.
+- [x] Metrik regresyon kapisi tanimla (Hit@3/Hit@5 dususu oldugunda tuning'i reddet).
+- [x] Relevance labeling kalitesini artir: seed basina min 2 relevant hedef zorunlulugu.
+- [x] Transition analiz versiyonlama politikasini netlestir (`ANALYSIS_VERSION` artinca otomatik reanalysis).
+- [x] YouTube/yt-dlp hata siniflarini tek modelde topla ve UI hata metinlerini standardize et.
 - [x] `smoke:test` scriptini Node surumlerinden bagimsiz calisacak sekilde duzelt.
-- [ ] Rust <-> TypeScript kontratini netlestir (invoke response schema + hata kodu sozlesmesi).
+- [x] Rust <-> TypeScript kontratini netlestir (invoke response schema + hata kodu sozlesmesi).
+- [ ] Provider engine fallback stratejisini netlestir (`auto -> tauri native -> fallback`) ve retry/backoff davranisini yaz.
+- [ ] Search timeout + rate-limit korumasi ekle (graceful fallback + net UI uyari mesaji).
+- [ ] Konfig precedence politikasini yazili hale getir (`runtime override > env > default`).
+- [ ] Baseline/analysis artifact versiyon alanlarini genislet (schemaVersion + analysisVersion + scope metadata).
+
+## Sprint Plani (Baslangic: 2026-02-17)
+### Sprint 1 - Kontrat ve hata modeli
+- Rust invoke response envelope: `ok | data | error`.
+- Tekil hata kodu sozlesmesi: `YTDLP_BINARY_NOT_FOUND`, `YTDLP_NETWORK`, `YTDLP_RATE_LIMITED` vb.
+- TypeScript tarafinda typed hata map'i + UI mesaj standardi.
+
+### Sprint 2 - Engine/fallback
+- Provider tarafinda `auto` strateji secimi.
+- Hata koduna gore fallback davranislari.
+- Retry/backoff sinirlari ve timeout politikalari.
+
+### Sprint 3 - Reanalysis ve versiyonlama
+- `ANALYSIS_VERSION` arttiginda stale analizleri otomatik queue'ya alma.
+- Eski node/state migrate politikasini deterministic hale getirme.
+- Reanalysis akisini smoke test ile guvenceye alma.
+
+### Sprint 4 - Scoring minispec + fixture
+- Scoring formulu, edge case ve pseudocode dokumani.
+- Kodla birebir fixture testleri.
+- Tune sonrasi benchmark run zorunlulugu.
+
+### Sprint 5 - CI kalite kapilari
+- `lint`, `tsc`, `build`, `smoke:test` zorunlu kapilar.
+- Baseline regression gate sonucunu PR kontrolu olarak raporlama.
 
 ## Durum Özeti (2026-02-10)
 - YouTube core smoke testleri eklendi; kalite kapilarinda `lint`, `tsc`, `build` geciyor.

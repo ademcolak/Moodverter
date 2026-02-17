@@ -7,6 +7,11 @@ Track baseline transition quality while iterating on moment matching and scoring
 - In-app baseline supports both `Seed Baseline` and `Tum Seed Baseline`.
 - Relevance labels are persisted and consumed by metrics (`Hit@3`, `Hit@5`).
 - Baseline run history is persisted locally and latest runs are visible in UI.
+- Baseline output includes `Bottom-3 seed` summary for low-performance tracking.
+- Regression warning is surfaced when same-scope `Hit@3/Hit@5` drops versus previous run.
+- Optional hard regression gate can reject a tuning run when same-scope Hit@K drops.
+- Transition panel supports source moment pinning and quick `A/B` preview listening.
+- Label quality gate enforces minimum relevant target count per seed before baseline runs.
 - Latest Kaggle parity run indicates metric flow is healthy, but sample size is too small for strong conclusions.
 
 ## Seed Set

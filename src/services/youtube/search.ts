@@ -1,4 +1,8 @@
-import { searchYouTube, type SearchResult as YtDlpSearchResult } from './ytdlp';
+import {
+  getYtDlpUserMessage,
+  searchYouTube,
+  type SearchResult as YtDlpSearchResult,
+} from './ytdlp';
 import type { UnifiedTrack } from '../../types/provider';
 
 export interface YouTubeSearchResult {
@@ -184,7 +188,7 @@ export async function searchVideos(query: string, limit = 10): Promise<YouTubeSe
     return mapped;
   } catch (error) {
     console.warn('yt-dlp search failed:', error);
-    return [];
+    throw new Error(getYtDlpUserMessage(error));
   }
 }
 

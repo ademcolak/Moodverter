@@ -69,10 +69,27 @@ export interface BaselineEvaluationInput {
   limit?: number;
   goodThreshold?: number;
   relevantTargetsBySeed?: Record<string, string[]>;
+  scopeLabel?: BaselineScopeLabel;
+  enforceRegressionGate?: boolean;
+  requiredRelevantTargetsPerSeed?: number;
+  enforceRelevantTargetMinimum?: boolean;
+}
+
+export type BaselineScopeLabel = 'selected' | 'all' | 'custom';
+
+export interface BaselineSeedReport {
+  trackId: string;
+  candidateCount: number;
+  top1Score: number;
+  meanTopKScore: number;
+  hasGoodCandidate: boolean;
+  hitAt3: number | null;
+  hitAt5: number | null;
 }
 
 export interface BaselineEvaluationResult {
   runAt: string;
+  scopeLabel: BaselineScopeLabel;
   seedCount: number;
   seedWithCandidates: number;
   labeledSeedCount: number;
@@ -82,6 +99,16 @@ export interface BaselineEvaluationResult {
   goodCandidateRate: number;
   hitAt3: number | null;
   hitAt5: number | null;
+  bottomSeeds: BaselineSeedReport[];
+  regressionDetected: boolean;
+  regressionSummary: string | null;
+  regressionGateEnforced: boolean;
+  regressionGatePassed: boolean;
+  requiredRelevantTargetsPerSeed: number;
+  relevanceTargetGateEnforced: boolean;
+  relevanceTargetGatePassed: boolean;
+  seedsBelowRelevantTargetMinimum: string[];
+  relevanceTargetGateSummary: string | null;
   limit: number;
   goodThreshold: number;
 }

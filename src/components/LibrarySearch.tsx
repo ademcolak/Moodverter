@@ -48,7 +48,7 @@ export const LibrarySearch = ({ onTrackSelect, onAddToLibrary }: LibrarySearchPr
       if (requestId !== activeSearchRequestRef.current) return;
       console.error('Search failed:', err);
       setResults([]);
-      setError('Arama basarisiz oldu.');
+      setError(err instanceof Error ? err.message : 'Arama basarisiz oldu.');
     } finally {
       if (requestId === activeSearchRequestRef.current) {
         setLoading(false);

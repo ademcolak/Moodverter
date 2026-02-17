@@ -25,6 +25,7 @@ import {
 
 const ONE_TIME_DATA_RESET_KEY = 'moodverter_data_reset_20260209';
 type BaselineScope = 'selected' | 'all';
+const REQUIRED_RELEVANT_TARGETS_PER_SEED = 2;
 
 function formatTime(ms: number): string {
   if (!ms || ms < 0) return '0:00';
@@ -79,6 +80,8 @@ function App() {
   const [transitionCandidates, setTransitionCandidates] = useState<TransitionCandidate[]>([]);
   const [isTransitionLoading, setIsTransitionLoading] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
+  const [pinnedSourceTimeMs, setPinnedSourceTimeMs] = useState<number | null>(null);
+  const [sourceSliderTimeMs, setSourceSliderTimeMs] = useState(0);
   const [showTransitionPanel, setShowTransitionPanel] = useState(false);
   const [isBaselineLoading, setIsBaselineLoading] = useState(false);
   const [baselineResult, setBaselineResult] = useState<BaselineEvaluationResult | null>(null);
@@ -118,6 +121,8 @@ function App() {
     setAnalysisStates({});
     setSeedTrackId(null);
     setTransitionCandidates([]);
+    setPinnedSourceTimeMs(null);
+    setSourceSliderTimeMs(0);
     setBaselineResult(null);
     setBaselineHistory([]);
     setTransitionError(null);
@@ -161,7 +166,11 @@ function App() {
     setIsTransitionLoading(true);
     setTransitionError(null);
     try {
-      const candidates = await findTransitionCandidates({ trackId: seedTrackId, limit: 5 });
+      const candidates = await findTransitionCandidates({
+        trackId: seedTrackId,
+        sourceTimeMs: pinnedSourceTimeMs ?? undefined,
+        limit: 5,
+      });
       setTransitionCandidates(candidates);
       if (candidates.length === 0) {
         setTransitionError('Bu seed icin aday bulunamadi. Once daha fazla sarki ekleyip analiz et.');
@@ -173,12 +182,17 @@ function App() {
     } finally {
       setIsTransitionLoading(false);
     }
-  }, [seedTrackId]);
+  }, [pinnedSourceTimeMs, seedTrackId]);
 
   useEffect(() => {
     if (!showTransitionPanel) return;
     void refreshTransitionCandidates();
   }, [refreshTransitionCandidates, showTransitionPanel]);
+
+  useEffect(() => {
+    setPinnedSourceTimeMs(null);
+    setSourceSliderTimeMs(0);
+  }, [seedTrackId]);
 
   useEffect(() => {
     if (baselineScope !== 'selected') return;
@@ -314,6 +328,30 @@ function App() {
     }
   }, [library, play, seek]);
 
+  const handlePreviewTransitionAB = useCallback(async (candidate: TransitionCandidate) => {
+    setUiError(null);
+    try {
+      const sourceTrack = library.find((track) => track.id === candidate.sourceTrackId);
+      const targetTrack = library.find((track) => track.id === candidate.targetTrackId);
+      const sourceTimeMs = clampTimeToTrackDuration(candidate.sourceTimeMs, sourceTrack?.durationMs);
+      const targetTimeMs = clampTimeToTrackDuration(candidate.targetTimeMs, targetTrack?.durationMs);
+
+      await play(candidate.sourceTrackId);
+      await wait(450);
+      await seek(sourceTimeMs);
+      await wait(850);
+
+      await play(candidate.targetTrackId);
+      await wait(450);
+      await seek(targetTimeMs);
+      await wait(250);
+      await seek(targetTimeMs);
+    } catch (error) {
+      console.error('Failed to preview A/B transition candidate:', error);
+      setUiError('A/B onizleme basarisiz oldu.');
+    }
+  }, [library, play, seek]);
+
   const currentTrack = playbackState?.currentTrack ?? null;
   const progressMs = playbackState?.progressMs ?? 0;
   const durationMs = playbackState?.durationMs ?? currentTrack?.durationMs ?? 0;
@@ -327,6 +365,10 @@ function App() {
     () => new Map(library.map((track) => [track.id, track])),
     [library]
   );
+  const selectedSeedTrack = useMemo(
+    () => (seedTrackId ? libraryTrackMap.get(seedTrackId) ?? null : null),
+    [libraryTrackMap, seedTrackId]
+  );
   const meanCandidateScore = useMemo(
     () => computeMeanTransitionScore(transitionCandidates),
     [transitionCandidates]
@@ -335,23 +377,17 @@ function App() {
     () => (seedTrackId ? relevanceMap[seedTrackId] ?? [] : []),
     [relevanceMap, seedTrackId]
   );
-  const baselineRegressionNote = useMemo(() => {
-    if (baselineHistory.length < 2) return null;
-    const latest = baselineHistory[0];
-    const previous = baselineHistory[1];
-    const droppedHitAt3 = (
-      latest.hitAt3 !== null
-      && previous.hitAt3 !== null
-      && latest.hitAt3 < previous.hitAt3
-    );
-    const droppedHitAt5 = (
-      latest.hitAt5 !== null
-      && previous.hitAt5 !== null
-      && latest.hitAt5 < previous.hitAt5
-    );
-    if (!droppedHitAt3 && !droppedHitAt5) return null;
-    return `Regression uyarisi: onceki runa gore ${droppedHitAt3 ? 'Hit@3 ' : ''}${droppedHitAt5 ? 'Hit@5' : ''} dustu.`;
-  }, [baselineHistory]);
+  const selectedSeedLabelGatePassed = useMemo(
+    () => !seedTrackId || selectedSeedRelevantTargets.length >= REQUIRED_RELEVANT_TARGETS_PER_SEED,
+    [seedTrackId, selectedSeedRelevantTargets.length]
+  );
+  const allScopeSeedsBelowRelevantMinimum = useMemo(
+    () => sortedLibrary
+      .map((track) => track.id)
+      .filter((trackId) => (relevanceMap[trackId] ?? []).length < REQUIRED_RELEVANT_TARGETS_PER_SEED),
+    [relevanceMap, sortedLibrary]
+  );
+  const allScopeLabelGatePassed = allScopeSeedsBelowRelevantMinimum.length === 0;
 
   const handleRunBaseline = useCallback(async (scope: BaselineScope) => {
     const seedTrackIds =
@@ -365,6 +401,18 @@ function App() {
         : 'Baseline icin once kutuphaneye sarki ekle.');
       return;
     }
+    const seedsBelowRelevantMinimum = seedTrackIds.filter(
+      (trackId) => (relevanceMap[trackId] ?? []).length < REQUIRED_RELEVANT_TARGETS_PER_SEED
+    );
+    if (seedsBelowRelevantMinimum.length > 0) {
+      const missingSeedNames = seedsBelowRelevantMinimum
+        .map((trackId) => libraryTrackMap.get(trackId)?.name ?? trackId)
+        .join(', ');
+      setUiError(
+        `Label kalite kapisi: seed basina en az ${REQUIRED_RELEVANT_TARGETS_PER_SEED} relevant hedef gerekli. Eksik: ${missingSeedNames}`
+      );
+      return;
+    }
 
     setBaselineScope(scope);
     setIsBaselineLoading(true);
@@ -374,6 +422,9 @@ function App() {
         limit: 5,
         goodThreshold: 0.6,
         relevantTargetsBySeed: relevanceMap,
+        scopeLabel: scope,
+        requiredRelevantTargetsPerSeed: REQUIRED_RELEVANT_TARGETS_PER_SEED,
+        enforceRelevantTargetMinimum: true,
       });
       setBaselineResult(result);
       setBaselineHistory(getBaselineRunHistory(5));
@@ -383,7 +434,7 @@ function App() {
     } finally {
       setIsBaselineLoading(false);
     }
-  }, [relevanceMap, seedTrackId, sortedLibrary]);
+  }, [libraryTrackMap, relevanceMap, seedTrackId, sortedLibrary]);
 
   const handleToggleRelevantTarget = useCallback((seedId: string, targetId: string) => {
     const existingTargets = relevanceMap[seedId] ?? [];
@@ -393,6 +444,32 @@ function App() {
       : addRelevantTarget(seedId, targetId);
     setRelevanceMap(nextMap);
   }, [relevanceMap]);
+
+  const handlePinSourceFromSlider = useCallback(() => {
+    if (!seedTrackId) return;
+    const clamped = clampTimeToTrackDuration(sourceSliderTimeMs, selectedSeedTrack?.durationMs);
+    setPinnedSourceTimeMs(clamped);
+  }, [seedTrackId, selectedSeedTrack?.durationMs, sourceSliderTimeMs]);
+
+  const handlePinSourceFromCurrentPosition = useCallback(() => {
+    if (!seedTrackId) return;
+    if (playbackState?.currentTrack?.id !== seedTrackId) {
+      setUiError('Su anki konumu pinlemek icin once seed sarkiyi cal.');
+      return;
+    }
+
+    const clamped = clampTimeToTrackDuration(
+      playbackState.progressMs ?? 0,
+      selectedSeedTrack?.durationMs
+    );
+    setUiError(null);
+    setSourceSliderTimeMs(clamped);
+    setPinnedSourceTimeMs(clamped);
+  }, [playbackState?.currentTrack?.id, playbackState?.progressMs, seedTrackId, selectedSeedTrack?.durationMs]);
+
+  const handleClearPinnedSource = useCallback(() => {
+    setPinnedSourceTimeMs(null);
+  }, []);
 
   const handleResetAllData = useCallback(async () => {
     try {
@@ -406,6 +483,8 @@ function App() {
       setAnalysisStates({});
       setSeedTrackId(null);
       setTransitionCandidates([]);
+      setPinnedSourceTimeMs(null);
+      setSourceSliderTimeMs(0);
       setBaselineResult(null);
       setBaselineHistory([]);
       setTransitionError(null);
@@ -531,20 +610,70 @@ function App() {
                 MeanScore@{transitionCandidates.length}: {formatPercent(meanCandidateScore)}
               </div>
               <div className="text-[10px] text-[var(--color-text-secondary)]">
-                Labelled Target (Seed): {selectedSeedRelevantTargets.length}
+                Labelled Target (Seed): {selectedSeedRelevantTargets.length}/{REQUIRED_RELEVANT_TARGETS_PER_SEED}
+              </div>
+              {!selectedSeedLabelGatePassed && seedTrackId && (
+                <div className="text-[10px] text-amber-400">
+                  Seed gate: baseline icin bu seed'e en az {REQUIRED_RELEVANT_TARGETS_PER_SEED} relevant hedef etiketle.
+                </div>
+              )}
+              {!allScopeLabelGatePassed && (
+                <div className="text-[10px] text-amber-400">
+                  Tum Seed gate: {allScopeSeedsBelowRelevantMinimum.length} seed etiketi yetersiz.
+                </div>
+              )}
+              <div className="border border-white/10 bg-white/5 px-2 py-1 space-y-1">
+                <div className="text-[10px] text-[var(--color-text-secondary)]">
+                  Source Moment: {pinnedSourceTimeMs === null ? 'Auto (coklu kaynak an)' : formatTime(pinnedSourceTimeMs)}
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(selectedSeedTrack?.durationMs ?? 0, 0)}
+                  value={Math.min(sourceSliderTimeMs, Math.max(selectedSeedTrack?.durationMs ?? 0, 0))}
+                  onChange={(event) => setSourceSliderTimeMs(Number(event.target.value))}
+                  disabled={!seedTrackId}
+                  className="w-full accent-[var(--color-primary)] disabled:opacity-50"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handlePinSourceFromSlider}
+                    disabled={!seedTrackId}
+                    className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+                    title="Slider degerini source moment olarak pinle"
+                  >
+                    Pinle
+                  </button>
+                  <button
+                    onClick={handlePinSourceFromCurrentPosition}
+                    disabled={!seedTrackId}
+                    className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+                    title="Oynaticidaki mevcut konumu source moment olarak al"
+                  >
+                    Simdiki Ani Al
+                  </button>
+                  <button
+                    onClick={handleClearPinnedSource}
+                    disabled={pinnedSourceTimeMs === null}
+                    className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+                    title="Source moment pinini temizle"
+                  >
+                    Oto
+                  </button>
+                </div>
               </div>
 
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => void handleRunBaseline('selected')}
-                  disabled={isBaselineLoading || !seedTrackId}
+                  disabled={isBaselineLoading || !seedTrackId || !selectedSeedLabelGatePassed}
                   className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
                 >
                   {isBaselineLoading && baselineScope === 'selected' ? 'Baseline...' : 'Seed Baseline'}
                 </button>
                 <button
                   onClick={() => void handleRunBaseline('all')}
-                  disabled={isBaselineLoading || sortedLibrary.length === 0}
+                  disabled={isBaselineLoading || sortedLibrary.length === 0 || !allScopeLabelGatePassed}
                   className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
                 >
                   {isBaselineLoading && baselineScope === 'all' ? 'Baseline...' : 'Tum Seed Baseline'}
@@ -571,9 +700,25 @@ function App() {
                   Son runlar: {baselineHistory.length} | Son Hit@3 {formatOptionalPercent(baselineHistory[0].hitAt3)} | Son Hit@5 {formatOptionalPercent(baselineHistory[0].hitAt5)}
                 </div>
               )}
-              {baselineRegressionNote && (
+              {baselineResult?.regressionSummary && (
                 <div className="text-[10px] text-amber-400 border border-amber-400/30 bg-amber-500/10 px-2 py-1">
-                  {baselineRegressionNote}
+                  Regression gate: {baselineResult.regressionSummary}
+                </div>
+              )}
+              {baselineResult?.relevanceTargetGateSummary && (
+                <div className="text-[10px] text-amber-400 border border-amber-400/30 bg-amber-500/10 px-2 py-1">
+                  Label gate: {baselineResult.relevanceTargetGateSummary}
+                </div>
+              )}
+              {baselineResult && baselineResult.bottomSeeds.length > 0 && (
+                <div className="text-[10px] text-[var(--color-text-secondary)] border border-white/10 bg-white/5 px-2 py-1">
+                  Bottom-{baselineResult.bottomSeeds.length} seed:{' '}
+                  {baselineResult.bottomSeeds
+                    .map((seed) => {
+                      const trackName = libraryTrackMap.get(seed.trackId)?.name ?? seed.trackId;
+                      return `${trackName} (${formatPercent(seed.meanTopKScore)})`;
+                    })
+                    .join(' | ')}
                 </div>
               )}
 
@@ -612,6 +757,13 @@ function App() {
                             title="Bu adayi cal"
                           >
                             Cal
+                          </button>
+                          <button
+                            onClick={() => void handlePreviewTransitionAB(candidate)}
+                            className="px-2 py-0.5 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                            title="A@t1 -> B@t2 seklinde kisa onizleme"
+                          >
+                            A/B
                           </button>
                           <button
                             onClick={() => {
