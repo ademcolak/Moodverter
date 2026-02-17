@@ -12,6 +12,7 @@ Track baseline transition quality while iterating on moment matching and scoring
 - Optional hard regression gate can reject a tuning run when same-scope Hit@K drops.
 - Transition panel supports source moment pinning and quick `A/B` preview listening.
 - Label quality gate enforces minimum relevant target count per seed before baseline runs.
+- Manual listening checklist state is persisted per seed in transition panel.
 - Latest Kaggle parity run indicates metric flow is healthy, but sample size is too small for strong conclusions.
 
 ## Seed Set

@@ -8,16 +8,25 @@ import { useProvider } from './hooks/useProvider';
 import {
   addRelevantTarget,
   analyzeTrackWithHeuristicV1,
+  buildEvaluationProgressReport,
   clearTransitionData,
+  clearManualListeningChecklistMap,
+  countCompletedManualListeningChecklistItems,
   computeMeanTransitionScore,
+  createEmptyManualListeningChecklist,
   findTransitionCandidates,
   getAnalysisState,
   getBaselineRunHistory,
+  getManualListeningChecklistMap,
   getTransitionRelevanceMap,
   removeRelevantTarget,
+  updateManualListeningChecklist,
   type AnalysisState,
   type BaselineEvaluationResult,
   type BaselineRunArtifact,
+  type EvaluationProgressReport,
+  type ManualListeningChecklistKey,
+  type ManualListeningChecklistMap,
   type TransitionRelevanceMap,
   runBaselineEvaluation,
   type TransitionCandidate,
@@ -26,6 +35,13 @@ import {
 const ONE_TIME_DATA_RESET_KEY = 'moodverter_data_reset_20260209';
 type BaselineScope = 'selected' | 'all';
 const REQUIRED_RELEVANT_TARGETS_PER_SEED = 2;
+const MANUAL_LISTENING_ITEMS: Array<{ key: ManualListeningChecklistKey; label: string }> = [
+  { key: 'transitionSmooth', label: 'Transition anidir/kirik degil' },
+  { key: 'timingAligned', label: 'Timing bilincli hissettiriyor (A@t1 -> B@t2)' },
+  { key: 'loudnessAcceptable', label: 'Ses seviye sicrama kabul edilebilir' },
+  { key: 'eventContinuity', label: 'Event devamlıligi mantikli (vocal -> vocal vb.)' },
+  { key: 'replayWorth', label: 'En az bir aday tekrar dinlemeye deger' },
+];
 
 function formatTime(ms: number): string {
   if (!ms || ms < 0) return '0:00';
@@ -58,6 +74,13 @@ function clampTimeToTrackDuration(timeMs: number, trackDurationMs?: number): num
   return Math.min(Math.round(timeMs), maxSafeTime);
 }
 
+function formatAnalysisStatusLabel(status: 'pending' | 'ready' | 'failed' | 'missing'): string {
+  if (status === 'ready') return 'hazir';
+  if (status === 'pending') return 'bekliyor';
+  if (status === 'failed') return 'hatali';
+  return 'yok';
+}
+
 function App() {
   const {
     provider,
@@ -88,6 +111,7 @@ function App() {
   const [baselineHistory, setBaselineHistory] = useState<BaselineRunArtifact[]>([]);
   const [baselineScope, setBaselineScope] = useState<BaselineScope>('selected');
   const [relevanceMap, setRelevanceMap] = useState<TransitionRelevanceMap>({});
+  const [manualListeningChecklistMap, setManualListeningChecklistMap] = useState<ManualListeningChecklistMap>({});
 
   const refreshLibrary = useCallback(async () => {
     try {
@@ -107,6 +131,7 @@ function App() {
   useEffect(() => {
     setRelevanceMap(getTransitionRelevanceMap());
     setBaselineHistory(getBaselineRunHistory(5));
+    setManualListeningChecklistMap(getManualListeningChecklistMap());
   }, []);
 
   useEffect(() => {
@@ -115,6 +140,7 @@ function App() {
 
     clearYouTubeLocalData();
     clearTransitionData();
+    clearManualListeningChecklistMap();
     window.localStorage.setItem(ONE_TIME_DATA_RESET_KEY, '1');
 
     setLibrary([]);
@@ -127,6 +153,7 @@ function App() {
     setBaselineHistory([]);
     setTransitionError(null);
     setRelevanceMap({});
+    setManualListeningChecklistMap({});
     void refreshLibrary();
   }, [refreshLibrary]);
 
@@ -377,6 +404,14 @@ function App() {
     () => (seedTrackId ? relevanceMap[seedTrackId] ?? [] : []),
     [relevanceMap, seedTrackId]
   );
+  const selectedSeedManualListeningChecklist = useMemo(() => {
+    if (!seedTrackId) return createEmptyManualListeningChecklist();
+    return manualListeningChecklistMap[seedTrackId] ?? createEmptyManualListeningChecklist();
+  }, [manualListeningChecklistMap, seedTrackId]);
+  const selectedSeedManualListeningCompletedCount = useMemo(
+    () => countCompletedManualListeningChecklistItems(selectedSeedManualListeningChecklist),
+    [selectedSeedManualListeningChecklist]
+  );
   const selectedSeedLabelGatePassed = useMemo(
     () => !seedTrackId || selectedSeedRelevantTargets.length >= REQUIRED_RELEVANT_TARGETS_PER_SEED,
     [seedTrackId, selectedSeedRelevantTargets.length]
@@ -388,6 +423,21 @@ function App() {
     [relevanceMap, sortedLibrary]
   );
   const allScopeLabelGatePassed = allScopeSeedsBelowRelevantMinimum.length === 0;
+  const evaluationProgressReport: EvaluationProgressReport = useMemo(() => {
+    const seedTrackIds = Array.from(new Set([
+      ...sortedLibrary.map((track) => track.id),
+      ...Object.keys(relevanceMap),
+      ...Object.keys(manualListeningChecklistMap),
+      ...Object.keys(analysisStates),
+    ]));
+    return buildEvaluationProgressReport({
+      seedTrackIds,
+      analysisStates,
+      relevanceMap,
+      manualChecklistMap: manualListeningChecklistMap,
+      requiredRelevantTargetsPerSeed: REQUIRED_RELEVANT_TARGETS_PER_SEED,
+    });
+  }, [analysisStates, manualListeningChecklistMap, relevanceMap, sortedLibrary]);
 
   const handleRunBaseline = useCallback(async (scope: BaselineScope) => {
     const seedTrackIds =
@@ -444,6 +494,27 @@ function App() {
       : addRelevantTarget(seedId, targetId);
     setRelevanceMap(nextMap);
   }, [relevanceMap]);
+
+  const handleToggleManualListeningItem = useCallback((itemKey: ManualListeningChecklistKey) => {
+    if (!seedTrackId) return;
+
+    const nextValue = !selectedSeedManualListeningChecklist[itemKey];
+    const nextMap = updateManualListeningChecklist(
+      seedTrackId,
+      { [itemKey]: nextValue } as Partial<Record<ManualListeningChecklistKey, boolean>>
+    );
+    setManualListeningChecklistMap(nextMap);
+  }, [seedTrackId, selectedSeedManualListeningChecklist]);
+
+  const handleResetManualListeningChecklistForSeed = useCallback(() => {
+    if (!seedTrackId) return;
+
+    const resetPatch = Object.fromEntries(
+      MANUAL_LISTENING_ITEMS.map(({ key }) => [key, false])
+    ) as Partial<Record<ManualListeningChecklistKey, boolean>>;
+    const nextMap = updateManualListeningChecklist(seedTrackId, resetPatch);
+    setManualListeningChecklistMap(nextMap);
+  }, [seedTrackId]);
 
   const handlePinSourceFromSlider = useCallback(() => {
     if (!seedTrackId) return;
@@ -622,6 +693,72 @@ function App() {
                   Tum Seed gate: {allScopeSeedsBelowRelevantMinimum.length} seed etiketi yetersiz.
                 </div>
               )}
+              <div className="border border-white/10 bg-white/5 px-2 py-1 space-y-1">
+                <div className="text-[10px] text-[var(--color-text-secondary)]">
+                  Eval Progress: Ready {evaluationProgressReport.readySeedCount}/{evaluationProgressReport.totalSeedCount}
+                  {' | '}
+                  Label Gate {evaluationProgressReport.labelGatePassedSeedCount}/{evaluationProgressReport.totalSeedCount}
+                  {' | '}
+                  Checklist Gate {evaluationProgressReport.checklistGatePassedSeedCount}/{evaluationProgressReport.totalSeedCount}
+                </div>
+                {evaluationProgressReport.seedsNeedingLabels.length > 0 && (
+                  <div className="text-[10px] text-amber-400 truncate">
+                    Label eksigi: {evaluationProgressReport.seedsNeedingLabels.join(', ')}
+                  </div>
+                )}
+                {evaluationProgressReport.seedsNeedingManualChecklist.length > 0 && (
+                  <div className="text-[10px] text-amber-400 truncate">
+                    Checklist eksigi: {evaluationProgressReport.seedsNeedingManualChecklist.join(', ')}
+                  </div>
+                )}
+                {evaluationProgressReport.seedsMissingAnalysis.length > 0 && (
+                  <div className="text-[10px] text-amber-400 truncate">
+                    Analiz eksigi: {evaluationProgressReport.seedsMissingAnalysis.join(', ')}
+                  </div>
+                )}
+              </div>
+              <div className="border border-white/10 bg-white/5 px-2 py-1 space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[10px] text-[var(--color-text-secondary)]">
+                    Manual Listening: {selectedSeedManualListeningCompletedCount}/{MANUAL_LISTENING_ITEMS.length}
+                  </div>
+                  <button
+                    onClick={handleResetManualListeningChecklistForSeed}
+                    disabled={!seedTrackId || selectedSeedManualListeningCompletedCount === 0}
+                    className="px-2 py-0.5 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+                    title="Bu seed icin manuel checklist isaretlerini sifirla"
+                  >
+                    Sifirla
+                  </button>
+                </div>
+                {!seedTrackId ? (
+                  <div className="text-[10px] text-[var(--color-text-secondary)]">
+                    Checklist icin once bir seed sec.
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {MANUAL_LISTENING_ITEMS.map((item) => (
+                      <label key={item.key} className="flex items-center gap-2 text-[10px] text-[var(--color-text-secondary)]">
+                        <input
+                          type="checkbox"
+                          checked={selectedSeedManualListeningChecklist[item.key]}
+                          onChange={() => handleToggleManualListeningItem(item.key)}
+                          className="accent-[var(--color-primary)]"
+                        />
+                        <span>{item.label}</span>
+                      </label>
+                    ))}
+                {selectedSeedManualListeningCompletedCount < MANUAL_LISTENING_ITEMS.length && (
+                  <div className="text-[10px] text-amber-400">
+                    Manuel dinleme checklisti henuz tamamlanmadi.
+                  </div>
+                )}
+                <div className="text-[10px] text-[var(--color-text-secondary)]">
+                  Analiz durumu: {formatAnalysisStatusLabel(analysisStates[seedTrackId ?? '']?.status ?? 'missing')}
+                </div>
+              </div>
+            )}
+              </div>
               <div className="border border-white/10 bg-white/5 px-2 py-1 space-y-1">
                 <div className="text-[10px] text-[var(--color-text-secondary)]">
                   Source Moment: {pinnedSourceTimeMs === null ? 'Auto (coklu kaynak an)' : formatTime(pinnedSourceTimeMs)}

@@ -162,9 +162,26 @@ async function searchVideos(query, limit = 10) {
         return mapped;
     }
     catch (error) {
+        const fallbackResults = searchLocalPlaylistFallback(normalized, limit);
+        if (fallbackResults.length > 0) {
+            return fallbackResults;
+        }
         console.warn('yt-dlp search failed:', error);
         throw new Error((0, ytdlp_1.getYtDlpUserMessage)(error));
     }
+}
+function searchLocalPlaylistFallback(query, limit) {
+    const normalized = query.toLowerCase();
+    return getPlaylist()
+        .filter((track) => `${track.title} ${track.artist}`.toLowerCase().includes(normalized))
+        .slice(0, Math.max(1, limit))
+        .map((track) => ({
+        videoId: track.videoId,
+        title: track.title,
+        artist: track.artist,
+        thumbnail: track.thumbnail,
+        duration: track.duration,
+    }));
 }
 function ytdlpResultToSearchResult(result) {
     const { artist, title } = parseVideoTitle(result.title, result.uploader);

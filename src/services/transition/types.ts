@@ -88,6 +88,8 @@ export interface BaselineSeedReport {
 }
 
 export interface BaselineEvaluationResult {
+  schemaVersion: number;
+  analysisVersion: number;
   runAt: string;
   scopeLabel: BaselineScopeLabel;
   seedCount: number;

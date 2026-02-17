@@ -1,5 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.TRANSITION_SCORE_WEIGHTS = exports.TRANSITION_SCORING_VERSION = void 0;
+exports.scoreTransitionPair = scoreTransitionPair;
+exports.explainTransitionPair = explainTransitionPair;
 exports.enqueueTrackForAnalysis = enqueueTrackForAnalysis;
 exports.getAnalysisState = getAnalysisState;
 exports.getAnalysisQueue = getAnalysisQueue;
@@ -15,6 +18,8 @@ exports.clearTransitionData = clearTransitionData;
 const analyzer_1 = require("./analyzer");
 const metrics_1 = require("./metrics");
 const ANALYSIS_VERSION = 2;
+const BASELINE_RUN_SCHEMA_VERSION = 1;
+exports.TRANSITION_SCORING_VERSION = 'v1';
 const STORAGE_KEYS = {
     queue: 'moodverter_transition_analysis_queue',
     states: 'moodverter_transition_analysis_states',
@@ -27,6 +32,9 @@ const SCORE_WEIGHTS = {
     rhythm: 0.2,
     loudness: 0.15,
     artifactPenalty: 0.25,
+};
+exports.TRANSITION_SCORE_WEIGHTS = {
+    ...SCORE_WEIGHTS,
 };
 const EVENT_COMPATIBILITY = {
     'scream-hit': {
@@ -152,6 +160,8 @@ function hydrateFromStorage() {
         const regressionDetected = Boolean(run.regressionDetected);
         return {
             ...run,
+            schemaVersion: Math.max(1, Math.floor(Number(run.schemaVersion ?? BASELINE_RUN_SCHEMA_VERSION))),
+            analysisVersion: Math.max(1, Math.floor(Number(run.analysisVersion ?? ANALYSIS_VERSION))),
             scopeLabel: (run.scopeLabel ?? 'custom'),
             bottomSeeds: Array.isArray(run.bottomSeeds) ? run.bottomSeeds : [],
             regressionDetected,
@@ -352,6 +362,20 @@ function sanitizeNode(trackId, node) {
         embedding: sanitizeNumericArray(node.embedding, 16),
         chroma: sanitizeNumericArray(node.chroma, 12),
     };
+}
+function scoreTransitionPair(sourceNode, targetNode) {
+    const sourceTrackId = typeof sourceNode.trackId === 'string' && sourceNode.trackId.trim().length > 0
+        ? sourceNode.trackId.trim()
+        : '__source__';
+    const targetTrackId = typeof targetNode.trackId === 'string' && targetNode.trackId.trim().length > 0
+        ? targetNode.trackId.trim()
+        : '__target__';
+    const sanitizedSource = sanitizeNode(sourceTrackId, sourceNode);
+    const sanitizedTarget = sanitizeNode(targetTrackId, targetNode);
+    return scoreTransition(sanitizedSource, sanitizedTarget);
+}
+function explainTransitionPair(sourceNode, targetNode) {
+    return buildScoreDiagnostic(scoreTransitionPair(sourceNode, targetNode));
 }
 function removeTrackFromQueue(trackId) {
     analysisQueue = analysisQueue.filter((item) => item !== trackId);
@@ -608,6 +632,8 @@ async function runBaselineEvaluation(input = {}) {
         ? null
         : `Seed basina en az ${requiredRelevantTargetsPerSeed} relevant hedef gerekli. Eksik seed: ${seedsBelowRelevantTargetMinimum.join(', ')}`;
     const result = {
+        schemaVersion: BASELINE_RUN_SCHEMA_VERSION,
+        analysisVersion: ANALYSIS_VERSION,
         runAt: nowIsoString(),
         scopeLabel,
         seedCount: seedTrackIds.length,

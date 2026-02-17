@@ -19,6 +19,8 @@ import { computeHitAtK } from './metrics';
 import type { UnifiedTrack } from '../../types/provider';
 
 const ANALYSIS_VERSION = 2;
+const BASELINE_RUN_SCHEMA_VERSION = 1;
+export const TRANSITION_SCORING_VERSION = 'v1';
 
 const STORAGE_KEYS = {
   queue: 'moodverter_transition_analysis_queue',
@@ -33,6 +35,9 @@ const SCORE_WEIGHTS = {
   rhythm: 0.2,
   loudness: 0.15,
   artifactPenalty: 0.25,
+} as const;
+export const TRANSITION_SCORE_WEIGHTS = {
+  ...SCORE_WEIGHTS,
 } as const;
 
 const EVENT_COMPATIBILITY: Record<string, Partial<Record<string, number>>> = {
@@ -164,6 +169,8 @@ function hydrateFromStorage(): void {
       const regressionDetected = Boolean(run.regressionDetected);
       return {
         ...run,
+        schemaVersion: Math.max(1, Math.floor(Number(run.schemaVersion ?? BASELINE_RUN_SCHEMA_VERSION))),
+        analysisVersion: Math.max(1, Math.floor(Number(run.analysisVersion ?? ANALYSIS_VERSION))),
         scopeLabel: (run.scopeLabel ?? 'custom') as BaselineScopeLabel,
         bottomSeeds: Array.isArray(run.bottomSeeds) ? run.bottomSeeds : [],
         regressionDetected,
@@ -414,6 +421,29 @@ function sanitizeNode(trackId: string, node: TransitionNode): TransitionNode {
     embedding: sanitizeNumericArray((node as { embedding?: unknown }).embedding, 16),
     chroma: sanitizeNumericArray((node as { chroma?: unknown }).chroma, 12),
   };
+}
+
+export function scoreTransitionPair(
+  sourceNode: TransitionNode,
+  targetNode: TransitionNode
+): TransitionEdgeScore {
+  const sourceTrackId = typeof sourceNode.trackId === 'string' && sourceNode.trackId.trim().length > 0
+    ? sourceNode.trackId.trim()
+    : '__source__';
+  const targetTrackId = typeof targetNode.trackId === 'string' && targetNode.trackId.trim().length > 0
+    ? targetNode.trackId.trim()
+    : '__target__';
+
+  const sanitizedSource = sanitizeNode(sourceTrackId, sourceNode);
+  const sanitizedTarget = sanitizeNode(targetTrackId, targetNode);
+  return scoreTransition(sanitizedSource, sanitizedTarget);
+}
+
+export function explainTransitionPair(
+  sourceNode: TransitionNode,
+  targetNode: TransitionNode
+): TransitionScoreDiagnostic {
+  return buildScoreDiagnostic(scoreTransitionPair(sourceNode, targetNode));
 }
 
 function removeTrackFromQueue(trackId: string): void {
@@ -741,6 +771,8 @@ export async function runBaselineEvaluation(
     : `Seed basina en az ${requiredRelevantTargetsPerSeed} relevant hedef gerekli. Eksik seed: ${seedsBelowRelevantTargetMinimum.join(', ')}`;
 
   const result: BaselineEvaluationResult = {
+    schemaVersion: BASELINE_RUN_SCHEMA_VERSION,
+    analysisVersion: ANALYSIS_VERSION,
     runAt: nowIsoString(),
     scopeLabel,
     seedCount: seedTrackIds.length,

@@ -47,6 +47,7 @@ const browser_mocks_1 = require("./helpers/browser-mocks");
     (0, browser_mocks_1.resetBrowserMocks)();
     (0, transition_1.clearTransitionData)();
     (0, transition_1.clearTransitionRelevanceMap)();
+    (0, transition_1.clearManualListeningChecklistMap)();
 });
 (0, node_test_1.default)('runBaselineEvaluation computes Hit@3/5 when labeled relevance exists', async () => {
     await (0, transition_1.analyzeTrackWithHeuristicV1)({
@@ -181,6 +182,32 @@ const browser_mocks_1 = require("./helpers/browser-mocks");
     map = (0, transition_1.removeRelevantTarget)('seed-track-3', 'target-track-d');
     strict_1.default.equal(map['seed-track-3'], undefined);
 });
+(0, node_test_1.default)('manual listening checklist helpers persist per seed and keep defaults', () => {
+    const firstMap = (0, transition_1.updateManualListeningChecklist)('seed-check-1', {
+        transitionSmooth: true,
+        timingAligned: true,
+    });
+    strict_1.default.equal(firstMap['seed-check-1'].transitionSmooth, true);
+    strict_1.default.equal(firstMap['seed-check-1'].timingAligned, true);
+    strict_1.default.equal(firstMap['seed-check-1'].loudnessAcceptable, false);
+    strict_1.default.equal(firstMap['seed-check-1'].eventContinuity, false);
+    strict_1.default.equal(firstMap['seed-check-1'].replayWorth, false);
+    const secondMap = (0, transition_1.updateManualListeningChecklist)('seed-check-2', {
+        replayWorth: true,
+    });
+    strict_1.default.equal(secondMap['seed-check-2'].replayWorth, true);
+    strict_1.default.equal(secondMap['seed-check-1'].transitionSmooth, true);
+    const firstSeed = (0, transition_1.getManualListeningChecklist)('seed-check-1');
+    strict_1.default.equal(firstSeed.transitionSmooth, true);
+    strict_1.default.equal(firstSeed.timingAligned, true);
+    strict_1.default.equal(firstSeed.replayWorth, false);
+    const unknownSeed = (0, transition_1.getManualListeningChecklist)('seed-check-unknown');
+    strict_1.default.equal(unknownSeed.transitionSmooth, false);
+    strict_1.default.equal(unknownSeed.replayWorth, false);
+    const storedMap = (0, transition_1.getManualListeningChecklistMap)();
+    strict_1.default.equal(storedMap['seed-check-1'].transitionSmooth, true);
+    strict_1.default.equal(storedMap['seed-check-2'].replayWorth, true);
+});
 (0, node_test_1.default)('baseline run history persists latest runs', async () => {
     await (0, transition_1.analyzeTrackWithHeuristicV1)({
         id: 'seed-track-history',
@@ -210,6 +237,8 @@ const browser_mocks_1 = require("./helpers/browser-mocks");
     strict_1.default.equal(history[1].runAt, first.runAt);
     strict_1.default.deepEqual(history[0].seedTrackIds, ['seed-track-history']);
     strict_1.default.equal(history[0].scopeLabel, 'selected');
+    strict_1.default.equal(history[0].schemaVersion, 1);
+    strict_1.default.equal(history[0].analysisVersion, 2);
 });
 (0, node_test_1.default)('baseline evaluation reports bottom seeds and detects Hit@K regression per scope', async () => {
     await (0, transition_1.analyzeTrackWithHeuristicV1)({

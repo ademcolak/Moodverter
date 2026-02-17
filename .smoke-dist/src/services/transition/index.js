@@ -18,3 +18,5 @@ __exportStar(require("./types"), exports);
 __exportStar(require("./service"), exports);
 __exportStar(require("./metrics"), exports);
 __exportStar(require("./relevance"), exports);
+__exportStar(require("./manual-checklist"), exports);
+__exportStar(require("./evaluation-report"), exports);

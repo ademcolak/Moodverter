@@ -19,7 +19,9 @@ dist-ssr
 
 # Editor / Workspace metadata
 .vscode/
-.github/
+.github/*
+!.github/workflows/
+!.github/workflows/*.yml
 .claude/
 .idea
 .DS_Store

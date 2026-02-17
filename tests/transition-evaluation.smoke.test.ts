@@ -3,6 +3,7 @@ import test, { before, beforeEach } from 'node:test';
 import {
   addRelevantTarget,
   analyzeTrackWithHeuristicV1,
+  clearManualListeningChecklistMap,
   clearTransitionData,
   clearTransitionRelevanceMap,
   computeHitAtK,
@@ -11,9 +12,12 @@ import {
   getAnalysisState,
   getAnalyzedNodes,
   getBaselineRunHistory,
+  getManualListeningChecklist,
+  getManualListeningChecklistMap,
   getTransitionRelevanceMap,
   removeRelevantTarget,
   runBaselineEvaluation,
+  updateManualListeningChecklist,
 } from '../src/services/transition';
 import { installBrowserMocks, resetBrowserMocks } from './helpers/browser-mocks';
 
@@ -25,6 +29,7 @@ beforeEach(() => {
   resetBrowserMocks();
   clearTransitionData();
   clearTransitionRelevanceMap();
+  clearManualListeningChecklistMap();
 });
 
 test('runBaselineEvaluation computes Hit@3/5 when labeled relevance exists', async () => {
@@ -179,6 +184,38 @@ test('relevance map helpers add and remove targets without duplicates', () => {
   assert.equal(map['seed-track-3'], undefined);
 });
 
+test('manual listening checklist helpers persist per seed and keep defaults', () => {
+  const firstMap = updateManualListeningChecklist('seed-check-1', {
+    transitionSmooth: true,
+    timingAligned: true,
+  });
+
+  assert.equal(firstMap['seed-check-1'].transitionSmooth, true);
+  assert.equal(firstMap['seed-check-1'].timingAligned, true);
+  assert.equal(firstMap['seed-check-1'].loudnessAcceptable, false);
+  assert.equal(firstMap['seed-check-1'].eventContinuity, false);
+  assert.equal(firstMap['seed-check-1'].replayWorth, false);
+
+  const secondMap = updateManualListeningChecklist('seed-check-2', {
+    replayWorth: true,
+  });
+  assert.equal(secondMap['seed-check-2'].replayWorth, true);
+  assert.equal(secondMap['seed-check-1'].transitionSmooth, true);
+
+  const firstSeed = getManualListeningChecklist('seed-check-1');
+  assert.equal(firstSeed.transitionSmooth, true);
+  assert.equal(firstSeed.timingAligned, true);
+  assert.equal(firstSeed.replayWorth, false);
+
+  const unknownSeed = getManualListeningChecklist('seed-check-unknown');
+  assert.equal(unknownSeed.transitionSmooth, false);
+  assert.equal(unknownSeed.replayWorth, false);
+
+  const storedMap = getManualListeningChecklistMap();
+  assert.equal(storedMap['seed-check-1'].transitionSmooth, true);
+  assert.equal(storedMap['seed-check-2'].replayWorth, true);
+});
+
 test('baseline run history persists latest runs', async () => {
   await analyzeTrackWithHeuristicV1({
     id: 'seed-track-history',
@@ -210,6 +247,8 @@ test('baseline run history persists latest runs', async () => {
   assert.equal(history[1].runAt, first.runAt);
   assert.deepEqual(history[0].seedTrackIds, ['seed-track-history']);
   assert.equal(history[0].scopeLabel, 'selected');
+  assert.equal(history[0].schemaVersion, 1);
+  assert.equal(history[0].analysisVersion, 2);
 });
 
 test('baseline evaluation reports bottom seeds and detects Hit@K regression per scope', async () => {

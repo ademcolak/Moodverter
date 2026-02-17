@@ -57,7 +57,7 @@ Kabul kriterleri:
 - [x] Baseline scope ayrımı: `Seed Baseline` ve `Tum Seed Baseline`.
 
 ### Phase 03 - Impact-First Uplift (Sure Bagimsiz)
-- [ ] Scoring v1 icin minispec hazirla: formuller, sinir durumlari, pseudocode, test ornekleri.
+- [x] Scoring v1 icin minispec hazirla: formuller, sinir durumlari, pseudocode, test ornekleri.
 - [x] `scoreTransition` icin aciklama/diagnostic cikti modeli ekle (`why this candidate?`).
 - [x] Dusuk performansli seed'ler icin kalici "Bottom-3 seed" takip akisi tanimla.
 - [x] Hard-negative odakli rerank adimi ekle (aynı hedef/aynı event tekrarini cezalandir).
@@ -69,10 +69,10 @@ Kabul kriterleri:
 - [x] YouTube/yt-dlp hata siniflarini tek modelde topla ve UI hata metinlerini standardize et.
 - [x] `smoke:test` scriptini Node surumlerinden bagimsiz calisacak sekilde duzelt.
 - [x] Rust <-> TypeScript kontratini netlestir (invoke response schema + hata kodu sozlesmesi).
-- [ ] Provider engine fallback stratejisini netlestir (`auto -> tauri native -> fallback`) ve retry/backoff davranisini yaz.
-- [ ] Search timeout + rate-limit korumasi ekle (graceful fallback + net UI uyari mesaji).
-- [ ] Konfig precedence politikasini yazili hale getir (`runtime override > env > default`).
-- [ ] Baseline/analysis artifact versiyon alanlarini genislet (schemaVersion + analysisVersion + scope metadata).
+- [x] Provider engine fallback stratejisini netlestir (`auto -> tauri native -> fallback`) ve retry/backoff davranisini yaz.
+- [x] Search timeout + rate-limit korumasi ekle (graceful fallback + net UI uyari mesaji).
+- [x] Konfig precedence politikasini yazili hale getir (`runtime override > env > default`).
+- [x] Baseline/analysis artifact versiyon alanlarini genislet (schemaVersion + analysisVersion + scope metadata).
 
 ## Sprint Plani (Baslangic: 2026-02-17)
 ### Sprint 1 - Kontrat ve hata modeli
@@ -96,8 +96,8 @@ Kabul kriterleri:
 - Tune sonrasi benchmark run zorunlulugu.
 
 ### Sprint 5 - CI kalite kapilari
-- `lint`, `tsc`, `build`, `smoke:test` zorunlu kapilar.
-- Baseline regression gate sonucunu PR kontrolu olarak raporlama.
+- [x] `lint`, `tsc`, `build`, `smoke:test` zorunlu kapilar.
+- [x] Baseline regression gate sonucunu PR kontrolu olarak raporlama.
 
 ## Durum Özeti (2026-02-10)
 - YouTube core smoke testleri eklendi; kalite kapilarinda `lint`, `tsc`, `build` geciyor.

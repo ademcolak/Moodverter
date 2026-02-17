@@ -50,6 +50,7 @@ Notes:
 - `eventMatch` is a hard quality signal for cases like scream-to-scream.
 - `artifactPenalty` prevents harsh or broken transitions.
 - Weights will be tuned via listening tests.
+- Phase 03 minispec (formula + fixtures): `docs/phases/phase-03-scoring-minispec.md`.
 
 ## Pipeline
 1. Track added to library
