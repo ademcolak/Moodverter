@@ -1,5 +1,8 @@
 import {
   getYtDlpUserMessage,
+  isYtDlpError,
+  searchYouTubePublic,
+  searchYouTubeWeb,
   searchYouTube,
   type SearchResult as YtDlpSearchResult,
 } from './ytdlp';
@@ -20,6 +23,14 @@ const SEARCH_HISTORY_KEY = 'moodverter_youtube_search_history';
 const MAX_RECENT = 20;
 const MAX_SEARCH_HISTORY = 10;
 const SEARCH_CACHE_TTL_MS = 60_000;
+const PUBLIC_SEARCH_TIMEOUT_MS = 2_500;
+const YTDLP_CIRCUIT_OPEN_MS = 120_000;
+const PUBLIC_SEARCH_ENDPOINTS = [
+  'https://piped.video/api/v1/search',
+  'https://pipedapi.kavin.rocks/search',
+  'https://pipedapi.adminforge.de/search',
+  'https://pipedapi.ducks.party/search',
+];
 
 interface SearchCacheEntry {
   savedAt: number;
@@ -27,6 +38,7 @@ interface SearchCacheEntry {
 }
 
 const searchCache = new Map<string, SearchCacheEntry>();
+let ytdlpCircuitOpenUntil = 0;
 
 export interface PlaylistTrack extends YouTubeSearchResult {
   addedAt: number;
@@ -165,6 +177,7 @@ export function clearYouTubeLocalData(): void {
   legacyKeys.forEach((key) => localStorage.removeItem(key));
 
   searchCache.clear();
+  ytdlpCircuitOpenUntil = 0;
 }
 
 export async function searchVideos(query: string, limit = 10): Promise<YouTubeSearchResult[]> {
@@ -178,22 +191,250 @@ export async function searchVideos(query: string, limit = 10): Promise<YouTubeSe
     return cached.results;
   }
 
-  try {
-    const results = await searchYouTube(normalized, limit);
-    const mapped = results.map(ytdlpResultToSearchResult);
+  const directVideoId = extractYouTubeVideoId(normalized);
+  if (directVideoId) {
+    const directVideoInfo = await getVideoInfo(directVideoId);
+    if (directVideoInfo) {
+      const directResult: YouTubeSearchResult[] = [directVideoInfo];
+      searchCache.set(cacheKey, {
+        savedAt: Date.now(),
+        results: directResult,
+      });
+      return directResult;
+    }
+  }
+
+  const shouldRunYtDlp = Date.now() >= ytdlpCircuitOpenUntil;
+  const primaryOutcomePromise = shouldRunYtDlp
+    ? searchYouTube(normalized, limit)
+      .then((results) => {
+        ytdlpCircuitOpenUntil = 0;
+        return {
+          results: results.map(ytdlpResultToSearchResult),
+          error: null as unknown,
+        };
+      })
+      .catch((error: unknown) => {
+        if (
+          isYtDlpError(error)
+          && (
+            error.code === 'YTDLP_BINARY_NOT_FOUND'
+            || error.code === 'YTDLP_CONTRACT_MISMATCH'
+          )
+        ) {
+          ytdlpCircuitOpenUntil = Date.now() + YTDLP_CIRCUIT_OPEN_MS;
+        }
+        return {
+          results: [] as YouTubeSearchResult[],
+          error,
+        };
+      })
+    : Promise.resolve({
+      results: [] as YouTubeSearchResult[],
+      error: null as unknown,
+    });
+
+  const tauriPublicFallbackPromise = searchYouTubePublic(normalized, limit)
+    .then((results) => results.map(ytdlpResultToSearchResult))
+    .catch(() => [] as YouTubeSearchResult[]);
+  const tauriWebFallbackPromise = searchYouTubeWeb(normalized, limit)
+    .then((results) => results.map(ytdlpResultToSearchResult))
+    .catch(() => [] as YouTubeSearchResult[]);
+  const browserPublicFallbackPromise = searchPublicEndpointsFallback(normalized, limit);
+  const publicFallbackPromise = firstNonEmptyResult([
+    tauriWebFallbackPromise,
+    tauriPublicFallbackPromise,
+    browserPublicFallbackPromise,
+  ]).then((results) => results ?? []);
+
+  const fastWinner = await firstNonEmptyResult([
+    primaryOutcomePromise.then((outcome) => outcome.results),
+    publicFallbackPromise,
+  ]);
+  if (fastWinner) {
     searchCache.set(cacheKey, {
       savedAt: Date.now(),
-      results: mapped,
+      results: fastWinner,
     });
-    return mapped;
-  } catch (error) {
-    const fallbackResults = searchLocalPlaylistFallback(normalized, limit);
-    if (fallbackResults.length > 0) {
-      return fallbackResults;
-    }
-    console.warn('yt-dlp search failed:', error);
-    throw new Error(getYtDlpUserMessage(error));
+    return fastWinner;
   }
+
+  const fallbackResults = searchLocalPlaylistFallback(normalized, limit);
+  if (fallbackResults.length > 0) {
+    return fallbackResults;
+  }
+
+  const primaryOutcome = await primaryOutcomePromise;
+  if (primaryOutcome.results.length > 0) {
+    searchCache.set(cacheKey, {
+      savedAt: Date.now(),
+      results: primaryOutcome.results,
+    });
+    return primaryOutcome.results;
+  }
+
+  const publicFallbackResults = await publicFallbackPromise;
+  if (publicFallbackResults.length > 0) {
+    searchCache.set(cacheKey, {
+      savedAt: Date.now(),
+      results: publicFallbackResults,
+    });
+    return publicFallbackResults;
+  }
+
+  if (primaryOutcome.error) {
+    console.warn('yt-dlp search failed:', primaryOutcome.error);
+    if (isYtDlpError(primaryOutcome.error)) {
+      throw new Error(`${getYtDlpUserMessage(primaryOutcome.error)} (kod: ${primaryOutcome.error.code})`);
+    }
+    throw new Error(getYtDlpUserMessage(primaryOutcome.error));
+  }
+
+  return [];
+}
+
+function extractYouTubeVideoId(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const directIdMatch = trimmed.match(/^[A-Za-z0-9_-]{11}$/);
+  if (directIdMatch) return directIdMatch[0];
+
+  try {
+    const url = new URL(trimmed);
+    const hostname = url.hostname.toLowerCase();
+    if (hostname.includes('youtube.com')) {
+      const id = url.searchParams.get('v');
+      if (id && /^[A-Za-z0-9_-]{11}$/.test(id)) return id;
+    }
+    if (hostname === 'youtu.be' || hostname.endsWith('.youtu.be')) {
+      const id = url.pathname.replace(/\//g, '');
+      if (id && /^[A-Za-z0-9_-]{11}$/.test(id)) return id;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return value;
+}
+
+async function fetchJsonWithTimeout(url: string, timeoutMs: number): Promise<unknown> {
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
+async function searchPublicEndpointsFallback(query: string, limit: number): Promise<YouTubeSearchResult[]> {
+  const boundedLimit = Math.max(1, Math.min(10, Math.floor(limit)));
+  const endpointTasks = PUBLIC_SEARCH_ENDPOINTS.map((endpoint) =>
+    searchSinglePublicEndpointFallback(endpoint, query, boundedLimit)
+  );
+  const winner = await firstNonEmptyResult(endpointTasks);
+  return winner ?? [];
+}
+
+async function firstNonEmptyResult(
+  tasks: Array<Promise<YouTubeSearchResult[]>>
+): Promise<YouTubeSearchResult[] | null> {
+  if (tasks.length === 0) return null;
+  return new Promise((resolve) => {
+    let pending = tasks.length;
+    let settled = false;
+
+    const completeIfDone = () => {
+      if (!settled && pending <= 0) {
+        settled = true;
+        resolve(null);
+      }
+    };
+
+    tasks.forEach((task) => {
+      task
+        .then((results) => {
+          if (settled) return;
+          if (results.length > 0) {
+            settled = true;
+            resolve(results);
+            return;
+          }
+          pending -= 1;
+          completeIfDone();
+        })
+        .catch(() => {
+          if (settled) return;
+          pending -= 1;
+          completeIfDone();
+        });
+    });
+  });
+}
+
+async function searchSinglePublicEndpointFallback(
+  endpoint: string,
+  query: string,
+  limit: number
+): Promise<YouTubeSearchResult[]> {
+  const url = `${endpoint}?q=${encodeURIComponent(query)}&filter=videos`;
+  const payload = await fetchJsonWithTimeout(url, PUBLIC_SEARCH_TIMEOUT_MS);
+  if (!Array.isArray(payload)) return [];
+
+  const mapped: YouTubeSearchResult[] = payload
+    .map((item): YouTubeSearchResult | null => {
+      if (!item || typeof item !== 'object') return null;
+      const row = item as Record<string, unknown>;
+      const normalizedUrl = typeof row.url === 'string'
+        ? (row.url.startsWith('http') ? row.url : `https://youtube.com${row.url}`)
+        : null;
+      const urlVideoId = normalizedUrl ? extractYouTubeVideoId(normalizedUrl) : null;
+      const directVideoId = typeof row.id === 'string' ? extractYouTubeVideoId(row.id) : null;
+      const videoId = directVideoId ?? urlVideoId;
+      if (!videoId) return null;
+
+      const title = typeof row.title === 'string' ? row.title.trim() : '';
+      if (!title) return null;
+
+      const artist = typeof row.uploaderName === 'string'
+        ? row.uploaderName
+        : typeof row.uploader === 'string'
+          ? row.uploader
+          : 'Unknown Artist';
+      const durationSec = asFiniteNumber(row.duration);
+      const viewCount = asFiniteNumber(row.views);
+      const thumbnail = typeof row.thumbnail === 'string' && row.thumbnail.length > 0
+        ? row.thumbnail
+        : `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+
+      return {
+        videoId,
+        title,
+        artist,
+        thumbnail,
+        duration: durationSec === null ? undefined : Math.max(0, Math.floor(durationSec * 1000)),
+        viewCount: viewCount === null ? undefined : Math.max(0, Math.floor(viewCount)),
+      };
+    })
+    .filter((item): item is YouTubeSearchResult => item !== null);
+
+  const deduped = mapped.filter(
+    (item, index, self) => self.findIndex((other) => other.videoId === item.videoId) === index
+  );
+  return deduped.slice(0, limit);
 }
 
 function searchLocalPlaylistFallback(query: string, limit: number): YouTubeSearchResult[] {

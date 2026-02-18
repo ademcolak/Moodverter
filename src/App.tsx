@@ -6,9 +6,11 @@ import { clearYouTubeLocalData, searchResultToUnifiedTrack } from './services/yo
 import { getYouTubeProvider } from './services/providers/youtube';
 import { useProvider } from './hooks/useProvider';
 import {
+  addBenchmarkSeedTrackId,
   addRelevantTarget,
   analyzeTrackWithHeuristicV1,
   buildEvaluationProgressReport,
+  clearBenchmarkSeedTrackIds,
   clearTransitionData,
   clearManualListeningChecklistMap,
   countCompletedManualListeningChecklistItems,
@@ -17,9 +19,12 @@ import {
   findTransitionCandidates,
   getAnalysisState,
   getBaselineRunHistory,
+  getBenchmarkSeedTrackIds,
   getManualListeningChecklistMap,
   getTransitionRelevanceMap,
+  removeBenchmarkSeedTrackId,
   removeRelevantTarget,
+  setBenchmarkSeedTrackIds,
   updateManualListeningChecklist,
   type AnalysisState,
   type BaselineEvaluationResult,
@@ -33,8 +38,9 @@ import {
 } from './services/transition';
 
 const ONE_TIME_DATA_RESET_KEY = 'moodverter_data_reset_20260209';
-type BaselineScope = 'selected' | 'all';
+type BaselineScope = 'selected' | 'all' | 'benchmark';
 const REQUIRED_RELEVANT_TARGETS_PER_SEED = 2;
+const TARGET_BENCHMARK_SEED_COUNT = 10;
 const MANUAL_LISTENING_ITEMS: Array<{ key: ManualListeningChecklistKey; label: string }> = [
   { key: 'transitionSmooth', label: 'Transition anidir/kirik degil' },
   { key: 'timingAligned', label: 'Timing bilincli hissettiriyor (A@t1 -> B@t2)' },
@@ -110,6 +116,7 @@ function App() {
   const [baselineResult, setBaselineResult] = useState<BaselineEvaluationResult | null>(null);
   const [baselineHistory, setBaselineHistory] = useState<BaselineRunArtifact[]>([]);
   const [baselineScope, setBaselineScope] = useState<BaselineScope>('selected');
+  const [benchmarkSeedTrackIds, setBenchmarkSeedTrackIdsState] = useState<string[]>([]);
   const [relevanceMap, setRelevanceMap] = useState<TransitionRelevanceMap>({});
   const [manualListeningChecklistMap, setManualListeningChecklistMap] = useState<ManualListeningChecklistMap>({});
 
@@ -132,6 +139,7 @@ function App() {
     setRelevanceMap(getTransitionRelevanceMap());
     setBaselineHistory(getBaselineRunHistory(5));
     setManualListeningChecklistMap(getManualListeningChecklistMap());
+    setBenchmarkSeedTrackIdsState(getBenchmarkSeedTrackIds());
   }, []);
 
   useEffect(() => {
@@ -154,6 +162,7 @@ function App() {
     setTransitionError(null);
     setRelevanceMap({});
     setManualListeningChecklistMap({});
+    setBenchmarkSeedTrackIdsState([]);
     void refreshLibrary();
   }, [refreshLibrary]);
 
@@ -416,6 +425,21 @@ function App() {
     () => !seedTrackId || selectedSeedRelevantTargets.length >= REQUIRED_RELEVANT_TARGETS_PER_SEED,
     [seedTrackId, selectedSeedRelevantTargets.length]
   );
+  const benchmarkSeedTrackIdsResolved = useMemo(() => benchmarkSeedTrackIds
+    .map((trackId) => trackId.trim())
+    .filter((trackId) => trackId.length > 0 && libraryTrackMap.has(trackId)), [benchmarkSeedTrackIds, libraryTrackMap]);
+  const benchmarkLabelGatePassed = useMemo(
+    () => benchmarkSeedTrackIdsResolved.every(
+      (trackId) => (relevanceMap[trackId] ?? []).length >= REQUIRED_RELEVANT_TARGETS_PER_SEED
+    ),
+    [benchmarkSeedTrackIdsResolved, relevanceMap]
+  );
+  const benchmarkSeedsBelowRelevantMinimum = useMemo(
+    () => benchmarkSeedTrackIdsResolved.filter(
+      (trackId) => (relevanceMap[trackId] ?? []).length < REQUIRED_RELEVANT_TARGETS_PER_SEED
+    ),
+    [benchmarkSeedTrackIdsResolved, relevanceMap]
+  );
   const allScopeSeedsBelowRelevantMinimum = useMemo(
     () => sortedLibrary
       .map((track) => track.id)
@@ -438,17 +462,39 @@ function App() {
       requiredRelevantTargetsPerSeed: REQUIRED_RELEVANT_TARGETS_PER_SEED,
     });
   }, [analysisStates, manualListeningChecklistMap, relevanceMap, sortedLibrary]);
+  const benchmarkProgressReport: EvaluationProgressReport = useMemo(() => buildEvaluationProgressReport({
+    seedTrackIds: benchmarkSeedTrackIdsResolved,
+    analysisStates,
+    relevanceMap,
+    manualChecklistMap: manualListeningChecklistMap,
+    requiredRelevantTargetsPerSeed: REQUIRED_RELEVANT_TARGETS_PER_SEED,
+  }), [
+    analysisStates,
+    benchmarkSeedTrackIdsResolved,
+    manualListeningChecklistMap,
+    relevanceMap,
+  ]);
 
   const handleRunBaseline = useCallback(async (scope: BaselineScope) => {
     const seedTrackIds =
       scope === 'selected'
         ? (seedTrackId ? [seedTrackId] : [])
-        : sortedLibrary.map((track) => track.id);
+        : scope === 'all'
+          ? sortedLibrary.map((track) => track.id)
+          : benchmarkSeedTrackIdsResolved;
 
     if (seedTrackIds.length === 0) {
-      setUiError(scope === 'selected'
-        ? 'Seed baseline icin once bir seed sec.'
-        : 'Baseline icin once kutuphaneye sarki ekle.');
+      if (scope === 'selected') {
+        setUiError('Seed baseline icin once bir seed sec.');
+      } else if (scope === 'benchmark') {
+        setUiError('Benchmark baseline icin once benchmark seed setini olustur.');
+      } else {
+        setUiError('Baseline icin once kutuphaneye sarki ekle.');
+      }
+      return;
+    }
+    if (scope === 'benchmark' && seedTrackIds.length < TARGET_BENCHMARK_SEED_COUNT) {
+      setUiError(`Benchmark set en az ${TARGET_BENCHMARK_SEED_COUNT} seed icermeli.`);
       return;
     }
     const seedsBelowRelevantMinimum = seedTrackIds.filter(
@@ -472,7 +518,9 @@ function App() {
         limit: 5,
         goodThreshold: 0.6,
         relevantTargetsBySeed: relevanceMap,
-        scopeLabel: scope,
+        scopeLabel: scope === 'benchmark' ? 'custom' : scope,
+        scopeId: scope === 'benchmark' ? 'benchmark-v1' : undefined,
+        enforceRegressionGate: scope === 'benchmark',
         requiredRelevantTargetsPerSeed: REQUIRED_RELEVANT_TARGETS_PER_SEED,
         enforceRelevantTargetMinimum: true,
       });
@@ -480,11 +528,18 @@ function App() {
       setBaselineHistory(getBaselineRunHistory(5));
     } catch (error) {
       console.error('Failed to run baseline evaluation:', error);
-      setUiError('Baseline degerlendirmesi basarisiz oldu.');
+      const message = error instanceof Error ? error.message : null;
+      setUiError(message ?? 'Baseline degerlendirmesi basarisiz oldu.');
     } finally {
       setIsBaselineLoading(false);
     }
-  }, [libraryTrackMap, relevanceMap, seedTrackId, sortedLibrary]);
+  }, [
+    benchmarkSeedTrackIdsResolved,
+    libraryTrackMap,
+    relevanceMap,
+    seedTrackId,
+    sortedLibrary,
+  ]);
 
   const handleToggleRelevantTarget = useCallback((seedId: string, targetId: string) => {
     const existingTargets = relevanceMap[seedId] ?? [];
@@ -515,6 +570,54 @@ function App() {
     const nextMap = updateManualListeningChecklist(seedTrackId, resetPatch);
     setManualListeningChecklistMap(nextMap);
   }, [seedTrackId]);
+
+  const handleToggleBenchmarkSeed = useCallback((trackId: string) => {
+    const nextIds = benchmarkSeedTrackIds.includes(trackId)
+      ? removeBenchmarkSeedTrackId(trackId)
+      : addBenchmarkSeedTrackId(trackId);
+    setBenchmarkSeedTrackIdsState(nextIds);
+  }, [benchmarkSeedTrackIds]);
+
+  const handleGenerateBenchmarkSeedSet = useCallback(() => {
+    const candidateSeedIds = sortedLibrary
+      .filter((track) => analysisStates[track.id]?.status === 'ready')
+      .slice(0, TARGET_BENCHMARK_SEED_COUNT)
+      .map((track) => track.id);
+    if (candidateSeedIds.length < TARGET_BENCHMARK_SEED_COUNT) {
+      setUiError(
+        `Benchmark set olusturmak icin en az ${TARGET_BENCHMARK_SEED_COUNT} hazir analizli seed gerekli.`
+      );
+      return;
+    }
+
+    const nextIds = setBenchmarkSeedTrackIds(candidateSeedIds);
+    setBenchmarkSeedTrackIdsState(nextIds);
+    setUiError(null);
+  }, [analysisStates, sortedLibrary]);
+
+  const handleClearBenchmarkSeedSet = useCallback(() => {
+    clearBenchmarkSeedTrackIds();
+    setBenchmarkSeedTrackIdsState([]);
+  }, []);
+
+  const handleJumpToNextMissingSeed = useCallback(() => {
+    const priorityOrder = [
+      ...benchmarkProgressReport.seedsNeedingLabels,
+      ...benchmarkProgressReport.seedsNeedingManualChecklist,
+      ...benchmarkProgressReport.seedsMissingAnalysis,
+      ...evaluationProgressReport.seedsNeedingLabels,
+      ...evaluationProgressReport.seedsNeedingManualChecklist,
+      ...evaluationProgressReport.seedsMissingAnalysis,
+    ];
+    const nextSeedId = Array.from(new Set(priorityOrder)).find((trackId) => libraryTrackMap.has(trackId));
+    if (!nextSeedId) {
+      setUiError('Eksik seed bulunamadi. Tum gate durumlari hazir gorunuyor.');
+      return;
+    }
+
+    setSeedTrackId(nextSeedId);
+    setUiError(null);
+  }, [benchmarkProgressReport, evaluationProgressReport, libraryTrackMap]);
 
   const handlePinSourceFromSlider = useCallback(() => {
     if (!seedTrackId) return;
@@ -549,6 +652,8 @@ function App() {
 
       clearYouTubeLocalData();
       clearTransitionData();
+      clearManualListeningChecklistMap();
+      clearBenchmarkSeedTrackIds();
 
       setLibrary([]);
       setAnalysisStates({});
@@ -562,6 +667,9 @@ function App() {
       setUiError(null);
       setUrlInput('');
       setIsSubmittingUrl(false);
+      setRelevanceMap({});
+      setManualListeningChecklistMap({});
+      setBenchmarkSeedTrackIdsState([]);
 
       await refreshLibrary();
       await youtubeProvider.authenticate();
@@ -718,6 +826,42 @@ function App() {
                 )}
               </div>
               <div className="border border-white/10 bg-white/5 px-2 py-1 space-y-1">
+                <div className="text-[10px] text-[var(--color-text-secondary)]">
+                  Benchmark Set: {benchmarkSeedTrackIdsResolved.length}/{TARGET_BENCHMARK_SEED_COUNT}
+                  {' | '}
+                  Ready {benchmarkProgressReport.readySeedCount}/{benchmarkProgressReport.totalSeedCount}
+                </div>
+                {benchmarkSeedsBelowRelevantMinimum.length > 0 && (
+                  <div className="text-[10px] text-amber-400 truncate">
+                    Benchmark label eksigi: {benchmarkSeedsBelowRelevantMinimum.join(', ')}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleGenerateBenchmarkSeedSet}
+                    className="px-2 py-0.5 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                    title={`Ilk ${TARGET_BENCHMARK_SEED_COUNT} hazir analizli track ile benchmark set olustur`}
+                  >
+                    Benchmark Olustur
+                  </button>
+                  <button
+                    onClick={handleClearBenchmarkSeedSet}
+                    disabled={benchmarkSeedTrackIdsResolved.length === 0}
+                    className="px-2 py-0.5 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+                    title="Benchmark seed setini temizle"
+                  >
+                    Benchmark Temizle
+                  </button>
+                  <button
+                    onClick={handleJumpToNextMissingSeed}
+                    className="px-2 py-0.5 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                    title="Label/checklist/analiz eksigi olan bir sonraki seed'e git"
+                  >
+                    Sonraki Eksik Seed
+                  </button>
+                </div>
+              </div>
+              <div className="border border-white/10 bg-white/5 px-2 py-1 space-y-1">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-[10px] text-[var(--color-text-secondary)]">
                     Manual Listening: {selectedSeedManualListeningCompletedCount}/{MANUAL_LISTENING_ITEMS.length}
@@ -815,9 +959,24 @@ function App() {
                 >
                   {isBaselineLoading && baselineScope === 'all' ? 'Baseline...' : 'Tum Seed Baseline'}
                 </button>
+                <button
+                  onClick={() => void handleRunBaseline('benchmark')}
+                  disabled={
+                    isBaselineLoading
+                    || benchmarkSeedTrackIdsResolved.length < TARGET_BENCHMARK_SEED_COUNT
+                    || !benchmarkLabelGatePassed
+                  }
+                  className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+                >
+                  {isBaselineLoading && baselineScope === 'benchmark' ? 'Baseline...' : 'Benchmark Baseline'}
+                </button>
                 {baselineResult && (
                   <div className="text-[10px] text-[var(--color-text-secondary)]">
-                    Scope {baselineScope === 'selected' ? 'Seed' : 'Tum'} | Coverage {formatPercent(baselineResult.coverageRate)} | Good {formatPercent(baselineResult.goodCandidateRate)}
+                    Scope {baselineScope === 'selected' ? 'Seed' : baselineScope === 'all' ? 'Tum' : 'Benchmark'}
+                    {' | '}
+                    Coverage {formatPercent(baselineResult.coverageRate)}
+                    {' | '}
+                    Good {formatPercent(baselineResult.goodCandidateRate)}
                   </div>
                 )}
               </div>
@@ -956,6 +1115,13 @@ function App() {
                     title="Seed yap"
                   >
                     Seed
+                  </button>
+                  <button
+                    onClick={() => handleToggleBenchmarkSeed(track.id)}
+                    className="px-2 py-1 text-xs border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                    title="Benchmark sete ekle/cikar"
+                  >
+                    {benchmarkSeedTrackIds.includes(track.id) ? 'Bench-' : 'Bench+'}
                   </button>
                   <button
                     onClick={() => void handleAnalyzeTrack(track.id)}

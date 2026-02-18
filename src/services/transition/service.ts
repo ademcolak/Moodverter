@@ -105,6 +105,14 @@ function normalizeTrackId(trackId: string): string {
   return normalized;
 }
 
+function normalizeScopeId(scopeLabel: BaselineScopeLabel, scopeId: string | undefined, seedTrackIds: string[]): string {
+  const normalizedScopeId = (scopeId ?? '').trim();
+  if (normalizedScopeId.length > 0) return normalizedScopeId;
+  if (scopeLabel !== 'custom') return scopeLabel;
+  const sortedSeedIds = [...seedTrackIds].sort((a, b) => a.localeCompare(b));
+  return `custom:${sortedSeedIds.join(',')}`;
+}
+
 function nowIsoString(): string {
   return new Date().toISOString();
 }
@@ -167,11 +175,20 @@ function hydrateFromStorage(): void {
     .filter((run) => typeof run?.runAt === 'string' && Array.isArray(run?.seedTrackIds))
     .map((run) => {
       const regressionDetected = Boolean(run.regressionDetected);
+      const seedTrackIds = run.seedTrackIds
+        .map((trackId) => trackId.trim())
+        .filter((trackId) => trackId.length > 0);
+      const scopeLabel = (run.scopeLabel ?? 'custom') as BaselineScopeLabel;
       return {
         ...run,
         schemaVersion: Math.max(1, Math.floor(Number(run.schemaVersion ?? BASELINE_RUN_SCHEMA_VERSION))),
         analysisVersion: Math.max(1, Math.floor(Number(run.analysisVersion ?? ANALYSIS_VERSION))),
-        scopeLabel: (run.scopeLabel ?? 'custom') as BaselineScopeLabel,
+        scopeLabel,
+        scopeId: normalizeScopeId(
+          scopeLabel,
+          typeof run.scopeId === 'string' ? run.scopeId : undefined,
+          seedTrackIds
+        ),
         bottomSeeds: Array.isArray(run.bottomSeeds) ? run.bottomSeeds : [],
         regressionDetected,
         regressionSummary: typeof run.regressionSummary === 'string' ? run.regressionSummary : null,
@@ -195,9 +212,7 @@ function hydrateFromStorage(): void {
         relevanceTargetGateSummary: typeof run.relevanceTargetGateSummary === 'string'
           ? run.relevanceTargetGateSummary
           : null,
-        seedTrackIds: run.seedTrackIds
-          .map((trackId) => trackId.trim())
-          .filter((trackId) => trackId.length > 0),
+        seedTrackIds,
       };
     })
     .slice(-100);
@@ -664,6 +679,7 @@ export async function runBaselineEvaluation(
   const seedTrackIds = (input.seedTrackIds ?? readyTrackIds)
     .map((trackId) => trackId.trim())
     .filter((trackId) => trackId.length > 0 && readyTrackIds.includes(trackId));
+  const scopeId = normalizeScopeId(scopeLabel, input.scopeId, seedTrackIds);
   const relevantTargetsBySeed = Object.fromEntries(
     Object.entries(input.relevantTargetsBySeed ?? {}).map(([seedTrackId, targetTrackIds]) => [
       seedTrackId.trim(),
@@ -747,7 +763,7 @@ export async function runBaselineEvaluation(
 
   const previousComparableRun = [...baselineRunHistory]
     .reverse()
-    .find((run) => run.scopeLabel === scopeLabel);
+    .find((run) => run.scopeLabel === scopeLabel && run.scopeId === scopeId);
 
   const regressionReasons: string[] = [];
   if (
@@ -775,6 +791,7 @@ export async function runBaselineEvaluation(
     analysisVersion: ANALYSIS_VERSION,
     runAt: nowIsoString(),
     scopeLabel,
+    scopeId,
     seedCount: seedTrackIds.length,
     seedWithCandidates,
     labeledSeedCount,

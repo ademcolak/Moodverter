@@ -22,11 +22,18 @@ pnpm dev
 
 ## 3) Test ve Kalite
 
+Tek komut (onerilen):
+```bash
+pnpm run qa:auto
+```
+
+Ayrik komutlar:
 ```bash
 pnpm lint
 pnpm typecheck
 pnpm build
 pnpm smoke:test
+pnpm smoke:regression-gate
 ```
 
 ### Evaluation progress raporu (opsiyonel)
@@ -60,10 +67,16 @@ pnpm eval:report -- --input /path/to/eval-report-input.json
 }
 ```
 
-## 4) Hızlı Manuel Doğrulama
+## 4) Kalan Minimum Manuel Test
 
-1. Uygulamayı aç ve YouTube track ekleme alanına bir video linki gir.
-2. Eklenen şarkının otomatik çaldığını doğrula.
-3. Arama kutusundan bir şarkı bul, sonuçtan çal ve kütüphaneye ekle.
-4. Kütüphaneden bir şarkı sil ve listenin güncellendiğini doğrula.
-5. Play/Pause/Next/Previous/Seek kontrollerinin çalıştığını doğrula.
+1. Transition panelinden bir adayi `A/B` ile dinle.
+2. Gecisin subjektif olarak kirik/sert olup olmadigini kontrol et (otomasyonda dogrudan olculemez).
+3. Sonuca gore ilgili seed icin manual listening checklist'i isaretle.
+
+## 5) Benchmark Seed Akışı (Phase 03)
+
+1. Transition panelinde `Benchmark Olustur` ile ilk 10 hazır analizli seed'i benchmark sete al.
+2. Gerekirse kütüphane satırındaki `Bench+ / Bench-` ile seed seti manuel düzelt.
+3. `Sonraki Eksik Seed` ile label/checklist/analiz eksiği olan seed'leri sırayla tamamla.
+4. Benchmark sette her seed için en az 2 relevant target etiketle.
+5. `Benchmark Baseline` çalıştır; bu akış regression gate'i zorunlu uygular.

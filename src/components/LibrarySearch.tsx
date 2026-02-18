@@ -74,12 +74,16 @@ export const LibrarySearch = ({ onTrackSelect, onAddToLibrary }: LibrarySearchPr
 
     searchTimeoutRef.current = setTimeout(() => {
       void performSearch(value);
-    }, 450);
+    }, 250);
   };
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
     if (!query.trim()) return;
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+      searchTimeoutRef.current = null;
+    }
     addToSearchHistory(query);
     setSuggestions(getSearchSuggestions(5));
     void performSearch(query);

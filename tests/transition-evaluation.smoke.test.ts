@@ -301,6 +301,66 @@ test('baseline evaluation reports bottom seeds and detects Hit@K regression per 
   assert.ok(secondResult.regressionSummary?.includes('Hit@3'));
 });
 
+test('custom scope regression comparison respects scopeId', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-custom-scope',
+    name: 'Seed Track Custom Scope',
+    artist: 'Seed Artist Custom Scope',
+    durationMs: 180_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-custom-scope-a',
+    name: 'Target Track Custom Scope A',
+    artist: 'Target Artist Custom Scope A',
+    durationMs: 181_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-custom-scope-b',
+    name: 'Target Track Custom Scope B',
+    artist: 'Target Artist Custom Scope B',
+    durationMs: 182_000,
+  });
+
+  const candidates = await findTransitionCandidates({
+    trackId: 'seed-track-custom-scope',
+    limit: 5,
+  });
+  assert.ok(candidates.length > 0);
+
+  const firstResult = await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-custom-scope'],
+    limit: 5,
+    scopeLabel: 'custom',
+    scopeId: 'benchmark-a',
+    relevantTargetsBySeed: {
+      'seed-track-custom-scope': [candidates[0].targetTrackId],
+    },
+  });
+  assert.equal(firstResult.regressionDetected, false);
+
+  const differentScopeIdResult = await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-custom-scope'],
+    limit: 5,
+    scopeLabel: 'custom',
+    scopeId: 'benchmark-b',
+    relevantTargetsBySeed: {
+      'seed-track-custom-scope': ['missing-track-id'],
+    },
+  });
+  assert.equal(differentScopeIdResult.regressionDetected, false);
+
+  const sameScopeIdResult = await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-custom-scope'],
+    limit: 5,
+    scopeLabel: 'custom',
+    scopeId: 'benchmark-a',
+    relevantTargetsBySeed: {
+      'seed-track-custom-scope': ['missing-track-id'],
+    },
+  });
+  assert.equal(sameScopeIdResult.regressionDetected, true);
+});
+
 test('regression gate rejects baseline run when enforced and Hit@K drops', async () => {
   await analyzeTrackWithHeuristicV1({
     id: 'seed-track-gate',

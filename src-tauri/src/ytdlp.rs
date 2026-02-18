@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::time::Duration;
 use tokio::process::Command;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -128,6 +130,346 @@ fn classify_ytdlp_failure(stderr: &str) -> (&'static str, String) {
     )
 }
 
+const PUBLIC_SEARCH_ENDPOINTS: &[&str] = &[
+    "https://piped.video/api/v1/search",
+    "https://pipedapi.kavin.rocks/search",
+    "https://pipedapi.adminforge.de/search",
+    "https://pipedapi.ducks.party/search",
+];
+const YOUTUBE_WEB_SEARCH_ENDPOINT: &str = "https://www.youtube.com/results";
+
+fn is_valid_video_id(value: &str) -> bool {
+    value.len() == 11
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn extract_video_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if is_valid_video_id(trimmed) {
+        return Some(trimmed.to_string());
+    }
+
+    let normalized = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else if trimmed.starts_with('/') {
+        format!("https://youtube.com{}", trimmed)
+    } else {
+        format!("https://youtube.com/{}", trimmed)
+    };
+
+    let url = reqwest::Url::parse(&normalized).ok()?;
+    let host = url.host_str()?.to_lowercase();
+    if host.contains("youtube.com") {
+        if let Some((_, value)) = url.query_pairs().find(|(key, _)| key == "v") {
+            let id = value.into_owned();
+            if is_valid_video_id(&id) {
+                return Some(id);
+            }
+        }
+    }
+    if host == "youtu.be" || host.ends_with(".youtu.be") {
+        if let Some(segment) = url.path_segments().and_then(|mut segments| segments.next()) {
+            if is_valid_video_id(segment) {
+                return Some(segment.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+fn value_to_u64(value: Option<&serde_json::Value>) -> Option<u64> {
+    let raw = value?;
+    if let Some(v) = raw.as_u64() {
+        return Some(v);
+    }
+    if let Some(v) = raw.as_f64() {
+        if v.is_finite() && v >= 0.0 {
+            return Some(v.floor() as u64);
+        }
+    }
+    None
+}
+
+fn parse_public_search_results(payload: serde_json::Value, limit: usize) -> Vec<SearchResult> {
+    let items = match payload.as_array() {
+        Some(items) => items,
+        None => return Vec::new(),
+    };
+
+    let mut results = Vec::new();
+    let mut seen = HashSet::new();
+    for item in items {
+        if results.len() >= limit {
+            break;
+        }
+        let row = match item.as_object() {
+            Some(row) => row,
+            None => continue,
+        };
+
+        let id = row
+            .get("id")
+            .and_then(|value| value.as_str())
+            .and_then(extract_video_id)
+            .or_else(|| {
+                row.get("url")
+                    .and_then(|value| value.as_str())
+                    .and_then(extract_video_id)
+            });
+        let id = match id {
+            Some(id) => id,
+            None => continue,
+        };
+
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+
+        let title = row
+            .get("title")
+            .and_then(|value| value.as_str())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let title = match title {
+            Some(title) => title,
+            None => continue,
+        };
+
+        let uploader = row
+            .get("uploaderName")
+            .and_then(|value| value.as_str())
+            .or_else(|| row.get("uploader").and_then(|value| value.as_str()))
+            .map(|value| value.to_string());
+        let view_count = value_to_u64(row.get("views"));
+        let duration = value_to_u64(row.get("duration"));
+        let thumbnail = row
+            .get("thumbnail")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string())
+            .or_else(|| Some(format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", id)));
+
+        results.push(SearchResult {
+            id,
+            title,
+            uploader,
+            duration,
+            view_count,
+            thumbnail,
+        });
+    }
+
+    results
+}
+
+fn parse_duration_to_seconds(input: &str) -> Option<u64> {
+    let parts: Vec<u64> = input
+        .split(':')
+        .filter_map(|part| part.trim().parse::<u64>().ok())
+        .collect();
+    match parts.len() {
+        2 => Some(parts[0] * 60 + parts[1]),
+        3 => Some(parts[0] * 3600 + parts[1] * 60 + parts[2]),
+        _ => None,
+    }
+}
+
+fn parse_view_count(input: &str) -> Option<u64> {
+    let digits: String = input.chars().filter(|ch| ch.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<u64>().ok()
+}
+
+fn extract_text(value: Option<&serde_json::Value>) -> Option<String> {
+    let value = value?;
+    if let Some(simple_text) = value.get("simpleText").and_then(|item| item.as_str()) {
+        let normalized = simple_text.trim().to_string();
+        if !normalized.is_empty() {
+            return Some(normalized);
+        }
+    }
+
+    let runs = value.get("runs").and_then(|item| item.as_array())?;
+    let text = runs
+        .iter()
+        .filter_map(|item| item.get("text").and_then(|item| item.as_str()))
+        .collect::<Vec<&str>>()
+        .join("");
+    let normalized = text.trim().to_string();
+    if normalized.is_empty() {
+        return None;
+    }
+    Some(normalized)
+}
+
+fn collect_video_renderers(value: &serde_json::Value, out: &mut Vec<serde_json::Map<String, serde_json::Value>>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(renderer) = map.get("videoRenderer").and_then(|item| item.as_object()) {
+                out.push(renderer.clone());
+            }
+            for child in map.values() {
+                collect_video_renderers(child, out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                collect_video_renderers(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_first_json_object(input: &str) -> Option<&str> {
+    let bytes = input.as_bytes();
+    let start = bytes.iter().position(|&b| b == b'{')?;
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (index, byte) in bytes.iter().enumerate().skip(start) {
+        if in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if *byte == b'\\' {
+                escaped = true;
+                continue;
+            }
+            if *byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if *byte == b'"' {
+            in_string = true;
+            continue;
+        }
+        if *byte == b'{' {
+            depth += 1;
+            continue;
+        }
+        if *byte == b'}' {
+            depth -= 1;
+            if depth == 0 {
+                return input.get(start..=index);
+            }
+        }
+    }
+
+    None
+}
+
+fn extract_yt_initial_data(html: &str) -> Option<serde_json::Value> {
+    let markers = [
+        "var ytInitialData = ",
+        "window[\"ytInitialData\"] = ",
+        "ytInitialData = ",
+    ];
+
+    for marker in markers {
+        let Some(marker_start) = html.find(marker) else {
+            continue;
+        };
+        let remainder = &html[marker_start + marker.len()..];
+        let Some(json_slice) = extract_first_json_object(remainder) else {
+            continue;
+        };
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_slice) {
+            return Some(parsed);
+        }
+    }
+
+    None
+}
+
+fn parse_youtube_web_results(payload: serde_json::Value, limit: usize) -> Vec<SearchResult> {
+    let mut renderers = Vec::new();
+    collect_video_renderers(&payload, &mut renderers);
+
+    let mut results = Vec::new();
+    let mut seen = HashSet::new();
+    for renderer in renderers {
+        if results.len() >= limit {
+            break;
+        }
+
+        let id = renderer
+            .get("videoId")
+            .and_then(|item| item.as_str())
+            .map(|item| item.to_string());
+        let id = match id {
+            Some(id) if seen.insert(id.clone()) => id,
+            _ => continue,
+        };
+
+        let title = extract_text(renderer.get("title"));
+        let title = match title {
+            Some(title) => title,
+            None => continue,
+        };
+
+        let uploader = extract_text(renderer.get("ownerText").or_else(|| renderer.get("longBylineText")));
+        let duration = extract_text(renderer.get("lengthText")).and_then(|raw| parse_duration_to_seconds(&raw));
+        let view_count = extract_text(renderer.get("viewCountText")).and_then(|raw| parse_view_count(&raw));
+        let thumbnail = renderer
+            .get("thumbnail")
+            .and_then(|item| item.get("thumbnails"))
+            .and_then(|item| item.as_array())
+            .and_then(|items| items.last())
+            .and_then(|item| item.get("url"))
+            .and_then(|item| item.as_str())
+            .map(|item| item.to_string())
+            .or_else(|| Some(format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", id)));
+
+        results.push(SearchResult {
+            id,
+            title,
+            uploader,
+            duration,
+            view_count,
+            thumbnail,
+        });
+    }
+
+    results
+}
+
+async fn fetch_public_search_endpoint(
+    client: reqwest::Client,
+    endpoint: &'static str,
+    query: String,
+    limit: usize,
+) -> Result<Vec<SearchResult>, String> {
+    let url = reqwest::Url::parse_with_params(endpoint, &[("q", query.as_str()), ("filter", "videos")])
+        .map_err(|error| format!("{} url parse failed: {}", endpoint, error))?;
+
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| format!("{} request failed: {}", endpoint, error))?;
+    if !response.status().is_success() {
+        return Ok(Vec::new());
+    }
+
+    let payload = response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|error| format!("{} invalid json: {}", endpoint, error))?;
+    Ok(parse_public_search_results(payload, limit))
+}
+
 #[tauri::command]
 pub async fn search_youtube_v1(
     app: tauri::AppHandle,
@@ -239,4 +581,132 @@ pub async fn search_youtube(
         Some(error) => Err(format!("{}: {}", error.code, error.message)),
         None => Err("YTDLP_UNKNOWN: Unknown yt-dlp error".to_string()),
     }
+}
+
+#[tauri::command]
+pub async fn search_youtube_public_v1(
+    query: String,
+    limit: u32,
+) -> InvokeResponse<Vec<SearchResult>> {
+    let bounded_limit = usize::try_from(limit.max(1).min(25)).unwrap_or(10);
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_millis(1500))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            return err_response(
+                "YTDLP_NETWORK",
+                "Public YouTube search client kurulamadı".to_string(),
+                Some(error.to_string()),
+            );
+        }
+    };
+
+    let mut diagnostics: Vec<String> = Vec::new();
+    for endpoint in PUBLIC_SEARCH_ENDPOINTS {
+        match fetch_public_search_endpoint(client.clone(), endpoint, query.clone(), bounded_limit).await {
+            Ok(results) if !results.is_empty() => {
+                return ok_response(results);
+            }
+            Ok(_) => {}
+            Err(error) => diagnostics.push(error),
+        }
+    }
+
+    if diagnostics.is_empty() {
+        return ok_response(Vec::new());
+    }
+    err_response(
+        "YTDLP_NETWORK",
+        "Public YouTube aramasi basarisiz oldu".to_string(),
+        trim_details(&diagnostics.join(" | ")),
+    )
+}
+
+#[tauri::command]
+pub async fn search_youtube_web_v1(
+    query: String,
+    limit: u32,
+) -> InvokeResponse<Vec<SearchResult>> {
+    let bounded_limit = usize::try_from(limit.max(1).min(25)).unwrap_or(10);
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_millis(3500))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            return err_response(
+                "YTDLP_NETWORK",
+                "YouTube web arama istemcisi olusturulamadi".to_string(),
+                Some(error.to_string()),
+            );
+        }
+    };
+
+    let url = match reqwest::Url::parse_with_params(
+        YOUTUBE_WEB_SEARCH_ENDPOINT,
+        &[("search_query", query.as_str()), ("hl", "tr"), ("gl", "TR")],
+    ) {
+        Ok(url) => url,
+        Err(error) => {
+            return err_response(
+                "YTDLP_NETWORK",
+                "YouTube web arama URL'i olusturulamadi".to_string(),
+                Some(error.to_string()),
+            );
+        }
+    };
+
+    let response = match client
+        .get(url)
+        .header("accept-language", "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7")
+        .header(
+            "user-agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        )
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return err_response(
+                "YTDLP_NETWORK",
+                "YouTube web arama istegi basarisiz oldu".to_string(),
+                Some(error.to_string()),
+            );
+        }
+    };
+
+    if !response.status().is_success() {
+        return err_response(
+            "YTDLP_NETWORK",
+            "YouTube web arama yaniti basarisiz oldu".to_string(),
+            Some(format!("status: {}", response.status())),
+        );
+    }
+
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(error) => {
+            return err_response(
+                "YTDLP_NETWORK",
+                "YouTube web arama yaniti okunamadi".to_string(),
+                Some(error.to_string()),
+            );
+        }
+    };
+
+    let initial_data = match extract_yt_initial_data(&body) {
+        Some(initial_data) => initial_data,
+        None => {
+            return err_response(
+                "YTDLP_PARSE_FAILED",
+                "YouTube web arama verisi parse edilemedi".to_string(),
+                trim_details(&body),
+            );
+        }
+    };
+
+    ok_response(parse_youtube_web_results(initial_data, bounded_limit))
 }

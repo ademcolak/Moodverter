@@ -9,7 +9,12 @@ mod ytdlp;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![ytdlp::search_youtube, ytdlp::search_youtube_v1])
+        .invoke_handler(tauri::generate_handler![
+            ytdlp::search_youtube,
+            ytdlp::search_youtube_v1,
+            ytdlp::search_youtube_public_v1,
+            ytdlp::search_youtube_web_v1
+        ])
         .setup(|app| {
             // Create tray menu items
             let quit_item = MenuItem::with_id(app, "quit", "Quit Moodverter", true, None::<&str>)?;

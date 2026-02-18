@@ -70,6 +70,7 @@ export interface BaselineEvaluationInput {
   goodThreshold?: number;
   relevantTargetsBySeed?: Record<string, string[]>;
   scopeLabel?: BaselineScopeLabel;
+  scopeId?: string;
   enforceRegressionGate?: boolean;
   requiredRelevantTargetsPerSeed?: number;
   enforceRelevantTargetMinimum?: boolean;
@@ -92,6 +93,7 @@ export interface BaselineEvaluationResult {
   analysisVersion: number;
   runAt: string;
   scopeLabel: BaselineScopeLabel;
+  scopeId: string;
   seedCount: number;
   seedWithCandidates: number;
   labeledSeedCount: number;

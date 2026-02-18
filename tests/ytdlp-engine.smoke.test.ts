@@ -15,6 +15,8 @@ import {
 } from '../src/services/youtube/search';
 import { installBrowserMocks, resetBrowserMocks } from './helpers/browser-mocks';
 
+const defaultFetch = globalThis.fetch;
+
 before(() => {
   installBrowserMocks();
 });
@@ -28,6 +30,11 @@ beforeEach(() => {
     maxAttempts: 3,
     baseBackoffMs: 1,
     timeoutMs: 250,
+  });
+  Object.defineProperty(globalThis, 'fetch', {
+    value: defaultFetch,
+    configurable: true,
+    writable: true,
   });
 });
 
@@ -136,6 +143,206 @@ test('searchVideos falls back to local playlist results when remote search fails
   assert.equal(results.length, 1);
   assert.equal(results[0].videoId, 'local-1');
   assert.equal(results[0].title, 'Lofi Focus Session');
+});
+
+test('searchVideos resolves direct YouTube URL via oEmbed fallback when yt-dlp path is unavailable', async () => {
+  let invokeCalls = 0;
+  setYtDlpSearchEngineOverride('tauri-v1');
+  __setInvokeClientForTests(async () => {
+    invokeCalls += 1;
+    return {
+      ok: false,
+      error: {
+        code: 'YTDLP_NETWORK',
+        message: 'offline',
+      },
+    };
+  });
+
+  Object.defineProperty(globalThis, 'fetch', {
+    value: async () => new Response(JSON.stringify({
+      title: 'Rick Astley - Never Gonna Give You Up',
+      author_name: 'RickAstleyVEVO',
+      thumbnail_url: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+    }), { status: 200 }),
+    configurable: true,
+    writable: true,
+  });
+
+  const results = await searchVideos('https://www.youtube.com/watch?v=dQw4w9WgXcQ', 5);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].videoId, 'dQw4w9WgXcQ');
+  assert.equal(results[0].title, 'Never Gonna Give You Up');
+  assert.equal(results[0].artist, 'Rick Astley');
+  assert.equal(invokeCalls, 0);
+});
+
+test('searchVideos uses public endpoint fallback when yt-dlp and local playlist both fail', async () => {
+  setYtDlpSearchEngineOverride('tauri-v1');
+  __setInvokeClientForTests(async () => ({
+    ok: false,
+    error: {
+      code: 'YTDLP_NETWORK',
+      message: 'offline',
+    },
+  }));
+
+  Object.defineProperty(globalThis, 'fetch', {
+    value: async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (!url.includes('/api/v1/search')) {
+        return new Response('', { status: 500 });
+      }
+      return new Response(JSON.stringify([
+        {
+          id: 'dQw4w9WgXcQ',
+          title: 'Rick Astley - Never Gonna Give You Up',
+          uploaderName: 'RickAstleyVEVO',
+          duration: 213,
+          views: 123456789,
+          thumbnail: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+          url: '/watch?v=dQw4w9WgXcQ',
+        },
+      ]), { status: 200 });
+    },
+    configurable: true,
+    writable: true,
+  });
+
+  const results = await searchVideos('rick astley', 5);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].videoId, 'dQw4w9WgXcQ');
+  assert.equal(results[0].artist, 'RickAstleyVEVO');
+});
+
+test('searchVideos opens ytdlp circuit on binary not found and skips remote invoke on next query', async () => {
+  setYtDlpSearchEngineOverride('tauri-v1');
+
+  let ytdlpInvokeCalls = 0;
+  __setInvokeClientForTests(async (command) => {
+    if (command === 'search_youtube_v1') {
+      ytdlpInvokeCalls += 1;
+    }
+    if (command === 'search_youtube_public_v1') {
+      return {
+        ok: true,
+        data: [{
+          id: 'dQw4w9WgXcQ',
+          title: 'Rick Astley - Never Gonna Give You Up',
+          uploader: 'RickAstleyVEVO',
+          duration: 213,
+          view_count: 123456789,
+          thumbnail: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+        }],
+      };
+    }
+    return {
+      ok: false,
+      error: {
+        code: 'YTDLP_BINARY_NOT_FOUND',
+        message: 'yt-dlp missing',
+      },
+    };
+  });
+
+  Object.defineProperty(globalThis, 'fetch', {
+    value: async () => new Response(JSON.stringify([
+      {
+        id: 'dQw4w9WgXcQ',
+        title: 'Rick Astley - Never Gonna Give You Up',
+        uploaderName: 'RickAstleyVEVO',
+        duration: 213,
+        views: 123456789,
+        thumbnail: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+        url: '/watch?v=dQw4w9WgXcQ',
+      },
+    ]), { status: 200 }),
+    configurable: true,
+    writable: true,
+  });
+
+  const first = await searchVideos('first query', 5);
+  assert.equal(first.length, 1);
+  assert.equal(ytdlpInvokeCalls, 1);
+
+  const second = await searchVideos('second query', 5);
+  assert.equal(second.length, 1);
+  assert.equal(ytdlpInvokeCalls, 1);
+});
+
+test('searchVideos uses tauri public fallback when yt-dlp query fails', async () => {
+  setYtDlpSearchEngineOverride('tauri-v1');
+  __setInvokeClientForTests(async (command) => {
+    if (command === 'search_youtube_v1') {
+      return {
+        ok: false,
+        error: {
+          code: 'YTDLP_NETWORK',
+          message: 'offline',
+        },
+      };
+    }
+    if (command === 'search_youtube_public_v1') {
+      return {
+        ok: true,
+        data: [{
+          id: 'dQw4w9WgXcQ',
+          title: 'Rick Astley - Never Gonna Give You Up',
+          uploader: 'RickAstleyVEVO',
+          duration: 213,
+          view_count: 123456789,
+          thumbnail: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+        }],
+      };
+    }
+    throw new Error(`Unexpected command: ${command}`);
+  });
+
+  const results = await searchVideos('murat dalkilic', 5);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].videoId, 'dQw4w9WgXcQ');
+});
+
+test('searchVideos uses tauri web fallback when yt-dlp and tauri public fallback fail', async () => {
+  setYtDlpSearchEngineOverride('tauri-v1');
+  __setInvokeClientForTests(async (command) => {
+    if (command === 'search_youtube_v1') {
+      return {
+        ok: false,
+        error: {
+          code: 'YTDLP_UNKNOWN',
+          message: 'unknown backend error',
+        },
+      };
+    }
+    if (command === 'search_youtube_public_v1') {
+      return {
+        ok: false,
+        error: {
+          code: 'YTDLP_NETWORK',
+          message: 'public fallback offline',
+        },
+      };
+    }
+    if (command === 'search_youtube_web_v1') {
+      return {
+        ok: true,
+        data: [{
+          id: '3JWTaaS7LdU',
+          title: 'Whitney Houston - I Will Always Love You',
+          uploader: 'WhitneyHoustonVEVO',
+          duration: 272,
+          view_count: 100,
+          thumbnail: 'https://i.ytimg.com/vi/3JWTaaS7LdU/hqdefault.jpg',
+        }],
+      };
+    }
+    throw new Error(`Unexpected command: ${command}`);
+  });
+
+  const results = await searchVideos('whitney houston', 5);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].videoId, '3JWTaaS7LdU');
 });
 
 test('env engine config is applied when runtime override is not set', async () => {

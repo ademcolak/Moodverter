@@ -166,7 +166,7 @@ export function isYtDlpError(error: unknown): error is YtDlpError {
 
 export function getYtDlpUserMessage(error: unknown): string {
   if (error instanceof YtDlpError) return error.userMessage;
-  return 'YouTube aramasi basarisiz oldu.';
+  return 'YouTube aramasi basarisiz oldu. YouTube linki yapistirarak eklemeyi dene.';
 }
 
 function getSearchPolicy(): YtDlpSearchPolicy {
@@ -217,6 +217,40 @@ async function invokeWithTimeout<T>(
 function toYtDlpError(error: unknown): YtDlpError {
   if (error instanceof YtDlpError) return error;
 
+  if (error && typeof error === 'object') {
+    const payload = error as {
+      code?: unknown;
+      message?: unknown;
+      details?: unknown;
+      error?: { code?: unknown; message?: unknown; details?: unknown } | null;
+    };
+    const nested = payload.error;
+    const payloadCode = typeof payload.code === 'string'
+      ? payload.code
+      : typeof nested?.code === 'string'
+        ? nested.code
+        : undefined;
+    const payloadMessage = typeof payload.message === 'string'
+      ? payload.message
+      : typeof nested?.message === 'string'
+        ? nested.message
+        : undefined;
+    const payloadDetails = typeof payload.details === 'string'
+      ? payload.details
+      : typeof nested?.details === 'string'
+        ? nested.details
+        : null;
+
+    const hasStructuredPayload = Boolean(payloadCode) || nested != null;
+    if (hasStructuredPayload) {
+      return new YtDlpError(
+        payloadMessage ?? 'yt-dlp call failed',
+        normalizeErrorCode(payloadCode),
+        payloadDetails
+      );
+    }
+  }
+
   const message = error instanceof Error ? error.message : String(error);
   if (
     message.includes('search_youtube_v1')
@@ -234,6 +268,12 @@ function toYtDlpError(error: unknown): YtDlpError {
     || message.toLowerCase().includes('timeout')
   ) {
     return new YtDlpError(message, 'YTDLP_NETWORK');
+  }
+  if (
+    message.toLowerCase().includes('semaphore')
+    || message.toLowerCase().includes('operation not permitted')
+  ) {
+    return new YtDlpError(message, 'YTDLP_SPAWN_FAILED');
   }
 
   const legacyCodeMatch = message.match(/^([A-Z0-9_]+):\s*(.+)$/);
@@ -361,4 +401,56 @@ export async function searchYouTube(query: string, limit = 10): Promise<SearchRe
   } catch (error) {
     throw toYtDlpError(error);
   }
+}
+
+export async function searchYouTubePublic(query: string, limit = 10): Promise<SearchResult[]> {
+  const boundedLimit = Math.max(1, Math.min(25, Math.floor(limit)));
+  const response = await invokeWithTimeout<InvokeResponse<SearchResult[]>>(
+    'search_youtube_public_v1',
+    { query, limit: boundedLimit },
+    2_000
+  );
+
+  if (typeof response !== 'object' || response === null || typeof response.ok !== 'boolean') {
+    throw new YtDlpError(
+      'Invalid response envelope from search_youtube_public_v1',
+      'YTDLP_CONTRACT_MISMATCH'
+    );
+  }
+  if (response.ok) {
+    return response.data ?? [];
+  }
+
+  const errorPayload = response.error;
+  throw new YtDlpError(
+    errorPayload?.message ?? 'public youtube search failed',
+    normalizeErrorCode(errorPayload?.code),
+    errorPayload?.details ?? null
+  );
+}
+
+export async function searchYouTubeWeb(query: string, limit = 10): Promise<SearchResult[]> {
+  const boundedLimit = Math.max(1, Math.min(25, Math.floor(limit)));
+  const response = await invokeWithTimeout<InvokeResponse<SearchResult[]>>(
+    'search_youtube_web_v1',
+    { query, limit: boundedLimit },
+    4_000
+  );
+
+  if (typeof response !== 'object' || response === null || typeof response.ok !== 'boolean') {
+    throw new YtDlpError(
+      'Invalid response envelope from search_youtube_web_v1',
+      'YTDLP_CONTRACT_MISMATCH'
+    );
+  }
+  if (response.ok) {
+    return response.data ?? [];
+  }
+
+  const errorPayload = response.error;
+  throw new YtDlpError(
+    errorPayload?.message ?? 'youtube web search failed',
+    normalizeErrorCode(errorPayload?.code),
+    errorPayload?.details ?? null
+  );
 }
