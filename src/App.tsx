@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LibrarySearch } from './components/LibrarySearch';
 import type { UnifiedTrack } from './types/provider';
 import type { YouTubeSearchResult } from './services/youtube/search';
@@ -6,31 +6,24 @@ import { clearYouTubeLocalData, searchResultToUnifiedTrack } from './services/yo
 import { getYouTubeProvider } from './services/providers/youtube';
 import { useProvider } from './hooks/useProvider';
 import {
-  addBenchmarkSeedTrackId,
-  addRelevantTarget,
   analyzeTrackWithHeuristicV1,
   buildEvaluationProgressReport,
   clearBenchmarkSeedTrackIds,
   clearTransitionData,
   clearManualListeningChecklistMap,
-  countCompletedManualListeningChecklistItems,
   computeMeanTransitionScore,
-  createEmptyManualListeningChecklist,
   findTransitionCandidates,
   getAnalysisState,
   getBaselineRunHistory,
   getBenchmarkSeedTrackIds,
   getManualListeningChecklistMap,
   getTransitionRelevanceMap,
-  removeBenchmarkSeedTrackId,
-  removeRelevantTarget,
+  setTransitionRelevanceMap,
   setBenchmarkSeedTrackIds,
-  updateManualListeningChecklist,
   type AnalysisState,
   type BaselineEvaluationResult,
   type BaselineRunArtifact,
   type EvaluationProgressReport,
-  type ManualListeningChecklistKey,
   type ManualListeningChecklistMap,
   type TransitionRelevanceMap,
   runBaselineEvaluation,
@@ -41,13 +34,7 @@ const ONE_TIME_DATA_RESET_KEY = 'moodverter_data_reset_20260209';
 type BaselineScope = 'selected' | 'all' | 'benchmark';
 const REQUIRED_RELEVANT_TARGETS_PER_SEED = 2;
 const TARGET_BENCHMARK_SEED_COUNT = 10;
-const MANUAL_LISTENING_ITEMS: Array<{ key: ManualListeningChecklistKey; label: string }> = [
-  { key: 'transitionSmooth', label: 'Transition anidir/kirik degil' },
-  { key: 'timingAligned', label: 'Timing bilincli hissettiriyor (A@t1 -> B@t2)' },
-  { key: 'loudnessAcceptable', label: 'Ses seviye sicrama kabul edilebilir' },
-  { key: 'eventContinuity', label: 'Event devamlıligi mantikli (vocal -> vocal vb.)' },
-  { key: 'replayWorth', label: 'En az bir aday tekrar dinlemeye deger' },
-];
+const AUTO_TRANSITION_LEAD_MS = 900;
 
 function formatTime(ms: number): string {
   if (!ms || ms < 0) return '0:00';
@@ -87,6 +74,18 @@ function formatAnalysisStatusLabel(status: 'pending' | 'ready' | 'failed' | 'mis
   return 'yok';
 }
 
+function formatTrackNames(trackIds: string[], trackMap: Map<string, UnifiedTrack>, limit = 6): string {
+  if (trackIds.length === 0) return '-';
+  const names = trackIds
+    .map((trackId) => trackMap.get(trackId)?.name ?? trackId)
+    .filter((name, index, arr) => arr.indexOf(name) === index);
+  const visibleNames = names.slice(0, limit);
+  const hiddenCount = Math.max(0, names.length - visibleNames.length);
+  return hiddenCount > 0
+    ? `${visibleNames.join(', ')} (+${hiddenCount})`
+    : visibleNames.join(', ');
+}
+
 function App() {
   const {
     provider,
@@ -108,6 +107,8 @@ function App() {
   const [seedTrackId, setSeedTrackId] = useState<string | null>(null);
   const [transitionCandidates, setTransitionCandidates] = useState<TransitionCandidate[]>([]);
   const [isTransitionLoading, setIsTransitionLoading] = useState(false);
+  const [isAutoLabeling, setIsAutoLabeling] = useState(false);
+  const [isAutoTransitioning, setIsAutoTransitioning] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
   const [pinnedSourceTimeMs, setPinnedSourceTimeMs] = useState<number | null>(null);
   const [sourceSliderTimeMs, setSourceSliderTimeMs] = useState(0);
@@ -119,6 +120,8 @@ function App() {
   const [benchmarkSeedTrackIds, setBenchmarkSeedTrackIdsState] = useState<string[]>([]);
   const [relevanceMap, setRelevanceMap] = useState<TransitionRelevanceMap>({});
   const [manualListeningChecklistMap, setManualListeningChecklistMap] = useState<ManualListeningChecklistMap>({});
+  const autoLabelSkippedSeedIdsRef = useRef<Set<string>>(new Set());
+  const autoTransitionedSourceTrackIdRef = useRef<string | null>(null);
 
   const refreshLibrary = useCallback(async () => {
     try {
@@ -182,11 +185,18 @@ function App() {
   }, [refreshAnalysisStates]);
 
   useEffect(() => {
-    if (seedTrackId) return;
-    if (playbackState?.currentTrack?.id) {
-      setSeedTrackId(playbackState.currentTrack.id);
+    const playingTrackId = playbackState?.currentTrack?.id ?? null;
+    if (playingTrackId) {
+      if (playingTrackId !== seedTrackId) {
+        setSeedTrackId(playingTrackId);
+      }
       return;
     }
+
+    if (seedTrackId && library.some((track) => track.id === seedTrackId)) {
+      return;
+    }
+
     if (library[0]?.id) {
       setSeedTrackId(library[0].id);
     }
@@ -224,6 +234,11 @@ function App() {
     if (!showTransitionPanel) return;
     void refreshTransitionCandidates();
   }, [refreshTransitionCandidates, showTransitionPanel]);
+
+  useEffect(() => {
+    if (!seedTrackId) return;
+    void refreshTransitionCandidates();
+  }, [refreshTransitionCandidates, seedTrackId]);
 
   useEffect(() => {
     setPinnedSourceTimeMs(null);
@@ -388,6 +403,43 @@ function App() {
     }
   }, [library, play, seek]);
 
+  useEffect(() => {
+    const currentTrackId = playbackState?.currentTrack?.id ?? null;
+    if (!currentTrackId || !playbackState?.isPlaying) return;
+    if (autoTransitionedSourceTrackIdRef.current === currentTrackId) return;
+
+    const candidate = transitionCandidates.find((item) => item.sourceTrackId === currentTrackId);
+    if (!candidate) return;
+
+    const triggerAtMs = clampTimeToTrackDuration(
+      pinnedSourceTimeMs ?? candidate.sourceTimeMs,
+      playbackState.durationMs ?? undefined
+    );
+    const transitionStartMs = Math.max(0, triggerAtMs - AUTO_TRANSITION_LEAD_MS);
+    const progressNowMs = playbackState.progressMs ?? 0;
+
+    if (progressNowMs < Math.max(0, transitionStartMs - 300)) return;
+    if (progressNowMs > triggerAtMs + 3000) {
+      autoTransitionedSourceTrackIdRef.current = currentTrackId;
+      return;
+    }
+
+    autoTransitionedSourceTrackIdRef.current = currentTrackId;
+    void (async () => {
+      setIsAutoTransitioning(true);
+      await handlePlayTransitionCandidate(candidate);
+      setIsAutoTransitioning(false);
+    })();
+  }, [
+    handlePlayTransitionCandidate,
+    pinnedSourceTimeMs,
+    playbackState?.currentTrack?.id,
+    playbackState?.durationMs,
+    playbackState?.isPlaying,
+    playbackState?.progressMs,
+    transitionCandidates,
+  ]);
+
   const currentTrack = playbackState?.currentTrack ?? null;
   const progressMs = playbackState?.progressMs ?? 0;
   const durationMs = playbackState?.durationMs ?? currentTrack?.durationMs ?? 0;
@@ -396,6 +448,10 @@ function App() {
   const sortedLibrary = useMemo(
     () => [...library].sort((a, b) => b.playCount - a.playCount),
     [library]
+  );
+  const sortedLibraryIdSignature = useMemo(
+    () => sortedLibrary.map((track) => track.id).join('|'),
+    [sortedLibrary]
   );
   const libraryTrackMap = useMemo(
     () => new Map(library.map((track) => [track.id, track])),
@@ -412,14 +468,6 @@ function App() {
   const selectedSeedRelevantTargets = useMemo(
     () => (seedTrackId ? relevanceMap[seedTrackId] ?? [] : []),
     [relevanceMap, seedTrackId]
-  );
-  const selectedSeedManualListeningChecklist = useMemo(() => {
-    if (!seedTrackId) return createEmptyManualListeningChecklist();
-    return manualListeningChecklistMap[seedTrackId] ?? createEmptyManualListeningChecklist();
-  }, [manualListeningChecklistMap, seedTrackId]);
-  const selectedSeedManualListeningCompletedCount = useMemo(
-    () => countCompletedManualListeningChecklistItems(selectedSeedManualListeningChecklist),
-    [selectedSeedManualListeningChecklist]
   );
   const selectedSeedLabelGatePassed = useMemo(
     () => !seedTrackId || selectedSeedRelevantTargets.length >= REQUIRED_RELEVANT_TARGETS_PER_SEED,
@@ -485,7 +533,7 @@ function App() {
 
     if (seedTrackIds.length === 0) {
       if (scope === 'selected') {
-        setUiError('Seed baseline icin once bir seed sec.');
+        setUiError('Seed baseline icin once bir sarki cal.');
       } else if (scope === 'benchmark') {
         setUiError('Benchmark baseline icin once benchmark seed setini olustur.');
       } else {
@@ -541,42 +589,93 @@ function App() {
     sortedLibrary,
   ]);
 
-  const handleToggleRelevantTarget = useCallback((seedId: string, targetId: string) => {
-    const existingTargets = relevanceMap[seedId] ?? [];
-    const hasTarget = existingTargets.includes(targetId);
-    const nextMap = hasTarget
-      ? removeRelevantTarget(seedId, targetId)
-      : addRelevantTarget(seedId, targetId);
-    setRelevanceMap(nextMap);
-  }, [relevanceMap]);
+  const extractAutoRelevantTargetIds = useCallback(async (seedId: string): Promise<string[]> => {
+    const candidates = await findTransitionCandidates({
+      trackId: seedId,
+      limit: 10,
+    });
+    return Array.from(new Set(candidates.map((candidate) => candidate.targetTrackId)))
+      .filter((targetTrackId) => targetTrackId !== seedId)
+      .slice(0, REQUIRED_RELEVANT_TARGETS_PER_SEED);
+  }, []);
 
-  const handleToggleManualListeningItem = useCallback((itemKey: ManualListeningChecklistKey) => {
-    if (!seedTrackId) return;
+  const ensureTrackAnalyzed = useCallback(async (trackId: string): Promise<void> => {
+    if (analysisStates[trackId]?.status === 'ready') return;
+    const track = libraryTrackMap.get(trackId);
+    if (!track) return;
+    await analyzeTrackWithHeuristicV1({
+      id: track.id,
+      durationMs: track.durationMs,
+      name: track.name,
+      artist: track.artist,
+    });
+  }, [analysisStates, libraryTrackMap]);
 
-    const nextValue = !selectedSeedManualListeningChecklist[itemKey];
-    const nextMap = updateManualListeningChecklist(
-      seedTrackId,
-      { [itemKey]: nextValue } as Partial<Record<ManualListeningChecklistKey, boolean>>
+  useEffect(() => {
+    autoLabelSkippedSeedIdsRef.current.clear();
+  }, [sortedLibraryIdSignature]);
+
+  useEffect(() => {
+    if (sortedLibrary.length < 2 || isAutoLabeling) return;
+    const candidateSeedIds = allScopeSeedsBelowRelevantMinimum.filter(
+      (seedId) => !autoLabelSkippedSeedIdsRef.current.has(seedId)
     );
-    setManualListeningChecklistMap(nextMap);
-  }, [seedTrackId, selectedSeedManualListeningChecklist]);
+    if (candidateSeedIds.length === 0) return;
 
-  const handleResetManualListeningChecklistForSeed = useCallback(() => {
-    if (!seedTrackId) return;
+    const run = async () => {
+      setIsAutoLabeling(true);
+      try {
+        let nextMap = getTransitionRelevanceMap();
+        let hasChanges = false;
 
-    const resetPatch = Object.fromEntries(
-      MANUAL_LISTENING_ITEMS.map(({ key }) => [key, false])
-    ) as Partial<Record<ManualListeningChecklistKey, boolean>>;
-    const nextMap = updateManualListeningChecklist(seedTrackId, resetPatch);
-    setManualListeningChecklistMap(nextMap);
-  }, [seedTrackId]);
+        for (const seedId of candidateSeedIds) {
+          await ensureTrackAnalyzed(seedId);
+          const autoTargets = await extractAutoRelevantTargetIds(seedId);
+          if (autoTargets.length === 0) {
+            autoLabelSkippedSeedIdsRef.current.add(seedId);
+            continue;
+          }
 
-  const handleToggleBenchmarkSeed = useCallback((trackId: string) => {
-    const nextIds = benchmarkSeedTrackIds.includes(trackId)
-      ? removeBenchmarkSeedTrackId(trackId)
-      : addBenchmarkSeedTrackId(trackId);
-    setBenchmarkSeedTrackIdsState(nextIds);
-  }, [benchmarkSeedTrackIds]);
+          const previousTargets = nextMap[seedId] ?? [];
+          const mergedTargets = Array.from(new Set([...previousTargets, ...autoTargets]));
+          if (mergedTargets.length !== previousTargets.length) {
+            nextMap = { ...nextMap, [seedId]: mergedTargets };
+            hasChanges = true;
+          }
+
+          if (mergedTargets.length >= REQUIRED_RELEVANT_TARGETS_PER_SEED) {
+            autoLabelSkippedSeedIdsRef.current.delete(seedId);
+          } else {
+            autoLabelSkippedSeedIdsRef.current.add(seedId);
+          }
+        }
+
+        if (!hasChanges) return;
+        const persistedMap = setTransitionRelevanceMap(nextMap);
+        setRelevanceMap(persistedMap);
+        refreshAnalysisStates();
+        if (showTransitionPanel && seedTrackId) {
+          await refreshTransitionCandidates();
+        }
+      } catch (error) {
+        console.error('Background auto label failed:', error);
+      } finally {
+        setIsAutoLabeling(false);
+      }
+    };
+
+    void run();
+  }, [
+    allScopeSeedsBelowRelevantMinimum,
+    ensureTrackAnalyzed,
+    extractAutoRelevantTargetIds,
+    isAutoLabeling,
+    refreshAnalysisStates,
+    refreshTransitionCandidates,
+    seedTrackId,
+    showTransitionPanel,
+    sortedLibrary.length,
+  ]);
 
   const handleGenerateBenchmarkSeedSet = useCallback(() => {
     const candidateSeedIds = sortedLibrary
@@ -600,25 +699,6 @@ function App() {
     setBenchmarkSeedTrackIdsState([]);
   }, []);
 
-  const handleJumpToNextMissingSeed = useCallback(() => {
-    const priorityOrder = [
-      ...benchmarkProgressReport.seedsNeedingLabels,
-      ...benchmarkProgressReport.seedsNeedingManualChecklist,
-      ...benchmarkProgressReport.seedsMissingAnalysis,
-      ...evaluationProgressReport.seedsNeedingLabels,
-      ...evaluationProgressReport.seedsNeedingManualChecklist,
-      ...evaluationProgressReport.seedsMissingAnalysis,
-    ];
-    const nextSeedId = Array.from(new Set(priorityOrder)).find((trackId) => libraryTrackMap.has(trackId));
-    if (!nextSeedId) {
-      setUiError('Eksik seed bulunamadi. Tum gate durumlari hazir gorunuyor.');
-      return;
-    }
-
-    setSeedTrackId(nextSeedId);
-    setUiError(null);
-  }, [benchmarkProgressReport, evaluationProgressReport, libraryTrackMap]);
-
   const handlePinSourceFromSlider = useCallback(() => {
     if (!seedTrackId) return;
     const clamped = clampTimeToTrackDuration(sourceSliderTimeMs, selectedSeedTrack?.durationMs);
@@ -628,7 +708,7 @@ function App() {
   const handlePinSourceFromCurrentPosition = useCallback(() => {
     if (!seedTrackId) return;
     if (playbackState?.currentTrack?.id !== seedTrackId) {
-      setUiError('Su anki konumu pinlemek icin once seed sarkiyi cal.');
+      setUiError('Su anki konumu pinlemek icin once bir sarki cal.');
       return;
     }
 
@@ -700,7 +780,7 @@ function App() {
         </button>
       </div>
 
-      <div className="flex-1 overflow-hidden p-4 space-y-4">
+      <div className="flex-1 min-h-0 overflow-hidden p-4 flex flex-col gap-4">
         <section className="bg-[var(--color-surface)] border border-white/10 p-3">
           <h2 className="text-xs uppercase tracking-wide text-[var(--color-text-secondary)] mb-2">
             YouTube Linki Ekle ve Cal
@@ -734,7 +814,7 @@ function App() {
           </div>
         </section>
 
-        <section className="bg-[var(--color-surface)] border border-white/10 p-3 flex-1 overflow-hidden flex flex-col">
+        <section className="bg-[var(--color-surface)] border border-white/10 p-3 flex-1 min-h-0 overflow-hidden flex flex-col">
           <div className="flex items-center justify-between mb-2 gap-2">
             <h2 className="text-xs uppercase tracking-wide text-[var(--color-text-secondary)]">
               Kutuphane + Transition
@@ -758,21 +838,11 @@ function App() {
           </div>
 
           {showTransitionPanel ? (
-            <div className="border border-white/10 bg-[var(--color-background)] p-2 mb-2 space-y-2">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] text-[var(--color-text-secondary)] shrink-0">Seed</span>
-                <select
-                  value={seedTrackId ?? ''}
-                  onChange={(event) => setSeedTrackId(event.target.value || null)}
-                  className="flex-1 bg-white/5 border border-white/10 text-xs text-[var(--color-text-primary)] px-2 py-1"
-                >
-                  <option value="">Seciniz</option>
-                  {sortedLibrary.map((track) => (
-                    <option key={track.id} value={track.id}>
-                      {track.name} - {track.artist}
-                    </option>
-                  ))}
-                </select>
+            <div className="border border-white/10 bg-[var(--color-background)] p-2 mb-2 space-y-2 h-56 min-h-40 max-h-[72vh] resize-y overflow-y-auto shrink-0">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[10px] text-[var(--color-text-secondary)] truncate">
+                  Aktif Kaynak: {selectedSeedTrack ? `${selectedSeedTrack.name} - ${selectedSeedTrack.artist}` : 'calan sarki bekleniyor'}
+                </div>
                 <button
                   onClick={() => {
                     if (!seedTrackId) return;
@@ -781,7 +851,7 @@ function App() {
                   disabled={!seedTrackId}
                   className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
                 >
-                  Seed Analiz
+                  Kaynak Analiz
                 </button>
               </div>
 
@@ -789,39 +859,25 @@ function App() {
                 MeanScore@{transitionCandidates.length}: {formatPercent(meanCandidateScore)}
               </div>
               <div className="text-[10px] text-[var(--color-text-secondary)]">
-                Labelled Target (Seed): {selectedSeedRelevantTargets.length}/{REQUIRED_RELEVANT_TARGETS_PER_SEED}
+                Oto Gecis: {isAutoTransitioning ? 'gecis yapiliyor...' : 'aktif'}
               </div>
-              {!selectedSeedLabelGatePassed && seedTrackId && (
-                <div className="text-[10px] text-amber-400">
-                  Seed gate: baseline icin bu seed'e en az {REQUIRED_RELEVANT_TARGETS_PER_SEED} relevant hedef etiketle.
-                </div>
-              )}
-              {!allScopeLabelGatePassed && (
-                <div className="text-[10px] text-amber-400">
-                  Tum Seed gate: {allScopeSeedsBelowRelevantMinimum.length} seed etiketi yetersiz.
-                </div>
-              )}
+              <div className="text-[10px] text-[var(--color-text-secondary)]">
+                Label Durumu: {selectedSeedRelevantTargets.length}/{REQUIRED_RELEVANT_TARGETS_PER_SEED}
+              </div>
               <div className="border border-white/10 bg-white/5 px-2 py-1 space-y-1">
                 <div className="text-[10px] text-[var(--color-text-secondary)]">
                   Eval Progress: Ready {evaluationProgressReport.readySeedCount}/{evaluationProgressReport.totalSeedCount}
                   {' | '}
                   Label Gate {evaluationProgressReport.labelGatePassedSeedCount}/{evaluationProgressReport.totalSeedCount}
-                  {' | '}
-                  Checklist Gate {evaluationProgressReport.checklistGatePassedSeedCount}/{evaluationProgressReport.totalSeedCount}
                 </div>
                 {evaluationProgressReport.seedsNeedingLabels.length > 0 && (
                   <div className="text-[10px] text-amber-400 truncate">
-                    Label eksigi: {evaluationProgressReport.seedsNeedingLabels.join(', ')}
-                  </div>
-                )}
-                {evaluationProgressReport.seedsNeedingManualChecklist.length > 0 && (
-                  <div className="text-[10px] text-amber-400 truncate">
-                    Checklist eksigi: {evaluationProgressReport.seedsNeedingManualChecklist.join(', ')}
+                    Label eksigi: {formatTrackNames(evaluationProgressReport.seedsNeedingLabels, libraryTrackMap)}
                   </div>
                 )}
                 {evaluationProgressReport.seedsMissingAnalysis.length > 0 && (
                   <div className="text-[10px] text-amber-400 truncate">
-                    Analiz eksigi: {evaluationProgressReport.seedsMissingAnalysis.join(', ')}
+                    Analiz eksigi: {formatTrackNames(evaluationProgressReport.seedsMissingAnalysis, libraryTrackMap)}
                   </div>
                 )}
               </div>
@@ -833,7 +889,7 @@ function App() {
                 </div>
                 {benchmarkSeedsBelowRelevantMinimum.length > 0 && (
                   <div className="text-[10px] text-amber-400 truncate">
-                    Benchmark label eksigi: {benchmarkSeedsBelowRelevantMinimum.join(', ')}
+                    Benchmark label eksigi: {formatTrackNames(benchmarkSeedsBelowRelevantMinimum, libraryTrackMap)}
                   </div>
                 )}
                 <div className="flex items-center gap-2">
@@ -852,56 +908,10 @@ function App() {
                   >
                     Benchmark Temizle
                   </button>
-                  <button
-                    onClick={handleJumpToNextMissingSeed}
-                    className="px-2 py-0.5 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                    title="Label/checklist/analiz eksigi olan bir sonraki seed'e git"
-                  >
-                    Sonraki Eksik Seed
-                  </button>
                 </div>
               </div>
-              <div className="border border-white/10 bg-white/5 px-2 py-1 space-y-1">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-[10px] text-[var(--color-text-secondary)]">
-                    Manual Listening: {selectedSeedManualListeningCompletedCount}/{MANUAL_LISTENING_ITEMS.length}
-                  </div>
-                  <button
-                    onClick={handleResetManualListeningChecklistForSeed}
-                    disabled={!seedTrackId || selectedSeedManualListeningCompletedCount === 0}
-                    className="px-2 py-0.5 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
-                    title="Bu seed icin manuel checklist isaretlerini sifirla"
-                  >
-                    Sifirla
-                  </button>
-                </div>
-                {!seedTrackId ? (
-                  <div className="text-[10px] text-[var(--color-text-secondary)]">
-                    Checklist icin once bir seed sec.
-                  </div>
-                ) : (
-                  <div className="space-y-1">
-                    {MANUAL_LISTENING_ITEMS.map((item) => (
-                      <label key={item.key} className="flex items-center gap-2 text-[10px] text-[var(--color-text-secondary)]">
-                        <input
-                          type="checkbox"
-                          checked={selectedSeedManualListeningChecklist[item.key]}
-                          onChange={() => handleToggleManualListeningItem(item.key)}
-                          className="accent-[var(--color-primary)]"
-                        />
-                        <span>{item.label}</span>
-                      </label>
-                    ))}
-                {selectedSeedManualListeningCompletedCount < MANUAL_LISTENING_ITEMS.length && (
-                  <div className="text-[10px] text-amber-400">
-                    Manuel dinleme checklisti henuz tamamlanmadi.
-                  </div>
-                )}
-                <div className="text-[10px] text-[var(--color-text-secondary)]">
-                  Analiz durumu: {formatAnalysisStatusLabel(analysisStates[seedTrackId ?? '']?.status ?? 'missing')}
-                </div>
-              </div>
-            )}
+              <div className="text-[10px] text-[var(--color-text-secondary)] border border-white/10 bg-white/5 px-2 py-1">
+                Analiz durumu: {formatAnalysisStatusLabel(analysisStates[seedTrackId ?? '']?.status ?? 'missing')}
               </div>
               <div className="border border-white/10 bg-white/5 px-2 py-1 space-y-1">
                 <div className="text-[10px] text-[var(--color-text-secondary)]">
@@ -1023,13 +1033,10 @@ function App() {
               ) : transitionError ? (
                 <div className="text-xs text-amber-400">{transitionError}</div>
               ) : (
-                <div className="space-y-1 max-h-24 overflow-y-auto">
+                <div className="space-y-1 max-h-56 overflow-y-auto">
                   {transitionCandidates.map((candidate, index) => {
                     const sourceTrack = libraryTrackMap.get(candidate.sourceTrackId);
                     const targetTrack = libraryTrackMap.get(candidate.targetTrackId);
-                    const candidateIsRelevant = seedTrackId
-                      ? (relevanceMap[seedTrackId] ?? []).includes(candidate.targetTrackId)
-                      : false;
                     const sourceTimeMs = clampTimeToTrackDuration(
                       candidate.sourceTimeMs,
                       sourceTrack?.durationMs
@@ -1050,27 +1057,16 @@ function App() {
                           <button
                             onClick={() => void handlePlayTransitionCandidate(candidate)}
                             className="px-2 py-0.5 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                            title="Bu adayi cal"
+                            title="Bu adaya hemen gec"
                           >
-                            Cal
+                            Simdi Gec
                           </button>
                           <button
                             onClick={() => void handlePreviewTransitionAB(candidate)}
                             className="px-2 py-0.5 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
                             title="A@t1 -> B@t2 seklinde kisa onizleme"
                           >
-                            A/B
-                          </button>
-                          <button
-                            onClick={() => {
-                              if (!seedTrackId) return;
-                              handleToggleRelevantTarget(seedTrackId, candidate.targetTrackId);
-                            }}
-                            disabled={!seedTrackId}
-                            className="px-2 py-0.5 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
-                            title="Bu hedefi seed icin relevant olarak isaretle"
-                          >
-                            {candidateIsRelevant ? 'Unlabel' : 'Relevant'}
+                            Onizle
                           </button>
                         </div>
                         <div className="text-[var(--color-text-secondary)] truncate">
@@ -1093,16 +1089,22 @@ function App() {
               Henuz sarki eklenmedi.
             </div>
           ) : (
-            <div className="flex-1 overflow-y-auto space-y-1">
+            <div className="flex-1 min-h-0 overflow-y-auto space-y-1">
               {sortedLibrary.map((track) => (
-                <div key={track.id} className="flex items-center gap-2 p-2 bg-white/5 border border-transparent hover:border-white/10">
-                  <button
-                    onClick={() => void handlePlayFromLibrary(track.id)}
-                    className="w-8 h-8 bg-[var(--color-primary)] text-white text-xs hover:bg-[var(--color-primary-dark)] shrink-0"
-                    title="Cal"
-                  >
-                    ▶
-                  </button>
+                <div
+                  key={track.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => void handlePlayFromLibrary(track.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      void handlePlayFromLibrary(track.id);
+                    }
+                  }}
+                  className="flex items-center gap-2 p-2 bg-white/5 border border-transparent hover:border-white/10 cursor-pointer"
+                  title="Sarkiyi oynat"
+                >
                   <div className="min-w-0 flex-1">
                     <div className="text-sm text-[var(--color-text-primary)] truncate">{track.name}</div>
                     <div className="text-xs text-[var(--color-text-secondary)] truncate">
@@ -1110,32 +1112,14 @@ function App() {
                     </div>
                   </div>
                   <button
-                    onClick={() => setSeedTrackId(track.id)}
-                    className="px-2 py-1 text-xs border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                    title="Seed yap"
-                  >
-                    Seed
-                  </button>
-                  <button
-                    onClick={() => handleToggleBenchmarkSeed(track.id)}
-                    className="px-2 py-1 text-xs border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                    title="Benchmark sete ekle/cikar"
-                  >
-                    {benchmarkSeedTrackIds.includes(track.id) ? 'Bench-' : 'Bench+'}
-                  </button>
-                  <button
-                    onClick={() => void handleAnalyzeTrack(track.id)}
-                    className="px-2 py-1 text-xs border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                    title="Analiz et"
-                  >
-                    Analiz
-                  </button>
-                  <button
-                    onClick={() => void handleRemoveFromLibrary(track.id)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void handleRemoveFromLibrary(track.id);
+                    }}
                     className="px-2 py-1 text-xs text-[var(--color-text-secondary)] border border-white/10 hover:text-red-400 hover:border-red-500/50"
-                    title="Kaldir"
+                    title="Sarkiyi kaldir"
                   >
-                    Sil
+                    Kaldir
                   </button>
                 </div>
               ))}
@@ -1171,12 +1155,12 @@ function App() {
             <button onClick={() => void previous()} className="px-2 py-1 border border-white/10 text-[var(--color-text-primary)] hover:bg-white/5">
               ◀◀
             </button>
-            <button
-              onClick={() => void handlePlayPause()}
-              className="px-3 py-1 bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-dark)]"
-            >
-              {playbackState?.isPlaying ? 'Duraklat' : 'Cal'}
-            </button>
+              <button
+                onClick={() => void handlePlayPause()}
+                className="px-3 py-1 bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-dark)]"
+              >
+                {playbackState?.isPlaying ? 'Duraklat' : 'Oynat'}
+              </button>
             <button onClick={() => void skip()} className="px-2 py-1 border border-white/10 text-[var(--color-text-primary)] hover:bg-white/5">
               ▶▶
             </button>

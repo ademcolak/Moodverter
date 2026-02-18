@@ -10,6 +10,7 @@ class YouTubeProvider {
         this.name = 'youtube';
         this.player = null;
         this.isInitialized = false;
+        this.initPromise = null;
         this.volume = 100;
         this.currentTrack = null;
         this.library = [];
@@ -61,21 +62,33 @@ class YouTubeProvider {
     async ensureInitialized() {
         if (this.isInitialized && this.player)
             return;
-        let container = document.getElementById('youtube-player');
-        if (!container) {
-            container = document.createElement('div');
-            container.id = 'youtube-player';
-            container.style.position = 'absolute';
-            container.style.width = '1px';
-            container.style.height = '1px';
-            container.style.opacity = '0';
-            container.style.pointerEvents = 'none';
-            document.body.appendChild(container);
+        if (this.initPromise) {
+            await this.initPromise;
+            return;
         }
-        this.player = (0, player_1.getYouTubePlayer)('youtube-player');
-        await this.player.initialize();
-        this.player.onStateChange((state) => this.onPlayerStateChange(state));
-        this.isInitialized = true;
+        this.initPromise = (async () => {
+            let container = document.getElementById('youtube-player');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'youtube-player';
+                container.style.position = 'absolute';
+                container.style.width = '1px';
+                container.style.height = '1px';
+                container.style.opacity = '0';
+                container.style.pointerEvents = 'none';
+                document.body.appendChild(container);
+            }
+            this.player = (0, player_1.getYouTubePlayer)('youtube-player');
+            await this.player.initialize();
+            this.player.onStateChange((state) => this.onPlayerStateChange(state));
+            this.isInitialized = true;
+        })();
+        try {
+            await this.initPromise;
+        }
+        finally {
+            this.initPromise = null;
+        }
     }
     playlistTrackToUnified(track) {
         return {
@@ -111,6 +124,7 @@ class YouTubeProvider {
         (0, player_1.destroyYouTubePlayer)();
         this.player = null;
         this.isInitialized = false;
+        this.initPromise = null;
         this.currentTrack = null;
         this.previousSnapshot = null;
         this.lastEndedSignature = null;

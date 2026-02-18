@@ -81,36 +81,90 @@ interface YouTubePlayerInstance {
 
 let apiLoaded = false;
 let apiLoading = false;
-const apiLoadPromises: Array<() => void> = [];
+const apiLoadWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
+
+function flushApiWaitersSuccess(): void {
+  const waiters = [...apiLoadWaiters];
+  apiLoadWaiters.length = 0;
+  waiters.forEach(({ resolve }) => resolve());
+}
+
+function flushApiWaitersError(error: Error): void {
+  const waiters = [...apiLoadWaiters];
+  apiLoadWaiters.length = 0;
+  waiters.forEach(({ reject }) => reject(error));
+}
 
 // Load YouTube IFrame API script
 function loadYouTubeAPI(): Promise<void> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    if (window.YT?.Player) {
+      apiLoaded = true;
+      apiLoading = false;
+      resolve();
+      return;
+    }
+
     if (apiLoaded) {
       resolve();
       return;
     }
 
     if (apiLoading) {
-      apiLoadPromises.push(resolve);
+      apiLoadWaiters.push({ resolve, reject });
       return;
     }
 
     apiLoading = true;
+    apiLoadWaiters.push({ resolve, reject });
+    let settled = false;
+
+    const succeed = () => {
+      if (settled) return;
+      settled = true;
+      apiLoaded = true;
+      apiLoading = false;
+      flushApiWaitersSuccess();
+    };
+
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      apiLoading = false;
+      flushApiWaitersError(error);
+    };
+
+    const timeoutId = window.setTimeout(() => {
+      fail(new Error('YouTube IFrame API load timeout'));
+    }, 12000);
 
     // Set up callback before loading script
     window.onYouTubeIframeAPIReady = () => {
-      apiLoaded = true;
-      apiLoading = false;
-      resolve();
-      apiLoadPromises.forEach(cb => cb());
-      apiLoadPromises.length = 0;
+      window.clearTimeout(timeoutId);
+      succeed();
     };
+
+    const existingScript = document.querySelector<HTMLScriptElement>('script[src="https://www.youtube.com/iframe_api"]');
+    if (existingScript) {
+      existingScript.addEventListener(
+        'error',
+        () => {
+          window.clearTimeout(timeoutId);
+          fail(new Error('YouTube IFrame API script failed to load'));
+        },
+        { once: true }
+      );
+      return;
+    }
 
     // Load the script
     const script = document.createElement('script');
     script.src = 'https://www.youtube.com/iframe_api';
     script.async = true;
+    script.onerror = () => {
+      window.clearTimeout(timeoutId);
+      fail(new Error('YouTube IFrame API script failed to load'));
+    };
     document.head.appendChild(script);
   });
 }
@@ -139,6 +193,33 @@ export class YouTubePlayer {
     await loadYouTubeAPI();
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const settleResolve = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeoutId);
+        resolve();
+      };
+      const settleReject = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeoutId);
+        this.stopPolling();
+        if (this.player) {
+          try {
+            this.player.destroy();
+          } catch {
+            // best-effort cleanup
+          }
+          this.player = null;
+        }
+        this.state.isReady = false;
+        reject(error);
+      };
+      const timeoutId = window.setTimeout(() => {
+        settleReject(new Error('YouTube player initialization timeout'));
+      }, 12000);
+
       try {
         this.player = new window.YT.Player(this.containerId, {
           height: '0',
@@ -160,18 +241,21 @@ export class YouTubePlayer {
               this.state.volume = this.player?.getVolume() ?? 100;
               this.notifyStateChange();
               this.startPolling();
-              resolve();
+              settleResolve();
             },
             onStateChange: (event) => {
               this.handleStateChange(event.data);
             },
             onError: (event) => {
               this.handleError(event.data);
+              if (!this.state.isReady) {
+                settleReject(new Error(this.state.error ?? `YouTube player error: ${event.data}`));
+              }
             },
           },
         });
       } catch (error) {
-        reject(error);
+        settleReject(error instanceof Error ? error : new Error('YouTube player init failed'));
       }
     });
   }

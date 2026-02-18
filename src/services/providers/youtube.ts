@@ -27,6 +27,7 @@ export class YouTubeProvider implements MusicProvider {
 
   private player: YouTubePlayer | null = null;
   private isInitialized = false;
+  private initPromise: Promise<void> | null = null;
   private volume = 100;
   private currentTrack: UnifiedTrack | null = null;
   private library: UnifiedTrack[] = [];
@@ -89,23 +90,35 @@ export class YouTubeProvider implements MusicProvider {
 
   private async ensureInitialized(): Promise<void> {
     if (this.isInitialized && this.player) return;
-
-    let container = document.getElementById('youtube-player');
-    if (!container) {
-      container = document.createElement('div');
-      container.id = 'youtube-player';
-      container.style.position = 'absolute';
-      container.style.width = '1px';
-      container.style.height = '1px';
-      container.style.opacity = '0';
-      container.style.pointerEvents = 'none';
-      document.body.appendChild(container);
+    if (this.initPromise) {
+      await this.initPromise;
+      return;
     }
 
-    this.player = getYouTubePlayer('youtube-player');
-    await this.player.initialize();
-    this.player.onStateChange((state) => this.onPlayerStateChange(state));
-    this.isInitialized = true;
+    this.initPromise = (async () => {
+      let container = document.getElementById('youtube-player');
+      if (!container) {
+        container = document.createElement('div');
+        container.id = 'youtube-player';
+        container.style.position = 'absolute';
+        container.style.width = '1px';
+        container.style.height = '1px';
+        container.style.opacity = '0';
+        container.style.pointerEvents = 'none';
+        document.body.appendChild(container);
+      }
+
+      this.player = getYouTubePlayer('youtube-player');
+      await this.player.initialize();
+      this.player.onStateChange((state) => this.onPlayerStateChange(state));
+      this.isInitialized = true;
+    })();
+
+    try {
+      await this.initPromise;
+    } finally {
+      this.initPromise = null;
+    }
   }
 
   private playlistTrackToUnified(track: PlaylistTrack): UnifiedTrack {
@@ -146,6 +159,7 @@ export class YouTubeProvider implements MusicProvider {
     destroyYouTubePlayer();
     this.player = null;
     this.isInitialized = false;
+    this.initPromise = null;
     this.currentTrack = null;
     this.previousSnapshot = null;
     this.lastEndedSignature = null;

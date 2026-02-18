@@ -44,6 +44,27 @@ export function getTransitionRelevanceMap(): TransitionRelevanceMap {
   return readMapFromStorage();
 }
 
+export function setTransitionRelevanceMap(map: TransitionRelevanceMap): TransitionRelevanceMap {
+  const normalized: TransitionRelevanceMap = Object.fromEntries(
+    Object.entries(map)
+      .map(([seedTrackId, targetTrackIds]) => {
+        const normalizedSeedTrackId = normalizeId(seedTrackId);
+        const normalizedTargetTrackIds = Array.from(
+          new Set(
+            (Array.isArray(targetTrackIds) ? targetTrackIds : [])
+              .map((targetTrackId) => (typeof targetTrackId === 'string' ? normalizeId(targetTrackId) : ''))
+              .filter((targetTrackId) => targetTrackId.length > 0)
+          )
+        );
+        return [normalizedSeedTrackId, normalizedTargetTrackIds] as const;
+      })
+      .filter(([seedTrackId, targetTrackIds]) => seedTrackId.length > 0 && targetTrackIds.length > 0)
+  );
+
+  writeMapToStorage(normalized);
+  return normalized;
+}
+
 export function addRelevantTarget(seedTrackId: string, targetTrackId: string): TransitionRelevanceMap {
   const normalizedSeedTrackId = normalizeId(seedTrackId);
   const normalizedTargetTrackId = normalizeId(targetTrackId);

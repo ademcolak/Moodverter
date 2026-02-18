@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getTransitionRelevanceMap = getTransitionRelevanceMap;
+exports.setTransitionRelevanceMap = setTransitionRelevanceMap;
 exports.addRelevantTarget = addRelevantTarget;
 exports.removeRelevantTarget = removeRelevantTarget;
 exports.clearTransitionRelevanceMap = clearTransitionRelevanceMap;
@@ -38,6 +39,19 @@ function writeMapToStorage(map) {
 }
 function getTransitionRelevanceMap() {
     return readMapFromStorage();
+}
+function setTransitionRelevanceMap(map) {
+    const normalized = Object.fromEntries(Object.entries(map)
+        .map(([seedTrackId, targetTrackIds]) => {
+        const normalizedSeedTrackId = normalizeId(seedTrackId);
+        const normalizedTargetTrackIds = Array.from(new Set((Array.isArray(targetTrackIds) ? targetTrackIds : [])
+            .map((targetTrackId) => (typeof targetTrackId === 'string' ? normalizeId(targetTrackId) : ''))
+            .filter((targetTrackId) => targetTrackId.length > 0)));
+        return [normalizedSeedTrackId, normalizedTargetTrackIds];
+    })
+        .filter(([seedTrackId, targetTrackIds]) => seedTrackId.length > 0 && targetTrackIds.length > 0));
+    writeMapToStorage(normalized);
+    return normalized;
 }
 function addRelevantTarget(seedTrackId, targetTrackId) {
     const normalizedSeedTrackId = normalizeId(seedTrackId);
