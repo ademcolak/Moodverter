@@ -63,5 +63,6 @@ test('buildEvaluationProgressReport aggregates readiness and gate gaps', () => {
 
   const readyRow = report.rows.find((row) => row.seedTrackId === 'seed-a');
   assert.ok(readyRow);
+  if (!readyRow) throw new Error('ready row is missing');
   assert.equal(readyRow.readyForBaseline, true);
 });

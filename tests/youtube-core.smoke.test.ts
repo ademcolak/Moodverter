@@ -93,6 +93,7 @@ test('addTrackFromUrl adds a YouTube track into local library', async () => {
   const added = await provider.addTrackFromUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
 
   assert.ok(added);
+  if (!added) throw new Error('track was not added');
   assert.equal(added.id, 'dQw4w9WgXcQ');
 
   const library = await provider.getLibrary();

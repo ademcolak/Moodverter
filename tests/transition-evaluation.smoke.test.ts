@@ -167,6 +167,7 @@ test('hydrateFromStorage requeues stale analysis version for automatic reanalysi
   const nodes = getAnalyzedNodes(trackId);
 
   assert.ok(state);
+  if (!state) throw new Error('analysis state is missing');
   assert.equal(state.status, 'pending');
   assert.equal(state.version, 2);
   assert.deepEqual(queue, [trackId]);
