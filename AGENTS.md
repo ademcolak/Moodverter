@@ -10,8 +10,10 @@ Ana hedef: `A@t1 -> B@t2` gecis kalitesini olculebilir sekilde iyilestirmek.
 - Transition paneli adaylari bu kaynaga gore hesaplar.
 - Source moment pinleme (`Pinle`, `Simdiki Ani Al`, `Oto`) opsiyoneldir.
 - Aday hedef icin warmup/prefetch metadata hazirligi otomatik yapilir.
+- Otomatik gecis oncesi handoff pre-duck (pseudo-crossfade) uygulanir.
 - Otomatik transition tetigi uygun anda hedef sarkiya gecer.
 - Auto transition lead suresi son gecis gecikmesine gore dinamik ayarlanir.
+- Benchmark seed set aktifken `ready + label gate` kosuluyla otomatik korunur.
 
 ## Hızlı Komutlar
 - `pnpm run qa:auto` (onerilen tek komut)
@@ -48,8 +50,10 @@ Ana hedef: `A@t1 -> B@t2` gecis kalitesini olculebilir sekilde iyilestirmek.
 - Transition hedefi icin warmup/prefetch metadata hazirligi eklendi.
 - Gecis aninda loudness envelope + otomatik compensation eklendi.
 - Baseline ozeti kisaltildi ve `Bottom-3` icin tuning action onerileri eklendi.
+- Benchmark run'larinda tuning action dogrulama ozeti/gate eklendi.
+- Benchmark seed seti icin otomatik kalite koruma (>=10 uygun seed hedefi) eklendi.
 
 ## Sonraki Oncelikler
 - Benchmark seed kapsamini buyutmek (en az 10 labeled seedin surekli korunmasi).
-- Bottom-3 tuning action'lariyla agirlik tuning denemelerini run bazli karsilastirmak.
-- Tek-player limitinde algilanan gecisi daha da yumusatmak icin overlap/crossfade deneyleri.
+- Tuning validation metrigini agirlik degisimi workflow'unda daha gorunur hale getirmek.
+- Tek-player limitinde handoff envelope parametrelerini (duck/ramp) benchmark sonuclarina gore tune etmek.

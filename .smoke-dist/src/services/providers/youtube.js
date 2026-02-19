@@ -9,6 +9,11 @@ const TRANSITION_VOLUME_DUCK_PERCENT = 16;
 const TRANSITION_VOLUME_STEP_MS = 120;
 const TRANSITION_VOLUME_MIN = 30;
 const TRANSITION_COMPENSATION_MAX_OFFSET = 18;
+const DEFAULT_TRANSITION_HANDOFF_DUCK_PERCENT = 10;
+const DEFAULT_TRANSITION_HANDOFF_RAMP_MS = 220;
+const DEFAULT_TRANSITION_HANDOFF_HOLD_MS = 360;
+const PLAYBACK_START_RECOVERY_MAX_POLLS = 8;
+const PLAYBACK_START_RECOVERY_POLL_MS = 160;
 function wait(ms) {
     return new Promise((resolve) => {
         setTimeout(resolve, ms);
@@ -28,6 +33,12 @@ class YouTubeProvider {
         this.lastEndedSignature = null;
         this.warmupPromises = new Map();
         this.transitionVolumeAutomationToken = 0;
+        this.transitionHandoffToken = 0;
+        this.transitionHandoffProfile = {
+            duckPercent: DEFAULT_TRANSITION_HANDOFF_DUCK_PERCENT,
+            rampMs: DEFAULT_TRANSITION_HANDOFF_RAMP_MS,
+            holdMs: DEFAULT_TRANSITION_HANDOFF_HOLD_MS,
+        };
         this.reloadLibrary();
     }
     reloadLibrary() {
@@ -185,6 +196,25 @@ class YouTubeProvider {
             await this.rampPlayerVolume(compensatedVolume, baseVolume, 1100, token);
         })();
     }
+    startTransitionHandoffEnvelope() {
+        if (!this.player)
+            return;
+        const baseVolume = this.clampVolume(this.volume);
+        const handoffVolume = this.clampVolume(Math.max(TRANSITION_VOLUME_MIN, baseVolume - this.transitionHandoffProfile.duckPercent));
+        const volumeToken = this.transitionVolumeAutomationToken + 1;
+        this.transitionVolumeAutomationToken = volumeToken;
+        const handoffToken = this.transitionHandoffToken + 1;
+        this.transitionHandoffToken = handoffToken;
+        void (async () => {
+            await this.rampPlayerVolume(baseVolume, handoffVolume, this.transitionHandoffProfile.rampMs, volumeToken);
+            await wait(this.transitionHandoffProfile.holdMs);
+            if (handoffToken !== this.transitionHandoffToken
+                || volumeToken !== this.transitionVolumeAutomationToken) {
+                return;
+            }
+            await this.rampPlayerVolume(handoffVolume, baseVolume, this.transitionHandoffProfile.rampMs, volumeToken);
+        })();
+    }
     clampStartMsToTrack(startMs, durationMs) {
         if (!Number.isFinite(startMs) || startMs <= 0)
             return 0;
@@ -247,7 +277,38 @@ class YouTubeProvider {
             await wait(220);
             this.player.seek(startSeconds);
         }
+        await this.recoverPlaybackStart(trackId, startSeconds);
         return track;
+    }
+    async recoverPlaybackStart(trackId, startSeconds) {
+        if (!this.player)
+            return;
+        const normalizedStart = Math.max(0, Number.isFinite(startSeconds) ? startSeconds : 0);
+        let hasReloaded = false;
+        for (let attempt = 0; attempt < PLAYBACK_START_RECOVERY_MAX_POLLS; attempt += 1) {
+            if (!this.player)
+                return;
+            const state = this.player.getState();
+            const hasExpectedTrack = state.videoId === trackId;
+            const reachedExpectedTime = state.currentTime >= Math.max(0, normalizedStart - 0.35);
+            if (hasExpectedTrack && (state.isPlaying || reachedExpectedTime)) {
+                return;
+            }
+            // Slow networks can leave iframe in a non-playing buffer state; nudge play/seek and reload once.
+            if (attempt === 2 || attempt === 5) {
+                this.player.play();
+                if (normalizedStart > 0) {
+                    this.player.seek(normalizedStart);
+                }
+            }
+            if (!hasReloaded && attempt === 4) {
+                this.player.loadVideo(trackId, true, normalizedStart);
+                hasReloaded = true;
+            }
+            if (attempt < PLAYBACK_START_RECOVERY_MAX_POLLS - 1) {
+                await wait(PLAYBACK_START_RECOVERY_POLL_MS);
+            }
+        }
     }
     isAuthenticated() {
         return true;
@@ -257,6 +318,7 @@ class YouTubeProvider {
     }
     logout() {
         this.cancelTransitionVolumeAutomation(false);
+        this.transitionHandoffToken += 1;
         this.warmupPromises.clear();
         (0, player_1.destroyYouTubePlayer)();
         this.player = null;
@@ -289,9 +351,11 @@ class YouTubeProvider {
     }
     async play(trackId) {
         this.cancelTransitionVolumeAutomation(true);
+        this.transitionHandoffToken += 1;
         await this.loadTrackAtTime(trackId, 0);
     }
     async pause() {
+        this.transitionHandoffToken += 1;
         this.player?.pause();
         this.emit({ type: 'playback_paused', track: this.currentTrack });
     }
@@ -321,10 +385,12 @@ class YouTubeProvider {
         await this.play(previousTrack.id);
     }
     async seek(positionMs) {
+        this.transitionHandoffToken += 1;
         this.player?.seek(positionMs / 1000);
     }
     async setVolume(percent) {
         this.cancelTransitionVolumeAutomation(false);
+        this.transitionHandoffToken += 1;
         this.volume = this.clampVolume(percent);
         this.applyPlayerVolume(this.volume);
     }
@@ -412,9 +478,25 @@ class YouTubeProvider {
         await warmupPromise;
     }
     async playTransitionTarget(trackId, targetTimeMs, options = {}) {
+        this.transitionHandoffToken += 1;
         await this.warmupTransitionTarget(trackId);
         this.startTransitionVolumeEnvelope(options.sourceLoudnessRms, options.targetLoudnessRms);
         await this.loadTrackAtTime(trackId, targetTimeMs);
+    }
+    primeTransitionHandoff() {
+        this.startTransitionHandoffEnvelope();
+    }
+    configureTransitionHandoffProfile(profile) {
+        const next = {
+            duckPercent: this.clampVolume(profile.duckPercent ?? this.transitionHandoffProfile.duckPercent),
+            rampMs: Math.max(80, Math.min(900, Math.round(profile.rampMs ?? this.transitionHandoffProfile.rampMs))),
+            holdMs: Math.max(120, Math.min(1500, Math.round(profile.holdMs ?? this.transitionHandoffProfile.holdMs))),
+        };
+        this.transitionHandoffProfile = next;
+        return { ...next };
+    }
+    getTransitionHandoffProfile() {
+        return { ...this.transitionHandoffProfile };
     }
     addTrackToLibrary(track) {
         (0, search_1.addToPlaylist)({

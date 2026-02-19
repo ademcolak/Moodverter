@@ -14,6 +14,7 @@ Deliver a stable and simple YouTube-first flow:
 - YouTube-only provider path remains the baseline.
 - Transition hedefleri icin warmup/prefetch metadata hazirligi aktif.
 - Transition gecisinde start-time cue + loudness envelope kullaniliyor.
+- Transition oncesi kisa pre-duck handoff ile pseudo-crossfade hissi iyilestirildi.
 
 ## Scope
 - In scope:
@@ -43,8 +44,8 @@ Deliver a stable and simple YouTube-first flow:
 - Typecheck, lint and build pass.
 
 ## Remaining (Core UX)
-- [ ] Further reduce perceived startup/playback stalls on very slow networks.
-- [ ] Keep button labels and panel texts consistently simple across the app.
+- [x] Further reduce perceived startup/playback stalls on very slow networks.
+- [x] Keep button labels and panel texts consistently simple across the app.
 
 ## Verification (2026-02-10)
 - `pnpm -s lint`

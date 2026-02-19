@@ -17,6 +17,8 @@ Track baseline transition quality while iterating on moment matching and scoring
 - Evaluation satirlarinda ham track ID yerine kisa track adi ozeti gosteriliyor.
 - Baseline sonucu tek satirlik ozet + net gate satirlariyla daha kisa raporlaniyor.
 - Baseline sonucu `Bottom-3` seed icin otomatik tuning action onerileri uretiyor.
+- Benchmark run sonucu tuning action'lari onceki run ile karsilastirip validation ozeti veriyor.
+- Benchmark set aktifken seed listesi `ready + label gate` kosuluyla otomatik korunuyor.
 - Latest Kaggle parity run indicates metric flow is healthy, but sample size is too small for strong conclusions.
 
 ## Seed Set
@@ -103,4 +105,5 @@ Track baseline transition quality while iterating on moment matching and scoring
 - Persist each baseline run as an artifact (`runAt`, scope, Hit@3, Hit@5, MeanScore@5, notes).
 - Add a regression gate: reject tuning changes if benchmark Hit@3 or Hit@5 drops.
 - Attach score breakdown snapshots for failure cases in every tuning iteration.
+- Keep benchmark seed pool wide enough so auto-maintained set can stay at 10.
 - Validate tuning action recommendations against benchmark history before every weight update.

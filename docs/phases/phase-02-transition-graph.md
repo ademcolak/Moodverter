@@ -95,6 +95,7 @@ Notes:
 - [x] Add start-time cue transition playback path (direct target time load).
 - [x] Add adaptive autoplay lead based on observed transition latency.
 - [x] Add transition loudness smoothing envelope + compensation.
+- [x] Add pre-transition handoff pre-duck (pseudo-crossfade approximation).
 
 ### D) Evaluation
 - [x] Define baseline metrics (`Hit@K`, `MeanScore`) utility functions.
@@ -104,6 +105,8 @@ Notes:
 - [x] Add labeled relevance storage and background auto-label path.
 - [x] Wire labeled relevance into baseline output (`Hit@3`, `Hit@5`, `labeledSeedCount`).
 - [x] Split baseline run scope (`Seed Baseline` vs `Tum Seed Baseline`) to avoid metric confusion.
+- [x] Add `Bottom-3` tuning action validation summary/gate on benchmark runs.
+- [x] Auto-maintain benchmark seed set quality while benchmark set is active.
 
 ## Recent Notes (2026-02-19)
 - Baseline values staying constant while switching seed was caused by global run scope, not a scoring bug.
@@ -114,6 +117,8 @@ Notes:
 - Transition playback now warms target metadata and uses start-time cue for lower perceived stall.
 - Auto transition lead now self-adjusts from observed switch latency.
 - Candidate list now surfaces loudness delta (`LoudΔ`) for transition debugging.
+- Pseudo-crossfade handoff uses short pre-duck before autoplay jump.
+- Benchmark scope now reports tuning validation summary against previous comparable run.
 - Checklist panel was removed from UI; checklist remains as manual QA guidance in docs.
 
 ## Acceptance
@@ -124,4 +129,4 @@ Notes:
 
 ## Remaining
 - [x] Reduce single-player transition stalls with better prefetch/cue strategy.
-- [ ] Improve smoothness perception under harsh network variability.
+- [x] Tune handoff envelope params (`duck/ramp/hold`) for harsh network variability.

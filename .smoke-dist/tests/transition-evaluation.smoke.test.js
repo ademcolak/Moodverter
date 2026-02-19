@@ -281,6 +281,8 @@ const browser_mocks_1 = require("./helpers/browser-mocks");
     strict_1.default.ok(firstResult.bottomSeeds[0].dominantDriver !== null);
     strict_1.default.equal(firstResult.tuningActions.length, 1);
     strict_1.default.equal(firstResult.tuningActions[0].trackId, 'seed-track-regression');
+    strict_1.default.equal(firstResult.tuningValidationSummary, null);
+    strict_1.default.equal(firstResult.tuningValidationPassed, true);
     const secondResult = await (0, transition_1.runBaselineEvaluation)({
         seedTrackIds: ['seed-track-regression'],
         limit: 5,
@@ -292,6 +294,8 @@ const browser_mocks_1 = require("./helpers/browser-mocks");
     strict_1.default.equal(secondResult.regressionDetected, true);
     strict_1.default.ok(secondResult.regressionSummary?.includes('Hit@3'));
     strict_1.default.equal(secondResult.tuningActions.length, 1);
+    strict_1.default.ok(secondResult.tuningValidationSummary?.includes('Top issue'));
+    strict_1.default.equal(secondResult.tuningValidationPassed, true);
 });
 (0, node_test_1.default)('custom scope regression comparison respects scopeId', async () => {
     await (0, transition_1.analyzeTrackWithHeuristicV1)({

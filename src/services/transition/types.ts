@@ -76,6 +76,7 @@ export interface BaselineEvaluationInput {
   enforceRegressionGate?: boolean;
   requiredRelevantTargetsPerSeed?: number;
   enforceRelevantTargetMinimum?: boolean;
+  enforceTuningValidationGate?: boolean;
 }
 
 export type BaselineScopeLabel = 'selected' | 'all' | 'custom';
@@ -120,6 +121,9 @@ export interface BaselineEvaluationResult {
   hitAt5: number | null;
   bottomSeeds: BaselineSeedReport[];
   tuningActions: BaselineTuningAction[];
+  tuningValidationSummary: string | null;
+  tuningValidationPassed: boolean;
+  tuningValidationGateEnforced: boolean;
   regressionDetected: boolean;
   regressionSummary: string | null;
   regressionGateEnforced: boolean;

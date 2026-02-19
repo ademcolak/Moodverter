@@ -26,6 +26,11 @@ const TRANSITION_VOLUME_DUCK_PERCENT = 16;
 const TRANSITION_VOLUME_STEP_MS = 120;
 const TRANSITION_VOLUME_MIN = 30;
 const TRANSITION_COMPENSATION_MAX_OFFSET = 18;
+const DEFAULT_TRANSITION_HANDOFF_DUCK_PERCENT = 10;
+const DEFAULT_TRANSITION_HANDOFF_RAMP_MS = 220;
+const DEFAULT_TRANSITION_HANDOFF_HOLD_MS = 360;
+const PLAYBACK_START_RECOVERY_MAX_POLLS = 8;
+const PLAYBACK_START_RECOVERY_POLL_MS = 160;
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -36,6 +41,12 @@ function wait(ms: number): Promise<void> {
 export interface TransitionPlaybackOptions {
   sourceLoudnessRms?: number;
   targetLoudnessRms?: number;
+}
+
+export interface TransitionHandoffProfile {
+  duckPercent: number;
+  rampMs: number;
+  holdMs: number;
 }
 
 export class YouTubeProvider implements MusicProvider {
@@ -52,6 +63,12 @@ export class YouTubeProvider implements MusicProvider {
   private lastEndedSignature: string | null = null;
   private warmupPromises = new Map<string, Promise<void>>();
   private transitionVolumeAutomationToken = 0;
+  private transitionHandoffToken = 0;
+  private transitionHandoffProfile: TransitionHandoffProfile = {
+    duckPercent: DEFAULT_TRANSITION_HANDOFF_DUCK_PERCENT,
+    rampMs: DEFAULT_TRANSITION_HANDOFF_RAMP_MS,
+    holdMs: DEFAULT_TRANSITION_HANDOFF_HOLD_MS,
+  };
 
   constructor() {
     this.reloadLibrary();
@@ -246,6 +263,30 @@ export class YouTubeProvider implements MusicProvider {
     })();
   }
 
+  private startTransitionHandoffEnvelope(): void {
+    if (!this.player) return;
+    const baseVolume = this.clampVolume(this.volume);
+    const handoffVolume = this.clampVolume(
+      Math.max(TRANSITION_VOLUME_MIN, baseVolume - this.transitionHandoffProfile.duckPercent)
+    );
+    const volumeToken = this.transitionVolumeAutomationToken + 1;
+    this.transitionVolumeAutomationToken = volumeToken;
+    const handoffToken = this.transitionHandoffToken + 1;
+    this.transitionHandoffToken = handoffToken;
+
+    void (async () => {
+      await this.rampPlayerVolume(baseVolume, handoffVolume, this.transitionHandoffProfile.rampMs, volumeToken);
+      await wait(this.transitionHandoffProfile.holdMs);
+      if (
+        handoffToken !== this.transitionHandoffToken
+        || volumeToken !== this.transitionVolumeAutomationToken
+      ) {
+        return;
+      }
+      await this.rampPlayerVolume(handoffVolume, baseVolume, this.transitionHandoffProfile.rampMs, volumeToken);
+    })();
+  }
+
   private clampStartMsToTrack(startMs: number, durationMs: number): number {
     if (!Number.isFinite(startMs) || startMs <= 0) return 0;
     if (!Number.isFinite(durationMs) || durationMs <= 0) return Math.round(startMs);
@@ -313,7 +354,44 @@ export class YouTubeProvider implements MusicProvider {
       this.player.seek(startSeconds);
     }
 
+    await this.recoverPlaybackStart(trackId, startSeconds);
+
     return track;
+  }
+
+  private async recoverPlaybackStart(trackId: string, startSeconds: number): Promise<void> {
+    if (!this.player) return;
+
+    const normalizedStart = Math.max(0, Number.isFinite(startSeconds) ? startSeconds : 0);
+    let hasReloaded = false;
+
+    for (let attempt = 0; attempt < PLAYBACK_START_RECOVERY_MAX_POLLS; attempt += 1) {
+      if (!this.player) return;
+      const state = this.player.getState();
+      const hasExpectedTrack = state.videoId === trackId;
+      const reachedExpectedTime = state.currentTime >= Math.max(0, normalizedStart - 0.35);
+
+      if (hasExpectedTrack && (state.isPlaying || reachedExpectedTime)) {
+        return;
+      }
+
+      // Slow networks can leave iframe in a non-playing buffer state; nudge play/seek and reload once.
+      if (attempt === 2 || attempt === 5) {
+        this.player.play();
+        if (normalizedStart > 0) {
+          this.player.seek(normalizedStart);
+        }
+      }
+
+      if (!hasReloaded && attempt === 4) {
+        this.player.loadVideo(trackId, true, normalizedStart);
+        hasReloaded = true;
+      }
+
+      if (attempt < PLAYBACK_START_RECOVERY_MAX_POLLS - 1) {
+        await wait(PLAYBACK_START_RECOVERY_POLL_MS);
+      }
+    }
   }
 
   isAuthenticated(): boolean {
@@ -326,6 +404,7 @@ export class YouTubeProvider implements MusicProvider {
 
   logout(): void {
     this.cancelTransitionVolumeAutomation(false);
+    this.transitionHandoffToken += 1;
     this.warmupPromises.clear();
     destroyYouTubePlayer();
     this.player = null;
@@ -361,10 +440,12 @@ export class YouTubeProvider implements MusicProvider {
 
   async play(trackId: string): Promise<void> {
     this.cancelTransitionVolumeAutomation(true);
+    this.transitionHandoffToken += 1;
     await this.loadTrackAtTime(trackId, 0);
   }
 
   async pause(): Promise<void> {
+    this.transitionHandoffToken += 1;
     this.player?.pause();
     this.emit({ type: 'playback_paused', track: this.currentTrack });
   }
@@ -398,11 +479,13 @@ export class YouTubeProvider implements MusicProvider {
   }
 
   async seek(positionMs: number): Promise<void> {
+    this.transitionHandoffToken += 1;
     this.player?.seek(positionMs / 1000);
   }
 
   async setVolume(percent: number): Promise<void> {
     this.cancelTransitionVolumeAutomation(false);
+    this.transitionHandoffToken += 1;
     this.volume = this.clampVolume(percent);
     this.applyPlayerVolume(this.volume);
   }
@@ -499,9 +582,38 @@ export class YouTubeProvider implements MusicProvider {
     targetTimeMs: number,
     options: TransitionPlaybackOptions = {}
   ): Promise<void> {
+    this.transitionHandoffToken += 1;
     await this.warmupTransitionTarget(trackId);
     this.startTransitionVolumeEnvelope(options.sourceLoudnessRms, options.targetLoudnessRms);
     await this.loadTrackAtTime(trackId, targetTimeMs);
+  }
+
+  primeTransitionHandoff(): void {
+    this.startTransitionHandoffEnvelope();
+  }
+
+  configureTransitionHandoffProfile(
+    profile: Partial<TransitionHandoffProfile>
+  ): TransitionHandoffProfile {
+    const next: TransitionHandoffProfile = {
+      duckPercent: this.clampVolume(
+        profile.duckPercent ?? this.transitionHandoffProfile.duckPercent
+      ),
+      rampMs: Math.max(
+        80,
+        Math.min(900, Math.round(profile.rampMs ?? this.transitionHandoffProfile.rampMs))
+      ),
+      holdMs: Math.max(
+        120,
+        Math.min(1500, Math.round(profile.holdMs ?? this.transitionHandoffProfile.holdMs))
+      ),
+    };
+    this.transitionHandoffProfile = next;
+    return { ...next };
+  }
+
+  getTransitionHandoffProfile(): TransitionHandoffProfile {
+    return { ...this.transitionHandoffProfile };
   }
 
   addTrackToLibrary(track: UnifiedTrack): void {

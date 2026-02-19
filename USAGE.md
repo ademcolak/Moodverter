@@ -30,10 +30,11 @@ pnpm dev
 4. Transition panelindeki adaylara göre otomatik geçişi uygular.
 5. Geçiş öncesi hedef şarkı için warmup/prefetch hazırlığı arka planda çalışır.
 6. Geçiş sırasında hedef zamanına start-time cue ile atlanır ve loudness smoothing uygulanır.
-7. İstersen source moment ayarı yap:
-8. `Pinle`: slider konumunu kullan.
-9. `Simdiki Ani Al`: o anki playback zamanını al.
-10. `Oto`: pinlemeyi kaldır.
+7. Geçişten hemen önce handoff pre-duck (pseudo-crossfade) uygulanır.
+8. İstersen source moment ayarı yap:
+9. `Pinle`: slider konumunu kullan.
+10. `Simdiki Ani Al`: o anki playback zamanını al.
+11. `Oto`: pinlemeyi kaldır.
 
 ## 4) Yapıldı (Kullanım Tarafı)
 
@@ -46,8 +47,11 @@ pnpm dev
 - [x] Player initialize timeout/fallback ile sonsuz bekleme riskinin azaltılması
 - [x] Prefetch/warmup + start-time cue ile geçiş bekleme hissinin azaltılması
 - [x] Geçişte loudness envelope + otomatik compensation
+- [x] Geçiş öncesi handoff pre-duck (pseudo-crossfade hissi)
 - [x] Baseline özetinin kısa, aksiyon odaklı hale getirilmesi
 - [x] Bottom-3 seed için tuning action önerileri
+- [x] Benchmark run’larında tuning validation özeti/gate
+- [x] Benchmark set aktifken otomatik kalite koruma (`ready + label gate`)
 
 ## 5) Kalite Komutları
 
@@ -69,6 +73,6 @@ pnpm smoke:regression-gate
 
 ## 6) Kalan İşler
 
-- [ ] Benchmark seed setinde sürekli en az 10 labeled seed korunması
-- [ ] Bottom-3 tuning action sonuçlarının run'lar arasında otomatik kıyaslanması
-- [ ] Tek-player limiti için ileri düzey geçiş yumuşatma (overlap/crossfade)
+- [x] Benchmark seed havuzunu genişletmek (eligible adaylar 10’un altına düştüğünde)
+- [x] Tuning validation çıktısını ağırlık tuning workflow’unda daha görünür hale getirmek
+- [x] Handoff envelope parametrelerini benchmark sonuçlarına göre tune etmek

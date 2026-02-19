@@ -265,6 +265,13 @@ function hydrateFromStorage(): void {
         ),
         bottomSeeds,
         tuningActions,
+        tuningValidationSummary: typeof run.tuningValidationSummary === 'string'
+          ? run.tuningValidationSummary
+          : null,
+        tuningValidationPassed: typeof run.tuningValidationPassed === 'boolean'
+          ? run.tuningValidationPassed
+          : true,
+        tuningValidationGateEnforced: Boolean(run.tuningValidationGateEnforced),
         regressionDetected,
         regressionSummary: typeof run.regressionSummary === 'string' ? run.regressionSummary : null,
         regressionGateEnforced: Boolean(run.regressionGateEnforced),
@@ -594,6 +601,53 @@ function buildSeedTuningAction(seed: BaselineSeedReport): BaselineTuningAction {
   };
 }
 
+function validateTuningActions(
+  previousRun: BaselineRunArtifact | undefined,
+  nextTuningActions: BaselineTuningAction[]
+): {
+  summary: string | null;
+  passed: boolean;
+} {
+  if (!previousRun || previousRun.tuningActions.length === 0 || nextTuningActions.length === 0) {
+    return {
+      summary: null,
+      passed: true,
+    };
+  }
+
+  const previousTopAction = previousRun.tuningActions[0];
+  const nextTopAction = nextTuningActions[0];
+
+  if (
+    previousTopAction.trackId !== nextTopAction.trackId
+    || previousTopAction.issue !== nextTopAction.issue
+  ) {
+    return {
+      summary: `Top issue degisti: ${previousTopAction.trackId}/${previousTopAction.issue} -> ${nextTopAction.trackId}/${nextTopAction.issue}`,
+      passed: true,
+    };
+  }
+
+  const confidenceDelta = nextTopAction.confidence - previousTopAction.confidence;
+  if (confidenceDelta <= -0.05) {
+    return {
+      summary: `Top issue iyilesti: ${nextTopAction.trackId}/${nextTopAction.issue} ${formatPercentLabel(previousTopAction.confidence)} -> ${formatPercentLabel(nextTopAction.confidence)}`,
+      passed: true,
+    };
+  }
+  if (confidenceDelta > 0.02) {
+    return {
+      summary: `Top issue kotulesti: ${nextTopAction.trackId}/${nextTopAction.issue} ${formatPercentLabel(previousTopAction.confidence)} -> ${formatPercentLabel(nextTopAction.confidence)}`,
+      passed: false,
+    };
+  }
+
+  return {
+    summary: `Top issue stabil: ${nextTopAction.trackId}/${nextTopAction.issue} (${formatPercentLabel(nextTopAction.confidence)})`,
+    passed: true,
+  };
+}
+
 function sanitizeNode(trackId: string, node: TransitionNode): TransitionNode {
   const eventType = (node as { eventType?: string }).eventType;
   const eventTypes: TransitionEventType[] = [
@@ -854,6 +908,7 @@ export async function runBaselineEvaluation(
   const goodThreshold = clamp(input.goodThreshold ?? 0.6, 0, 1);
   const scopeLabel: BaselineScopeLabel = input.scopeLabel ?? 'custom';
   const regressionGateEnforced = Boolean(input.enforceRegressionGate);
+  const tuningValidationGateEnforced = Boolean(input.enforceTuningValidationGate);
   const requiredRelevantTargetsPerSeed = Math.max(
     1,
     Math.floor(input.requiredRelevantTargetsPerSeed ?? 2)
@@ -965,6 +1020,7 @@ export async function runBaselineEvaluation(
   const previousComparableRun = [...baselineRunHistory]
     .reverse()
     .find((run) => run.scopeLabel === scopeLabel && run.scopeId === scopeId);
+  const tuningValidation = validateTuningActions(previousComparableRun, tuningActions);
 
   const regressionReasons: string[] = [];
   if (
@@ -1004,6 +1060,9 @@ export async function runBaselineEvaluation(
     hitAt5: labeledSeedCount === 0 ? null : safeDiv(hitAt5Total, labeledSeedCount),
     bottomSeeds,
     tuningActions,
+    tuningValidationSummary: tuningValidation.summary,
+    tuningValidationPassed: tuningValidation.passed,
+    tuningValidationGateEnforced,
     regressionDetected: regressionReasons.length > 0,
     regressionSummary: regressionReasons.length > 0 ? regressionReasons.join(' | ') : null,
     regressionGateEnforced,
@@ -1031,6 +1090,9 @@ export async function runBaselineEvaluation(
   }
   if (result.relevanceTargetGateEnforced && !result.relevanceTargetGatePassed) {
     throw new Error(`Label quality gate failed: ${result.relevanceTargetGateSummary ?? 'Not enough relevant targets'}`);
+  }
+  if (result.tuningValidationGateEnforced && !result.tuningValidationPassed) {
+    throw new Error(`Tuning validation failed: ${result.tuningValidationSummary ?? 'Top issue degraded'}`);
   }
 
   return result;

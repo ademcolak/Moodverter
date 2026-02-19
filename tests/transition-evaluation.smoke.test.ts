@@ -293,6 +293,8 @@ test('baseline evaluation reports bottom seeds and detects Hit@K regression per 
   assert.ok(firstResult.bottomSeeds[0].dominantDriver !== null);
   assert.equal(firstResult.tuningActions.length, 1);
   assert.equal(firstResult.tuningActions[0].trackId, 'seed-track-regression');
+  assert.equal(firstResult.tuningValidationSummary, null);
+  assert.equal(firstResult.tuningValidationPassed, true);
 
   const secondResult = await runBaselineEvaluation({
     seedTrackIds: ['seed-track-regression'],
@@ -305,6 +307,8 @@ test('baseline evaluation reports bottom seeds and detects Hit@K regression per 
   assert.equal(secondResult.regressionDetected, true);
   assert.ok(secondResult.regressionSummary?.includes('Hit@3'));
   assert.equal(secondResult.tuningActions.length, 1);
+  assert.ok(secondResult.tuningValidationSummary?.includes('Top issue'));
+  assert.equal(secondResult.tuningValidationPassed, true);
 });
 
 test('custom scope regression comparison respects scopeId', async () => {

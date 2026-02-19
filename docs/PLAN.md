@@ -91,12 +91,18 @@ Kabul kriterleri:
 - Geçiş hedefi için warmup/prefetch metadata hazırlığı eklendi.
 - Transition geçişi start-time cue (hedef zamana direkt yükleme) ile hızlandırıldı.
 - Geçiş anına loudness envelope + otomatik volume compensation eklendi.
+- Geçiş öncesi handoff pre-duck (pseudo-crossfade hissi) eklendi.
 - Baseline/evaluation özeti kısaltıldı ve `Bottom-3` için tuning action önerileri eklendi.
+- Benchmark run sonuçlarına tuning validation özeti/gate eklendi.
+- Benchmark seed seti aktifken `ready + label gate` koşuluyla otomatik koruma eklendi.
+- Benchmark seed havuzu, eligible seed sayisi 10 altina dusunce hizli toparlayacak sekilde guclendirildi.
+- Tuning validation cikti/gate satiri benchmark akisinda daha gorunur hale getirildi.
+- Handoff envelope (`duck/ramp/hold`) benchmark bottom-seed metriklerine gore adaptif hale getirildi.
+- Cok yavas aglarda startup/playback stall etkisini azaltan oynatma baslangic toparlama adimi eklendi.
+- Uygulama genelindeki panel/buton metinleri daha sade ve tutarli terminolojiye cekildi.
 
 ### Yapilacak
-- Benchmark seed setinde sürekli en az 10 güçlü labeled seed korumak.
-- Bottom-3 tuning action önerilerini run karşılaştırmalarıyla otomatik doğrulamak.
-- Tek-player limitine rağmen geçiş hissini daha da iyileştirmek için overlap/crossfade denemeleri.
+- Bu sprintte acik kalan zorunlu madde yok.
 
 ## Sprint Plani (Baslangic: 2026-02-17)
 ### Sprint 1 - Kontrat ve hata modeli
