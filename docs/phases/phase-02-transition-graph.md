@@ -2,7 +2,7 @@
 
 ## Goal
 Given a seed track, find high-quality transition points into other tracks:
-- Input: one selected track (and optional source moment)
+- Input: currently playing track as seed (and optional source moment)
 - Output: ranked transition candidates in `A@t1 -> B@t2` form
 
 ## Scope
@@ -87,26 +87,41 @@ Notes:
 - [x] Add top-N candidate retrieval API.
 - [x] Add scoring breakdown per candidate.
 - [x] Add clamped weighted final score.
-- [x] Surface transition candidates in UI (seed select + top list).
+- [x] Surface transition candidates in UI (autoseed + top list).
 - [x] Add diversity-aware rerank (reduce same-target repetition).
 - [x] Add "play candidate at target time" action for quick transition checks.
+- [x] Add autopilot transition behavior from active playback track.
+- [x] Add transition warmup/prefetch metadata step before autoplay jump.
+- [x] Add start-time cue transition playback path (direct target time load).
+- [x] Add adaptive autoplay lead based on observed transition latency.
+- [x] Add transition loudness smoothing envelope + compensation.
 
 ### D) Evaluation
 - [x] Define baseline metrics (`Hit@K`, `MeanScore`) utility functions.
 - [x] Add manual listening checklist doc for Phase 02.
 - [x] Add in-app baseline evaluation runner (coverage/top score summary).
 - [x] Record first baseline run results on a curated seed set.
-- [x] Add labeled relevance storage and UI actions (`Relevant` / `Unlabel`).
+- [x] Add labeled relevance storage and background auto-label path.
 - [x] Wire labeled relevance into baseline output (`Hit@3`, `Hit@5`, `labeledSeedCount`).
 - [x] Split baseline run scope (`Seed Baseline` vs `Tum Seed Baseline`) to avoid metric confusion.
 
-## Recent Notes (2026-02-10)
+## Recent Notes (2026-02-19)
 - Baseline values staying constant while switching seed was caused by global run scope, not a scoring bug.
 - Scope split in UI fixed interpretation: seed-level checks and full-set checks are now explicit.
 - Current bottleneck is data quality (label coverage), not missing evaluation infrastructure.
+- Active seed is now derived from playing track; manual seed selector is removed from primary flow.
+- Transition timing trigger was shifted earlier to reduce perceived wait before jump.
+- Transition playback now warms target metadata and uses start-time cue for lower perceived stall.
+- Auto transition lead now self-adjusts from observed switch latency.
+- Candidate list now surfaces loudness delta (`LoudΔ`) for transition debugging.
+- Checklist panel was removed from UI; checklist remains as manual QA guidance in docs.
 
 ## Acceptance
 - Given one seed track, system returns ranked transition candidates.
 - Output includes `sourceTimeMs`, `targetTrackId`, `targetTimeMs`, `finalScore`.
 - At least one candidate is subjectively "good transition" in manual listening checks for curated test set.
 - Build/lint/typecheck pass.
+
+## Remaining
+- [x] Reduce single-player transition stalls with better prefetch/cue strategy.
+- [ ] Improve smoothness perception under harsh network variability.

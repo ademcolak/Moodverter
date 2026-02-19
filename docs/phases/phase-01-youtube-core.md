@@ -7,6 +7,14 @@ Deliver a stable and simple YouTube-first flow:
 - Play/Pause/Seek/Next/Previous
 - Keep a lightweight local library
 
+## Status Snapshot (2026-02-19)
+- Library row click playback is active.
+- Player init timeout/fallback is in place to reduce endless loading state risk.
+- Core controls are preserved for play/pause/seek/next/previous.
+- YouTube-only provider path remains the baseline.
+- Transition hedefleri icin warmup/prefetch metadata hazirligi aktif.
+- Transition gecisinde start-time cue + loudness envelope kullaniliyor.
+
 ## Scope
 - In scope:
   - Minimal player UI
@@ -33,6 +41,10 @@ Deliver a stable and simple YouTube-first flow:
 - User can search YouTube and play/add results.
 - Basic transport controls and seek bar work.
 - Typecheck, lint and build pass.
+
+## Remaining (Core UX)
+- [ ] Further reduce perceived startup/playback stalls on very slow networks.
+- [ ] Keep button labels and panel texts consistently simple across the app.
 
 ## Verification (2026-02-10)
 - `pnpm -s lint`

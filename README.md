@@ -1,39 +1,40 @@
 # Moodverter
 
-Moodverter, YouTube'dan şarkı bulup çalan ve seçilen şarkıya en iyi uyumlu geçiş noktalarını bulan bir masaüstü widget'ıdır.
-Şu an kod tabanı YouTube core playback üzerinde stabil tutuluyor; sıradaki ana hedef moment-level transition discovery.
+Moodverter, YouTube kütüphanesi üzerinde çalışan ve çalan şarkıdan bir sonraki şarkıya `A@t1 -> B@t2` otomatik geçiş deneyen masaüstü uygulamasıdır.
 
-## Mevcut Özellikler
+## Mevcut Durum (19 Şubat 2026)
 
-- YouTube linki yapıştırarak hızlı şarkı ekleme
-- YouTube arama sonuçlarından şarkı seçip çalma
-- Yerel kütüphaneye ekleme/silme
-- Temel oynatma kontrolleri: play/pause/next/previous/seek
-- Tauri tabanlı macOS/Windows masaüstü uygulaması
+- YouTube linki ile şarkı ekleme
+- YouTube araması ile şarkı bulma/ekleme
+- Kütüphanede satıra tıklayarak direkt oynatma
+- Çalan şarkıyı otomatik kaynak (seed) kabul etme
+- Source moment pinleme (`Pinle`, `Simdiki Ani Al`, `Oto`)
+- Geçiş anında otomatik hedefe atlama (autopilot transition)
+- Geçiş hedefi için warmup/prefetch metadata hazırlığı
+- Start-time cue ile hedef zamana direkt yükleme
+- Geçiş anında loudness envelope + otomatik volume compensation
+- Adaptif auto-transition lead (son geçiş gecikmesine göre)
+- Transition panelinde sürükleyerek yükseklik ayarlama (`resize-y`)
+- Player init için timeout + hata fallback (sonsuz "Player hazirlaniyor..." beklemesini azaltma)
+- Baseline/benchmark metrik akışı (`Hit@3`, `Hit@5`, regression gate)
+- Kısa baseline özeti + `Bottom-3` için tuning action önerileri
 
-## Hedeflenen Özellikler
+## Yapıldı
 
-- Verilen şarkı için `A@t1 -> B@t2` geçiş adayları üretme
-- Moment graph tabanlı eşleşme (event + embedding + ritim/loudness uyumu)
-- Top-N transition önerileri ve skor bazlı sıralama
+- [x] Analysis queue + state persistence
+- [x] Heuristic node extraction v1
+- [x] Candidate scoring ve diagnostic çıktısı
+- [x] Baseline history + regression gate
+- [x] Relevance map local persistence
+- [x] Seed seçimi yerine çalan şarkıdan otomatik seed akışı
+- [x] Kütüphane UI sadeleştirme (tek tıkla oynatma)
+- [x] Checklist/ID gürültüsünü azaltan durum görünümü
 
-## Transition Geliştirme Durumu
+## Yapılacaklar
 
-- [x] Analysis queue + state altyapısı
-- [x] Heuristic node extraction (v1)
-- [x] Candidate scoring API
-- [x] Seed track secimi ve top transition adaylarini UI'da gosterim
-- [x] Aday satirindan hedef ana direkt cal/seek aksiyonu
-- [x] In-app baseline evaluation runner (coverage/top score)
-- [x] Relevance etiketleme (`Relevant/Unlabel`) + local persistence
-- [x] Baseline metriklerine `Hit@3` / `Hit@5` entegrasyonu
-- [x] `Seed Baseline` ve `Tum Seed Baseline` scope ayrimi
-- [x] Curated seed set ile kalite baseline ölçümü
-
-## Guncel Odak
-
-- Labelled seed sayisini artis (>=10) ve daha guvenilir Hit@K olcumu
-- Dusuk performansli seed'lerde scoring/penalty tuning
+- [ ] Benchmark sette sürekli en az 10 yüksek kaliteli labeled seed korumak
+- [ ] Bottom-3 tuning önerilerinin ağırlık değişimi sonuçlarını run bazlı otomatik kıyaslamak
+- [ ] Tek-player limiti için daha ileri geçiş yumuşatma (overlap/crossfade denemeleri)
 
 ## Hızlı Başlangıç
 
@@ -42,24 +43,19 @@ pnpm install
 pnpm tauri dev
 ```
 
-Notlar:
-- Tauri geliştirme için Rust kurulu olmalıdır.
+Not: Tauri geliştirme için Rust kurulu olmalıdır.
 
-## Komutlar
+## Kalite Komutları
 
 ```bash
-pnpm dev
-pnpm tauri dev
-pnpm lint
-pnpm build
-pnpm smoke:test
+pnpm run qa:auto
+pnpm run smoke:test
+pnpm run smoke:regression-gate
 ```
 
-## Plan
-
-Genel yol haritası ve backlog kaynağı:
+## Plan ve Faz Dokümanları
 
 - [`docs/PLAN.md`](docs/PLAN.md)
 - [`docs/phases/phase-01-youtube-core.md`](docs/phases/phase-01-youtube-core.md)
 - [`docs/phases/phase-02-transition-graph.md`](docs/phases/phase-02-transition-graph.md)
-- [`docs/phases/phase-02-evaluation-checklist.md`](docs/phases/phase-02-evaluation-checklist.md)
+- [`docs/phases/phase-03-scoring-minispec.md`](docs/phases/phase-03-scoring-minispec.md)

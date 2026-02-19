@@ -6,6 +6,10 @@ You are working on **Moodverter**.
 - This project was reset to a **clean start** state.
 - Current direction: **YouTube core playback + moment-level transition discovery**.
 - Advanced/legacy features (Spotify, mock mode, discovery pipelines, queue/history orchestration, etc.) were removed from active implementation.
+- Current UX baseline:
+  - Library row click starts playback.
+  - Playing track is treated as active seed automatically.
+  - Transition flow is autopilot-first, with optional source moment pinning.
 - Documentation is centralized in:
   - General plan: `docs/PLAN.md`
   - Phase docs: `docs/phases/`
@@ -21,6 +25,7 @@ You are working on **Moodverter**.
 - Prefer stable base + measurable transition quality improvements.
 - Do not reintroduce removed legacy paths unless explicitly requested.
 - When you make changes, also update the relevant phase doc status/checklist.
+- When changing UX behavior, update `README.md`, `USAGE.md`, and `AGENTS.md` in the same turn.
 
 ## Output Expectations
 - Start with what you changed.

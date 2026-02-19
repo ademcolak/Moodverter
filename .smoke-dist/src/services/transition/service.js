@@ -132,6 +132,65 @@ function sanitizeNumericArray(value, fallbackSize) {
     }
     return next;
 }
+function toOptionalFiniteRate(value) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return clamp(value, 0, 1);
+    }
+    return null;
+}
+function parseTransitionScoreDriver(value) {
+    if (value === 'event'
+        || value === 'embedding'
+        || value === 'rhythm'
+        || value === 'loudness'
+        || value === 'penalty') {
+        return value;
+    }
+    return null;
+}
+function sanitizeBaselineSeedReport(value) {
+    if (!value || typeof value !== 'object')
+        return null;
+    const entry = value;
+    const trackId = typeof entry.trackId === 'string' ? entry.trackId.trim() : '';
+    if (trackId.length === 0)
+        return null;
+    return {
+        trackId,
+        candidateCount: Math.max(0, Math.floor(toFiniteNumber(entry.candidateCount, 0))),
+        top1Score: clamp(toFiniteNumber(entry.top1Score, 0), 0, 1),
+        meanTopKScore: clamp(toFiniteNumber(entry.meanTopKScore, 0), 0, 1),
+        hasGoodCandidate: Boolean(entry.hasGoodCandidate),
+        hitAt3: toOptionalFiniteRate(entry.hitAt3),
+        hitAt5: toOptionalFiniteRate(entry.hitAt5),
+        averageEventMatchScore: clamp(toFiniteNumber(entry.averageEventMatchScore, 0), 0, 1),
+        averageEmbeddingSimilarity: clamp(toFiniteNumber(entry.averageEmbeddingSimilarity, 0), 0, 1),
+        averageRhythmAlignmentScore: clamp(toFiniteNumber(entry.averageRhythmAlignmentScore, 0), 0, 1),
+        averageLoudnessContinuityScore: clamp(toFiniteNumber(entry.averageLoudnessContinuityScore, 0), 0, 1),
+        averageArtifactPenalty: clamp(toFiniteNumber(entry.averageArtifactPenalty, 0), 0, 1),
+        dominantDriver: parseTransitionScoreDriver(entry.dominantDriver),
+    };
+}
+function sanitizeBaselineTuningAction(value) {
+    if (!value || typeof value !== 'object')
+        return null;
+    const entry = value;
+    const trackId = typeof entry.trackId === 'string' ? entry.trackId.trim() : '';
+    const issue = parseTransitionScoreDriver(entry.issue);
+    if (trackId.length === 0 || issue === null)
+        return null;
+    const recommendation = typeof entry.recommendation === 'string'
+        ? entry.recommendation.trim()
+        : '';
+    if (recommendation.length === 0)
+        return null;
+    return {
+        trackId,
+        issue,
+        recommendation,
+        confidence: clamp(toFiniteNumber(entry.confidence, 0.5), 0, 1),
+    };
+}
 function safeParseJson(raw, fallback) {
     if (!raw)
         return fallback;
@@ -171,13 +230,24 @@ function hydrateFromStorage() {
             .map((trackId) => trackId.trim())
             .filter((trackId) => trackId.length > 0);
         const scopeLabel = (run.scopeLabel ?? 'custom');
+        const bottomSeeds = Array.isArray(run.bottomSeeds)
+            ? run.bottomSeeds
+                .map((seed) => sanitizeBaselineSeedReport(seed))
+                .filter((seed) => seed !== null)
+            : [];
+        const tuningActions = Array.isArray(run.tuningActions)
+            ? run.tuningActions
+                .map((action) => sanitizeBaselineTuningAction(action))
+                .filter((action) => action !== null)
+            : [];
         return {
             ...run,
             schemaVersion: Math.max(1, Math.floor(Number(run.schemaVersion ?? BASELINE_RUN_SCHEMA_VERSION))),
             analysisVersion: Math.max(1, Math.floor(Number(run.analysisVersion ?? ANALYSIS_VERSION))),
             scopeLabel,
             scopeId: normalizeScopeId(scopeLabel, typeof run.scopeId === 'string' ? run.scopeId : undefined, seedTrackIds),
-            bottomSeeds: Array.isArray(run.bottomSeeds) ? run.bottomSeeds : [],
+            bottomSeeds,
+            tuningActions,
             regressionDetected,
             regressionSummary: typeof run.regressionSummary === 'string' ? run.regressionSummary : null,
             regressionGateEnforced: Boolean(run.regressionGateEnforced),
@@ -349,6 +419,97 @@ function buildScoreDiagnostic(score) {
         summary: `Event ${formatPercentLabel(score.eventMatchScore)} | Emb ${formatPercentLabel(score.embeddingSimilarity)} | Rhythm ${formatPercentLabel(score.rhythmAlignmentScore)} | Loud ${formatPercentLabel(score.loudnessContinuityScore)} | Penalty ${formatPercentLabel(score.artifactPenalty)}`,
     };
 }
+function computeSeedScoreProfile(candidates) {
+    if (candidates.length === 0) {
+        return {
+            averageEventMatchScore: 0,
+            averageEmbeddingSimilarity: 0,
+            averageRhythmAlignmentScore: 0,
+            averageLoudnessContinuityScore: 0,
+            averageArtifactPenalty: 0,
+            dominantDriver: null,
+        };
+    }
+    let eventTotal = 0;
+    let embeddingTotal = 0;
+    let rhythmTotal = 0;
+    let loudnessTotal = 0;
+    let penaltyTotal = 0;
+    const driverCount = {
+        event: 0,
+        embedding: 0,
+        rhythm: 0,
+        loudness: 0,
+        penalty: 0,
+    };
+    const driverOrder = ['penalty', 'event', 'embedding', 'rhythm', 'loudness'];
+    candidates.forEach((candidate) => {
+        eventTotal += candidate.score.eventMatchScore;
+        embeddingTotal += candidate.score.embeddingSimilarity;
+        rhythmTotal += candidate.score.rhythmAlignmentScore;
+        loudnessTotal += candidate.score.loudnessContinuityScore;
+        penaltyTotal += candidate.score.artifactPenalty;
+        driverCount[candidate.diagnostic.primaryDriver] += 1;
+    });
+    const dominantDriver = driverOrder.reduce((best, current) => {
+        if (best === null)
+            return current;
+        return driverCount[current] > driverCount[best] ? current : best;
+    }, null);
+    return {
+        averageEventMatchScore: clamp(eventTotal / candidates.length, 0, 1),
+        averageEmbeddingSimilarity: clamp(embeddingTotal / candidates.length, 0, 1),
+        averageRhythmAlignmentScore: clamp(rhythmTotal / candidates.length, 0, 1),
+        averageLoudnessContinuityScore: clamp(loudnessTotal / candidates.length, 0, 1),
+        averageArtifactPenalty: clamp(penaltyTotal / candidates.length, 0, 1),
+        dominantDriver,
+    };
+}
+function pickSeedIssue(seed) {
+    const weakestPositive = [
+        { key: 'event', value: seed.averageEventMatchScore },
+        { key: 'embedding', value: seed.averageEmbeddingSimilarity },
+        { key: 'rhythm', value: seed.averageRhythmAlignmentScore },
+        { key: 'loudness', value: seed.averageLoudnessContinuityScore },
+    ].reduce((best, current) => (current.value < best.value ? current : best));
+    if (seed.averageArtifactPenalty >= 0.55 && seed.averageArtifactPenalty > weakestPositive.value) {
+        return 'penalty';
+    }
+    return weakestPositive.key;
+}
+function buildTuningRecommendation(issue) {
+    if (issue === 'penalty') {
+        return 'Artifact penalty yuksek; bpm/loudness toleranslarini yumusatip yeniden benchmark kos.';
+    }
+    if (issue === 'rhythm') {
+        return 'Rhythm uyumu zayif; bpm hizalama katsayisini ve chroma etkisini arttirarak tekrar dene.';
+    }
+    if (issue === 'event') {
+        return 'Event eslesmesi dusuk; event compatibility tablosunu bottom-seed event ciftlerine gore tune et.';
+    }
+    if (issue === 'embedding') {
+        return 'Embedding benzerligi zayif; embedding agirligini kontrollu arttirip Hit@K etkisini olc.';
+    }
+    return 'Loudness surekliligi dusuk; loudness continuity agirligini ve transition volume envelope ayarlarini incele.';
+}
+function buildSeedTuningAction(seed) {
+    const issue = pickSeedIssue(seed);
+    const confidenceBase = issue === 'penalty'
+        ? seed.averageArtifactPenalty
+        : 1 - (issue === 'event'
+            ? seed.averageEventMatchScore
+            : issue === 'embedding'
+                ? seed.averageEmbeddingSimilarity
+                : issue === 'rhythm'
+                    ? seed.averageRhythmAlignmentScore
+                    : seed.averageLoudnessContinuityScore);
+    return {
+        trackId: seed.trackId,
+        issue,
+        recommendation: buildTuningRecommendation(issue),
+        confidence: clamp(confidenceBase, 0, 1),
+    };
+}
 function sanitizeNode(trackId, node) {
     const eventType = node.eventType;
     const eventTypes = [
@@ -471,8 +632,10 @@ async function findTransitionCandidates(input) {
                 candidates.push({
                     sourceTrackId,
                     sourceTimeMs: sourceNode.timeMs,
+                    sourceLoudnessRms: sourceNode.loudnessRms,
                     targetTrackId,
                     targetTimeMs: targetNode.timeMs,
+                    targetLoudnessRms: targetNode.loudnessRms,
                     score,
                     diagnostic: buildScoreDiagnostic(score),
                     sourceEventType: sourceNode.eventType,
@@ -578,6 +741,7 @@ async function runBaselineEvaluation(input = {}) {
     const seedReports = [];
     for (const trackId of seedTrackIds) {
         const candidates = await findTransitionCandidates({ trackId, limit });
+        const seedScoreProfile = computeSeedScoreProfile(candidates);
         const relevantTargetTrackIds = relevantTargetsBySeed[trackId] ?? [];
         let seedHitAt3 = null;
         let seedHitAt5 = null;
@@ -597,6 +761,12 @@ async function runBaselineEvaluation(input = {}) {
                 hasGoodCandidate: false,
                 hitAt3: seedHitAt3,
                 hitAt5: seedHitAt5,
+                averageEventMatchScore: seedScoreProfile.averageEventMatchScore,
+                averageEmbeddingSimilarity: seedScoreProfile.averageEmbeddingSimilarity,
+                averageRhythmAlignmentScore: seedScoreProfile.averageRhythmAlignmentScore,
+                averageLoudnessContinuityScore: seedScoreProfile.averageLoudnessContinuityScore,
+                averageArtifactPenalty: seedScoreProfile.averageArtifactPenalty,
+                dominantDriver: seedScoreProfile.dominantDriver,
             });
             continue;
         }
@@ -617,6 +787,12 @@ async function runBaselineEvaluation(input = {}) {
             hasGoodCandidate,
             hitAt3: seedHitAt3,
             hitAt5: seedHitAt5,
+            averageEventMatchScore: seedScoreProfile.averageEventMatchScore,
+            averageEmbeddingSimilarity: seedScoreProfile.averageEmbeddingSimilarity,
+            averageRhythmAlignmentScore: seedScoreProfile.averageRhythmAlignmentScore,
+            averageLoudnessContinuityScore: seedScoreProfile.averageLoudnessContinuityScore,
+            averageArtifactPenalty: seedScoreProfile.averageArtifactPenalty,
+            dominantDriver: seedScoreProfile.dominantDriver,
         });
     }
     const safeDiv = (numerator, denominator) => denominator === 0 ? 0 : numerator / denominator;
@@ -624,6 +800,7 @@ async function runBaselineEvaluation(input = {}) {
         .filter((seed) => seed.candidateCount > 0)
         .sort((a, b) => a.meanTopKScore - b.meanTopKScore || a.top1Score - b.top1Score)
         .slice(0, 3);
+    const tuningActions = bottomSeeds.map((seed) => buildSeedTuningAction(seed));
     const previousComparableRun = [...baselineRunHistory]
         .reverse()
         .find((run) => run.scopeLabel === scopeLabel && run.scopeId === scopeId);
@@ -660,6 +837,7 @@ async function runBaselineEvaluation(input = {}) {
         hitAt3: labeledSeedCount === 0 ? null : safeDiv(hitAt3Total, labeledSeedCount),
         hitAt5: labeledSeedCount === 0 ? null : safeDiv(hitAt5Total, labeledSeedCount),
         bottomSeeds,
+        tuningActions,
         regressionDetected: regressionReasons.length > 0,
         regressionSummary: regressionReasons.length > 0 ? regressionReasons.join(' | ') : null,
         regressionGateEnforced,

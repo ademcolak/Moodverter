@@ -239,20 +239,24 @@ class YouTubePlayer {
     getState() {
         return { ...this.state };
     }
-    loadVideo(videoId, autoplay = true) {
+    loadVideo(videoId, autoplay = true, startSeconds = 0) {
         if (!this.player || !this.state.isReady) {
             console.warn('Player not ready');
             return;
         }
         this.state.error = null;
         this.state.videoId = videoId;
+        const normalizedStart = Number.isFinite(startSeconds) ? Math.max(0, startSeconds) : 0;
         if (autoplay) {
-            this.player.loadVideoById(videoId);
+            this.player.loadVideoById(videoId, normalizedStart);
         }
         else {
-            this.player.cueVideoById(videoId);
+            this.player.cueVideoById(videoId, normalizedStart);
         }
         this.notifyStateChange();
+    }
+    cueVideo(videoId, startSeconds = 0) {
+        this.loadVideo(videoId, false, startSeconds);
     }
     play() {
         if (!this.player || !this.state.isReady)

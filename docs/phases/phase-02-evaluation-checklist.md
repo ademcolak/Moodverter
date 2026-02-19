@@ -3,7 +3,7 @@
 ## Purpose
 Track baseline transition quality while iterating on moment matching and scoring.
 
-## Status Snapshot (2026-02-10)
+## Status Snapshot (2026-02-19)
 - In-app baseline supports both `Seed Baseline` and `Tum Seed Baseline`.
 - Relevance labels are persisted and consumed by metrics (`Hit@3`, `Hit@5`).
 - Baseline run history is persisted locally and latest runs are visible in UI.
@@ -12,7 +12,11 @@ Track baseline transition quality while iterating on moment matching and scoring
 - Optional hard regression gate can reject a tuning run when same-scope Hit@K drops.
 - Transition panel supports source moment pinning and quick `A/B` preview listening.
 - Label quality gate enforces minimum relevant target count per seed before baseline runs.
-- Manual listening checklist state is persisted per seed in transition panel.
+- Seed secimi manuel degil; calan sarki otomatik seed olarak kullaniliyor.
+- Candidate relevance etiketlemesi arka planda otomatik tamamlanmaya odakli.
+- Evaluation satirlarinda ham track ID yerine kisa track adi ozeti gosteriliyor.
+- Baseline sonucu tek satirlik ozet + net gate satirlariyla daha kisa raporlaniyor.
+- Baseline sonucu `Bottom-3` seed icin otomatik tuning action onerileri uretiyor.
 - Latest Kaggle parity run indicates metric flow is healthy, but sample size is too small for strong conclusions.
 
 ## Seed Set
@@ -26,12 +30,14 @@ Track baseline transition quality while iterating on moment matching and scoring
 - `MeanScore@5`: Mean `finalScore` for top 5 candidates
 
 ## Labeled Relevance Workflow
-- Open Transition panel and pick a seed track.
-- For candidate rows, use `Relevant` to label target tracks for that seed.
+- Open Transition panel and play any track (playing track becomes active seed).
+- Relevance labels are filled from transition candidates automatically in background.
 - Baseline runner automatically consumes these labels and reports `Hit@3` / `Hit@5`.
 - If no labels exist, `Hit@3` and `Hit@5` are shown as `N/A`.
 
 ## Manual Listening Checklist (per seed track)
+> Not: Checklist alanı UI'dan gecici olarak kaldirildi. Asagidaki maddeler manuel QA rehberi olarak korunur.
+
 - [ ] Transition is not abrupt or broken.
 - [ ] Timing alignment feels intentional (`A@t1 -> B@t2`).
 - [ ] Loudness jump is acceptable.
@@ -97,3 +103,4 @@ Track baseline transition quality while iterating on moment matching and scoring
 - Persist each baseline run as an artifact (`runAt`, scope, Hit@3, Hit@5, MeanScore@5, notes).
 - Add a regression gate: reject tuning changes if benchmark Hit@3 or Hit@5 drops.
 - Attach score breakdown snapshots for failure cases in every tuning iteration.
+- Validate tuning action recommendations against benchmark history before every weight update.

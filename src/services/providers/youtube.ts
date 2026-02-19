@@ -22,6 +22,22 @@ import {
 } from '../youtube/search';
 import { analyzeTrackWithHeuristicV1 } from '../transition';
 
+const TRANSITION_VOLUME_DUCK_PERCENT = 16;
+const TRANSITION_VOLUME_STEP_MS = 120;
+const TRANSITION_VOLUME_MIN = 30;
+const TRANSITION_COMPENSATION_MAX_OFFSET = 18;
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+export interface TransitionPlaybackOptions {
+  sourceLoudnessRms?: number;
+  targetLoudnessRms?: number;
+}
+
 export class YouTubeProvider implements MusicProvider {
   readonly name = 'youtube' as const;
 
@@ -34,6 +50,8 @@ export class YouTubeProvider implements MusicProvider {
   private listeners = new Set<PlaybackEventListener>();
   private previousSnapshot: { isPlaying: boolean; currentTime: number; duration: number } | null = null;
   private lastEndedSignature: string | null = null;
+  private warmupPromises = new Map<string, Promise<void>>();
+  private transitionVolumeAutomationToken = 0;
 
   constructor() {
     this.reloadLibrary();
@@ -147,6 +165,157 @@ export class YouTubeProvider implements MusicProvider {
     });
   }
 
+  private clampVolume(percent: number): number {
+    if (!Number.isFinite(percent)) return 100;
+    return Math.max(0, Math.min(100, Math.round(percent)));
+  }
+
+  private applyPlayerVolume(percent: number): void {
+    if (!this.player) return;
+    this.player.setVolume(this.clampVolume(percent));
+  }
+
+  private cancelTransitionVolumeAutomation(resetToBaseVolume = false): void {
+    this.transitionVolumeAutomationToken += 1;
+    if (resetToBaseVolume) {
+      this.applyPlayerVolume(this.volume);
+    }
+  }
+
+  private async rampPlayerVolume(
+    fromPercent: number,
+    toPercent: number,
+    durationMs: number,
+    automationToken: number
+  ): Promise<void> {
+    if (!this.player) return;
+    const clampedFrom = this.clampVolume(fromPercent);
+    const clampedTo = this.clampVolume(toPercent);
+    const steps = Math.max(1, Math.floor(Math.max(0, durationMs) / TRANSITION_VOLUME_STEP_MS));
+
+    for (let step = 1; step <= steps; step += 1) {
+      if (automationToken !== this.transitionVolumeAutomationToken) return;
+      const ratio = step / steps;
+      const volume = clampedFrom + (clampedTo - clampedFrom) * ratio;
+      this.applyPlayerVolume(volume);
+      if (step < steps) {
+        await wait(TRANSITION_VOLUME_STEP_MS);
+      }
+    }
+  }
+
+  private computeCompensatedVolume(
+    sourceLoudnessRms: number | undefined,
+    targetLoudnessRms: number | undefined
+  ): number {
+    if (
+      typeof sourceLoudnessRms !== 'number'
+      || !Number.isFinite(sourceLoudnessRms)
+      || typeof targetLoudnessRms !== 'number'
+      || !Number.isFinite(targetLoudnessRms)
+    ) {
+      return this.clampVolume(this.volume);
+    }
+    const loudnessDiff = targetLoudnessRms - sourceLoudnessRms;
+    const offset = Math.max(
+      -TRANSITION_COMPENSATION_MAX_OFFSET,
+      Math.min(TRANSITION_COMPENSATION_MAX_OFFSET, Math.round(-loudnessDiff * 2))
+    );
+    return this.clampVolume(this.volume + offset);
+  }
+
+  private startTransitionVolumeEnvelope(
+    sourceLoudnessRms: number | undefined,
+    targetLoudnessRms: number | undefined
+  ): void {
+    if (!this.player) return;
+    const baseVolume = this.clampVolume(this.volume);
+    const duckedVolume = this.clampVolume(
+      Math.max(TRANSITION_VOLUME_MIN, baseVolume - TRANSITION_VOLUME_DUCK_PERCENT)
+    );
+    const compensatedVolume = this.computeCompensatedVolume(sourceLoudnessRms, targetLoudnessRms);
+    const token = this.transitionVolumeAutomationToken + 1;
+    this.transitionVolumeAutomationToken = token;
+
+    this.applyPlayerVolume(duckedVolume);
+    void (async () => {
+      await wait(140);
+      await this.rampPlayerVolume(duckedVolume, compensatedVolume, 700, token);
+      await wait(900);
+      await this.rampPlayerVolume(compensatedVolume, baseVolume, 1100, token);
+    })();
+  }
+
+  private clampStartMsToTrack(startMs: number, durationMs: number): number {
+    if (!Number.isFinite(startMs) || startMs <= 0) return 0;
+    if (!Number.isFinite(durationMs) || durationMs <= 0) return Math.round(startMs);
+    const maxSafeStart = Math.max(0, durationMs - 1000);
+    return Math.min(Math.round(startMs), maxSafeStart);
+  }
+
+  private async resolveTrackForPlayback(trackId: string): Promise<UnifiedTrack> {
+    const fromLibrary = this.library.find((track) => track.id === trackId);
+    if (fromLibrary) return fromLibrary;
+
+    const info = await getVideoInfo(trackId);
+    if (!info) throw new Error('Video not found');
+
+    const track: UnifiedTrack = {
+      id: trackId,
+      provider: 'youtube',
+      name: info.title,
+      artist: info.artist,
+      albumArt: info.thumbnail,
+      durationMs: 0,
+      playCount: 0,
+    };
+
+    addToPlaylist({
+      videoId: trackId,
+      title: info.title,
+      artist: info.artist,
+      thumbnail: info.thumbnail,
+    });
+    this.reloadLibrary();
+    this.scheduleTransitionAnalysis(track);
+    return track;
+  }
+
+  private async loadTrackAtTime(trackId: string, startTimeMs = 0): Promise<UnifiedTrack> {
+    await this.ensureInitialized();
+    if (!this.player) {
+      throw new Error('Player is not ready');
+    }
+
+    const track = await this.resolveTrackForPlayback(trackId);
+    this.currentTrack = track;
+    const startMs = this.clampStartMsToTrack(startTimeMs, track.durationMs);
+    const startSeconds = startMs / 1000;
+
+    this.player.loadVideo(trackId, true, startSeconds);
+    addToRecentlyPlayed({
+      videoId: trackId,
+      title: track.name,
+      artist: track.artist,
+      thumbnail: track.albumArt ?? '',
+    });
+    this.emit({
+      type: 'track_started',
+      reason: 'manual',
+      track: this.currentTrack,
+    });
+
+    if (startMs > 0) {
+      // Fallback seeks improve reliability while iframe transitions from buffering to playing.
+      await wait(180);
+      this.player.seek(startSeconds);
+      await wait(220);
+      this.player.seek(startSeconds);
+    }
+
+    return track;
+  }
+
   isAuthenticated(): boolean {
     return true;
   }
@@ -156,6 +325,8 @@ export class YouTubeProvider implements MusicProvider {
   }
 
   logout(): void {
+    this.cancelTransitionVolumeAutomation(false);
+    this.warmupPromises.clear();
     destroyYouTubePlayer();
     this.player = null;
     this.isInitialized = false;
@@ -189,48 +360,8 @@ export class YouTubeProvider implements MusicProvider {
   }
 
   async play(trackId: string): Promise<void> {
-    await this.ensureInitialized();
-    if (!this.player) return;
-
-    const fromLibrary = this.library.find((track) => track.id === trackId);
-    if (fromLibrary) {
-      this.currentTrack = fromLibrary;
-    } else {
-      const info = await getVideoInfo(trackId);
-      if (!info) throw new Error('Video not found');
-      this.currentTrack = {
-        id: trackId,
-        provider: 'youtube',
-        name: info.title,
-        artist: info.artist,
-        albumArt: info.thumbnail,
-        durationMs: 0,
-        playCount: 0,
-      };
-
-      addToPlaylist({
-        videoId: trackId,
-        title: info.title,
-        artist: info.artist,
-        thumbnail: info.thumbnail,
-      });
-      this.reloadLibrary();
-      this.scheduleTransitionAnalysis(this.currentTrack);
-    }
-
-    addToRecentlyPlayed({
-      videoId: trackId,
-      title: this.currentTrack.name,
-      artist: this.currentTrack.artist,
-      thumbnail: this.currentTrack.albumArt ?? '',
-    });
-
-    this.player.loadVideo(trackId, true);
-    this.emit({
-      type: 'track_started',
-      reason: 'manual',
-      track: this.currentTrack,
-    });
+    this.cancelTransitionVolumeAutomation(true);
+    await this.loadTrackAtTime(trackId, 0);
   }
 
   async pause(): Promise<void> {
@@ -271,8 +402,9 @@ export class YouTubeProvider implements MusicProvider {
   }
 
   async setVolume(percent: number): Promise<void> {
-    this.volume = Math.max(0, Math.min(100, percent));
-    this.player?.setVolume(this.volume);
+    this.cancelTransitionVolumeAutomation(false);
+    this.volume = this.clampVolume(percent);
+    this.applyPlayerVolume(this.volume);
   }
 
   async getCurrentTrack(): Promise<UnifiedTrack | null> {
@@ -313,6 +445,63 @@ export class YouTubeProvider implements MusicProvider {
   onPlaybackEvent(listener: PlaybackEventListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  async warmupTransitionTarget(trackId: string): Promise<void> {
+    const normalizedTrackId = trackId.trim();
+    if (!normalizedTrackId) return;
+    const inFlight = this.warmupPromises.get(normalizedTrackId);
+    if (inFlight) {
+      await inFlight;
+      return;
+    }
+
+    const warmupPromise = (async () => {
+      try {
+        const info = await getVideoInfo(normalizedTrackId);
+        if (!info) return;
+
+        const existingTrack = this.library.find((track) => track.id === normalizedTrackId);
+        if (!existingTrack) return;
+
+        const needsRefresh = existingTrack.name.startsWith('YouTube ')
+          || existingTrack.artist === 'Unknown Artist'
+          || existingTrack.albumArt !== info.thumbnail;
+        if (!needsRefresh) return;
+
+        updatePlaylistTrack(normalizedTrackId, {
+          title: info.title,
+          artist: info.artist,
+          thumbnail: info.thumbnail,
+        });
+        this.reloadLibrary();
+        if (this.currentTrack?.id === normalizedTrackId) {
+          this.currentTrack = {
+            ...this.currentTrack,
+            name: info.title,
+            artist: info.artist,
+            albumArt: info.thumbnail,
+          };
+        }
+      } catch (error) {
+        console.warn('Transition warmup failed:', error);
+      }
+    })().finally(() => {
+      this.warmupPromises.delete(normalizedTrackId);
+    });
+
+    this.warmupPromises.set(normalizedTrackId, warmupPromise);
+    await warmupPromise;
+  }
+
+  async playTransitionTarget(
+    trackId: string,
+    targetTimeMs: number,
+    options: TransitionPlaybackOptions = {}
+  ): Promise<void> {
+    await this.warmupTransitionTarget(trackId);
+    this.startTransitionVolumeEnvelope(options.sourceLoudnessRms, options.targetLoudnessRms);
+    await this.loadTrackAtTime(trackId, targetTimeMs);
   }
 
   addTrackToLibrary(track: UnifiedTrack): void {

@@ -330,7 +330,7 @@ export class YouTubePlayer {
     return { ...this.state };
   }
 
-  loadVideo(videoId: string, autoplay = true): void {
+  loadVideo(videoId: string, autoplay = true, startSeconds = 0): void {
     if (!this.player || !this.state.isReady) {
       console.warn('Player not ready');
       return;
@@ -339,13 +339,19 @@ export class YouTubePlayer {
     this.state.error = null;
     this.state.videoId = videoId;
 
+    const normalizedStart = Number.isFinite(startSeconds) ? Math.max(0, startSeconds) : 0;
+
     if (autoplay) {
-      this.player.loadVideoById(videoId);
+      this.player.loadVideoById(videoId, normalizedStart);
     } else {
-      this.player.cueVideoById(videoId);
+      this.player.cueVideoById(videoId, normalizedStart);
     }
 
     this.notifyStateChange();
+  }
+
+  cueVideo(videoId: string, startSeconds = 0): void {
+    this.loadVideo(videoId, false, startSeconds);
   }
 
   play(): void {

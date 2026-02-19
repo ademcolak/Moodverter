@@ -23,6 +23,7 @@ import {
   type AnalysisState,
   type BaselineEvaluationResult,
   type BaselineRunArtifact,
+  type BaselineTuningAction,
   type EvaluationProgressReport,
   type ManualListeningChecklistMap,
   type TransitionRelevanceMap,
@@ -34,7 +35,10 @@ const ONE_TIME_DATA_RESET_KEY = 'moodverter_data_reset_20260209';
 type BaselineScope = 'selected' | 'all' | 'benchmark';
 const REQUIRED_RELEVANT_TARGETS_PER_SEED = 2;
 const TARGET_BENCHMARK_SEED_COUNT = 10;
-const AUTO_TRANSITION_LEAD_MS = 900;
+const AUTO_TRANSITION_BASE_LEAD_MS = 900;
+const AUTO_TRANSITION_MIN_LEAD_MS = 900;
+const AUTO_TRANSITION_MAX_LEAD_MS = 2200;
+const AUTO_TRANSITION_WARMUP_WINDOW_MS = 2600;
 
 function formatTime(ms: number): string {
   if (!ms || ms < 0) return '0:00';
@@ -58,6 +62,26 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
+function computeAdaptiveTransitionLeadMs(previousLeadMs: number, transitionLatencyMs: number): number {
+  const boundedPrevious = clampNumber(
+    previousLeadMs,
+    AUTO_TRANSITION_MIN_LEAD_MS,
+    AUTO_TRANSITION_MAX_LEAD_MS
+  );
+  const boundedLatency = clampNumber(transitionLatencyMs, 0, 2600);
+  const targetLead = clampNumber(
+    AUTO_TRANSITION_BASE_LEAD_MS + boundedLatency * 0.7,
+    AUTO_TRANSITION_MIN_LEAD_MS,
+    AUTO_TRANSITION_MAX_LEAD_MS
+  );
+  return Math.round(boundedPrevious * 0.65 + targetLead * 0.35);
 }
 
 function clampTimeToTrackDuration(timeMs: number, trackDurationMs?: number): number {
@@ -84,6 +108,14 @@ function formatTrackNames(trackIds: string[], trackMap: Map<string, UnifiedTrack
   return hiddenCount > 0
     ? `${visibleNames.join(', ')} (+${hiddenCount})`
     : visibleNames.join(', ');
+}
+
+function formatTuningIssue(issue: BaselineTuningAction['issue']): string {
+  if (issue === 'event') return 'event';
+  if (issue === 'embedding') return 'embedding';
+  if (issue === 'rhythm') return 'rhythm';
+  if (issue === 'loudness') return 'loudness';
+  return 'penalty';
 }
 
 function App() {
@@ -120,8 +152,12 @@ function App() {
   const [benchmarkSeedTrackIds, setBenchmarkSeedTrackIdsState] = useState<string[]>([]);
   const [relevanceMap, setRelevanceMap] = useState<TransitionRelevanceMap>({});
   const [manualListeningChecklistMap, setManualListeningChecklistMap] = useState<ManualListeningChecklistMap>({});
+  const [autoTransitionLeadMs, setAutoTransitionLeadMs] = useState<number>(AUTO_TRANSITION_BASE_LEAD_MS);
+  const [lastAutoTransitionLatencyMs, setLastAutoTransitionLatencyMs] = useState<number | null>(null);
   const autoLabelSkippedSeedIdsRef = useRef<Set<string>>(new Set());
   const autoTransitionedSourceTrackIdRef = useRef<string | null>(null);
+  const warmedTransitionCandidateKeyRef = useRef<string | null>(null);
+  const autoTransitionLeadMsRef = useRef<number>(AUTO_TRANSITION_BASE_LEAD_MS);
 
   const refreshLibrary = useCallback(async () => {
     try {
@@ -365,19 +401,41 @@ function App() {
   const handlePlayTransitionCandidate = useCallback(async (candidate: TransitionCandidate) => {
     setUiError(null);
     try {
+      const startedAtMs =
+        typeof performance !== 'undefined' ? performance.now() : Date.now();
       const targetTrack = library.find((track) => track.id === candidate.targetTrackId);
       const targetTimeMs = clampTimeToTrackDuration(candidate.targetTimeMs, targetTrack?.durationMs);
-      await play(candidate.targetTrackId);
-      await wait(450);
-      await seek(targetTimeMs);
-      // second seek improves reliability while YT iframe finalizes state
-      await wait(250);
-      await seek(targetTimeMs);
+      const activeProvider = provider ?? getYouTubeProvider();
+      try {
+        await activeProvider.playTransitionTarget(candidate.targetTrackId, targetTimeMs, {
+          sourceLoudnessRms: candidate.sourceLoudnessRms,
+          targetLoudnessRms: candidate.targetLoudnessRms,
+        });
+      } catch (transitionError) {
+        console.warn('playTransitionTarget failed, fallback to play+seek:', transitionError);
+        await play(candidate.targetTrackId);
+        await wait(450);
+        await seek(targetTimeMs);
+        await wait(250);
+        await seek(targetTimeMs);
+      }
+
+      const finishedAtMs =
+        typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const observedLatencyMs = Math.max(0, Math.round(finishedAtMs - startedAtMs));
+      setLastAutoTransitionLatencyMs(observedLatencyMs);
+      const nextLead = computeAdaptiveTransitionLeadMs(
+        autoTransitionLeadMsRef.current,
+        observedLatencyMs
+      );
+      autoTransitionLeadMsRef.current = nextLead;
+      setAutoTransitionLeadMs(nextLead);
+      warmedTransitionCandidateKeyRef.current = null;
     } catch (error) {
       console.error('Failed to play transition candidate:', error);
       setUiError('Transition adayi calinamadi.');
     }
-  }, [library, play, seek]);
+  }, [library, play, provider, seek]);
 
   const handlePreviewTransitionAB = useCallback(async (candidate: TransitionCandidate) => {
     setUiError(null);
@@ -404,6 +462,44 @@ function App() {
   }, [library, play, seek]);
 
   useEffect(() => {
+    warmedTransitionCandidateKeyRef.current = null;
+  }, [playbackState?.currentTrack?.id]);
+
+  useEffect(() => {
+    const currentTrackId = playbackState?.currentTrack?.id ?? null;
+    if (!currentTrackId || !playbackState?.isPlaying) return;
+
+    const candidate = transitionCandidates.find((item) => item.sourceTrackId === currentTrackId);
+    if (!candidate) return;
+
+    const triggerAtMs = clampTimeToTrackDuration(
+      pinnedSourceTimeMs ?? candidate.sourceTimeMs,
+      playbackState.durationMs ?? undefined
+    );
+    const warmupStartMs = Math.max(
+      0,
+      triggerAtMs - (autoTransitionLeadMsRef.current + AUTO_TRANSITION_WARMUP_WINDOW_MS)
+    );
+    const progressNowMs = playbackState.progressMs ?? 0;
+    if (progressNowMs < warmupStartMs) return;
+
+    const warmupKey = `${candidate.sourceTrackId}:${candidate.targetTrackId}:${candidate.targetTimeMs}`;
+    if (warmedTransitionCandidateKeyRef.current === warmupKey) return;
+    warmedTransitionCandidateKeyRef.current = warmupKey;
+
+    const activeProvider = provider ?? getYouTubeProvider();
+    void activeProvider.warmupTransitionTarget(candidate.targetTrackId);
+  }, [
+    pinnedSourceTimeMs,
+    playbackState?.currentTrack?.id,
+    playbackState?.durationMs,
+    playbackState?.isPlaying,
+    playbackState?.progressMs,
+    provider,
+    transitionCandidates,
+  ]);
+
+  useEffect(() => {
     const currentTrackId = playbackState?.currentTrack?.id ?? null;
     if (!currentTrackId || !playbackState?.isPlaying) return;
     if (autoTransitionedSourceTrackIdRef.current === currentTrackId) return;
@@ -415,7 +511,7 @@ function App() {
       pinnedSourceTimeMs ?? candidate.sourceTimeMs,
       playbackState.durationMs ?? undefined
     );
-    const transitionStartMs = Math.max(0, triggerAtMs - AUTO_TRANSITION_LEAD_MS);
+    const transitionStartMs = Math.max(0, triggerAtMs - autoTransitionLeadMsRef.current);
     const progressNowMs = playbackState.progressMs ?? 0;
 
     if (progressNowMs < Math.max(0, transitionStartMs - 300)) return;
@@ -860,6 +956,9 @@ function App() {
               </div>
               <div className="text-[10px] text-[var(--color-text-secondary)]">
                 Oto Gecis: {isAutoTransitioning ? 'gecis yapiliyor...' : 'aktif'}
+                {' | '}
+                Lead {Math.round(autoTransitionLeadMs / 10) / 100}s
+                {lastAutoTransitionLatencyMs !== null ? ` | son gecis ${lastAutoTransitionLatencyMs}ms` : ''}
               </div>
               <div className="text-[10px] text-[var(--color-text-secondary)]">
                 Label Durumu: {selectedSeedRelevantTargets.length}/{REQUIRED_RELEVANT_TARGETS_PER_SEED}
@@ -869,15 +968,19 @@ function App() {
                   Eval Progress: Ready {evaluationProgressReport.readySeedCount}/{evaluationProgressReport.totalSeedCount}
                   {' | '}
                   Label Gate {evaluationProgressReport.labelGatePassedSeedCount}/{evaluationProgressReport.totalSeedCount}
+                  {' | '}
+                  Label Eksigi {evaluationProgressReport.seedsNeedingLabels.length}
+                  {' | '}
+                  Analiz Eksigi {evaluationProgressReport.seedsMissingAnalysis.length}
                 </div>
-                {evaluationProgressReport.seedsNeedingLabels.length > 0 && (
+                {(evaluationProgressReport.seedsNeedingLabels.length > 0 || evaluationProgressReport.seedsMissingAnalysis.length > 0) && (
                   <div className="text-[10px] text-amber-400 truncate">
-                    Label eksigi: {formatTrackNames(evaluationProgressReport.seedsNeedingLabels, libraryTrackMap)}
-                  </div>
-                )}
-                {evaluationProgressReport.seedsMissingAnalysis.length > 0 && (
-                  <div className="text-[10px] text-amber-400 truncate">
-                    Analiz eksigi: {formatTrackNames(evaluationProgressReport.seedsMissingAnalysis, libraryTrackMap)}
+                    Oncelik: {formatTrackNames(
+                      evaluationProgressReport.seedsNeedingLabels.length > 0
+                        ? evaluationProgressReport.seedsNeedingLabels
+                        : evaluationProgressReport.seedsMissingAnalysis,
+                      libraryTrackMap
+                    )}
                   </div>
                 )}
               </div>
@@ -886,10 +989,12 @@ function App() {
                   Benchmark Set: {benchmarkSeedTrackIdsResolved.length}/{TARGET_BENCHMARK_SEED_COUNT}
                   {' | '}
                   Ready {benchmarkProgressReport.readySeedCount}/{benchmarkProgressReport.totalSeedCount}
+                  {' | '}
+                  Label Eksigi {benchmarkSeedsBelowRelevantMinimum.length}
                 </div>
                 {benchmarkSeedsBelowRelevantMinimum.length > 0 && (
                   <div className="text-[10px] text-amber-400 truncate">
-                    Benchmark label eksigi: {formatTrackNames(benchmarkSeedsBelowRelevantMinimum, libraryTrackMap)}
+                    Benchmark oncelik: {formatTrackNames(benchmarkSeedsBelowRelevantMinimum, libraryTrackMap)}
                   </div>
                 )}
                 <div className="flex items-center gap-2">
@@ -980,25 +1085,21 @@ function App() {
                 >
                   {isBaselineLoading && baselineScope === 'benchmark' ? 'Baseline...' : 'Benchmark Baseline'}
                 </button>
-                {baselineResult && (
-                  <div className="text-[10px] text-[var(--color-text-secondary)]">
-                    Scope {baselineScope === 'selected' ? 'Seed' : baselineScope === 'all' ? 'Tum' : 'Benchmark'}
-                    {' | '}
-                    Coverage {formatPercent(baselineResult.coverageRate)}
-                    {' | '}
-                    Good {formatPercent(baselineResult.goodCandidateRate)}
-                  </div>
-                )}
               </div>
 
               {baselineResult && (
                 <div className="text-[10px] text-[var(--color-text-secondary)] border border-white/10 bg-white/5 px-2 py-1">
-                  Top1 {formatPercent(baselineResult.meanTop1Score)} | Top{baselineResult.limit} {formatPercent(baselineResult.meanTopKScore)} | Seed {baselineResult.seedWithCandidates}/{baselineResult.seedCount}
-                </div>
-              )}
-              {baselineResult && (
-                <div className="text-[10px] text-[var(--color-text-secondary)] border border-white/10 bg-white/5 px-2 py-1">
-                  Hit@3 {formatOptionalPercent(baselineResult.hitAt3)} | Hit@5 {formatOptionalPercent(baselineResult.hitAt5)} | Labelled Seed {baselineResult.labeledSeedCount}
+                  Baseline Ozeti: Scope {baselineScope === 'selected' ? 'Seed' : baselineScope === 'all' ? 'Tum' : 'Benchmark'}
+                  {' | '}
+                  Hit@3 {formatOptionalPercent(baselineResult.hitAt3)}
+                  {' | '}
+                  Hit@5 {formatOptionalPercent(baselineResult.hitAt5)}
+                  {' | '}
+                  Mean@{baselineResult.limit} {formatPercent(baselineResult.meanTopKScore)}
+                  {' | '}
+                  Coverage {formatPercent(baselineResult.coverageRate)}
+                  {' | '}
+                  Labelled {baselineResult.labeledSeedCount}
                 </div>
               )}
               {baselineHistory.length > 0 && (
@@ -1027,6 +1128,22 @@ function App() {
                     .join(' | ')}
                 </div>
               )}
+              {baselineResult && baselineResult.tuningActions.length > 0 && (
+                <div className="text-[10px] text-[var(--color-text-secondary)] border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 space-y-1">
+                  <div>
+                    Tuning Loop:{' '}
+                    {baselineResult.tuningActions
+                      .map((action) => {
+                        const trackName = libraryTrackMap.get(action.trackId)?.name ?? action.trackId;
+                        return `${trackName} -> ${formatTuningIssue(action.issue)} (${formatPercent(action.confidence)})`;
+                      })
+                      .join(' | ')}
+                  </div>
+                  <div className="text-emerald-300 truncate">
+                    Sonraki adim: {baselineResult.tuningActions[0].recommendation}
+                  </div>
+                </div>
+              )}
 
               {isTransitionLoading ? (
                 <div className="text-xs text-[var(--color-text-secondary)]">Transition adaylari hesaplanıyor...</div>
@@ -1052,7 +1169,7 @@ function App() {
                         </div>
                         <div className="flex items-center justify-between gap-2">
                           <div className="text-[var(--color-text-secondary)] truncate">
-                            Score {formatPercent(candidate.score.finalScore)} | Event {formatPercent(candidate.score.eventMatchScore)} | Driver {candidate.diagnostic.primaryDriver}
+                            Score {formatPercent(candidate.score.finalScore)} | Event {formatPercent(candidate.score.eventMatchScore)} | LoudΔ {Math.round((candidate.targetLoudnessRms - candidate.sourceLoudnessRms) * 10) / 10}dB | Driver {candidate.diagnostic.primaryDriver}
                           </div>
                           <button
                             onClick={() => void handlePlayTransitionCandidate(candidate)}

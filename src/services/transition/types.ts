@@ -58,8 +58,10 @@ export interface TransitionScoreDiagnostic {
 export interface TransitionCandidate {
   sourceTrackId: string;
   sourceTimeMs: number;
+  sourceLoudnessRms: number;
   targetTrackId: string;
   targetTimeMs: number;
+  targetLoudnessRms: number;
   score: TransitionEdgeScore;
   diagnostic: TransitionScoreDiagnostic;
 }
@@ -86,6 +88,19 @@ export interface BaselineSeedReport {
   hasGoodCandidate: boolean;
   hitAt3: number | null;
   hitAt5: number | null;
+  averageEventMatchScore: number;
+  averageEmbeddingSimilarity: number;
+  averageRhythmAlignmentScore: number;
+  averageLoudnessContinuityScore: number;
+  averageArtifactPenalty: number;
+  dominantDriver: TransitionScoreDriver | null;
+}
+
+export interface BaselineTuningAction {
+  trackId: string;
+  issue: TransitionScoreDriver;
+  recommendation: string;
+  confidence: number;
 }
 
 export interface BaselineEvaluationResult {
@@ -104,6 +119,7 @@ export interface BaselineEvaluationResult {
   hitAt3: number | null;
   hitAt5: number | null;
   bottomSeeds: BaselineSeedReport[];
+  tuningActions: BaselineTuningAction[];
   regressionDetected: boolean;
   regressionSummary: string | null;
   regressionGateEnforced: boolean;

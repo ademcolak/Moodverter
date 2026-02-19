@@ -1,6 +1,6 @@
 # Moodverter Genel Plan (YouTube + Perfect Transition)
 
-> Son güncelleme: 17 Şubat 2026
+> Son güncelleme: 19 Şubat 2026
 > Kapsam: YouTube core playback + moment-level transition discovery
 
 ## Özet
@@ -52,7 +52,7 @@ Kabul kriterleri:
 - [x] Transition adaylarını seed bazlı UI'da görünür kılma.
 - [x] Baseline metric yardımcıları + evaluation checklist.
 - [x] Curated seed set ile ilk baseline sonuçlarını kaydetme.
-- [x] Labeled relevance akışı (`Relevant/Unlabel`) + local persistence.
+- [x] Labeled relevance akışı + local persistence.
 - [x] Baseline çıktısına `Hit@3` / `Hit@5` entegrasyonu.
 - [x] Baseline scope ayrımı: `Seed Baseline` ve `Tum Seed Baseline`.
 
@@ -73,6 +73,30 @@ Kabul kriterleri:
 - [x] Search timeout + rate-limit korumasi ekle (graceful fallback + net UI uyari mesaji).
 - [x] Konfig precedence politikasini yazili hale getir (`runtime override > env > default`).
 - [x] Baseline/analysis artifact versiyon alanlarini genislet (schemaVersion + analysisVersion + scope metadata).
+- [x] UI sadeleştirme: kütüphane satırına tıkla-çal akışı.
+- [x] Manuel seed seçimi yerine çalan şarkıyı otomatik seed kullanımı.
+- [x] Otomatik transition akışı (source moment pinleme ile birlikte).
+- [x] Transition panelinde resize-y ile yükseklik kontrolü.
+- [x] Player initialize için timeout + hata fallback + provider init lock.
+- [x] Eval progress satırlarında ID gürültüsünü azaltma (track adı + kısa özet).
+
+## Son Degisiklik Ozeti (19 Subat 2026)
+### Yapildi
+- Kütüphanede satıra tıklama ile direkt oynatma aktif edildi.
+- `Seed`, `Bench`, checklist gibi günlük kullanımda gürültü oluşturan UI parçaları sadeleştirildi.
+- Çalan şarkı otomatik seed kabul edilerek geçiş adayları bu kaynağa göre yenilenir hale getirildi.
+- Otomatik geçiş tetiği erken başlatılarak bekleme hissi azaltıldı.
+- Player tarafında init kilitlenmesi ve sonsuz "hazırlanıyor" durumuna karşı timeout/fallback eklendi.
+- Kalite kapıları (`lint`, `typecheck`, `build`, `smoke:test`, `smoke:regression-gate`) korunmaya devam edildi.
+- Geçiş hedefi için warmup/prefetch metadata hazırlığı eklendi.
+- Transition geçişi start-time cue (hedef zamana direkt yükleme) ile hızlandırıldı.
+- Geçiş anına loudness envelope + otomatik volume compensation eklendi.
+- Baseline/evaluation özeti kısaltıldı ve `Bottom-3` için tuning action önerileri eklendi.
+
+### Yapilacak
+- Benchmark seed setinde sürekli en az 10 güçlü labeled seed korumak.
+- Bottom-3 tuning action önerilerini run karşılaştırmalarıyla otomatik doğrulamak.
+- Tek-player limitine rağmen geçiş hissini daha da iyileştirmek için overlap/crossfade denemeleri.
 
 ## Sprint Plani (Baslangic: 2026-02-17)
 ### Sprint 1 - Kontrat ve hata modeli
@@ -99,12 +123,14 @@ Kabul kriterleri:
 - [x] `lint`, `tsc`, `build`, `smoke:test` zorunlu kapilar.
 - [x] Baseline regression gate sonucunu PR kontrolu olarak raporlama.
 
-## Durum Özeti (2026-02-10)
+## Durum Özeti (2026-02-19)
 - YouTube core smoke testleri eklendi; kalite kapilarinda `lint`, `tsc`, `build` geciyor.
 - Transition değerlendirme katmanında relevance label tabanlı metrik akışı aktif.
 - İlk Kaggle parity run dokümana işlendi (küçük örneklem: 5 seed / 3 labelled).
 - Kritik öğrenim: küçük örneklemde metrikler optimistic; karar için daha büyük labelled set gerekiyor.
-- `smoke:test` komutunda ortama bagli yol sorunu gorulebiliyor (Node v25 ile gozlemlendi); backlog'a alindi.
+- Otomatik seed + otomatik transition akışı temel kullanıcı yolu haline getirildi.
+- UI tarafında manuel checklist ve ID listesi gürültüsü azaltıldı.
+- Player init timeout/fallback ile "hazırlanıyor" kilitlenmesi riski azaltıldı.
 
 ## Next
 ### 1) Evaluation güvenilirliğini artır
