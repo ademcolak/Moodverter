@@ -14,15 +14,21 @@ Moodverter, YouTube kütüphanesi üzerinde çalışan ve çalan şarkıdan bir 
 - Start-time cue ile hedef zamana direkt yükleme
 - Geçiş anında loudness envelope + otomatik volume compensation
 - Geçiş öncesi pre-duck handoff (pseudo-crossfade hissi)
+- Geçişte dinamik envelope (loudness-farkina gore attack/settle/release)
+- Geçişten hemen önce kisa pre-switch duck lead (daha yumuşak handoff)
 - Adaptif auto-transition lead (son geçiş gecikmesine göre)
 - Transition panelinde sürükleyerek yükseklik ayarlama (`resize-y`)
 - Player init için timeout + hata fallback (sonsuz "Player hazirlaniyor..." beklemesini azaltma)
 - Baseline/benchmark metrik akışı (`Hit@3`, `Hit@5`, regression gate)
 - Benchmark runtime metrikleri (`Latency p95`, `Stall`, `Drop`)
+- Benchmark runtime gate (`p95`, `Stall`, `Drop`, minimum ornek)
+- Runtime gate esiklerini son auto-transition verisine gore kalibre etme
+- Benchmark panelinde runtime threshold drift ozeti (son kosulara gore trend)
 - Kısa baseline özeti + `Bottom-3` için tuning action önerileri
 - Benchmark run’larında tuning validation özeti/gate
-- Benchmark seed seti aktifken otomatik kalite koruma (`ready + label gate`)
+- Benchmark seed setini otomatik bootstrap + koruma (`ready + label gate`, min 10)
 - Scoring v2 (tempo-ratio + harmonic compatibility)
+- Event taxonomy genişletmesi (`build-up`, `bass-hit`) + gelişmiş hard-negative rerank çeşitliliği
 - Retrieval katmanında ANN prototipi (hnswlib-node opsiyonel, brute-force fallback)
 
 ## Yapıldı
@@ -60,6 +66,10 @@ Not: Tauri geliştirme için Rust kurulu olmalıdır.
 pnpm run pipeline:quality
 pnpm run qa:auto
 pnpm run oss:guard
+pnpm run dataset:pipeline -- --config ./configs/dataset-pipeline.example.json
+pnpm run tuning:loop -- --input <json> --output <json>
+pnpm run runtime:drift-report -- --input <json> --output <json>
+pnpm run smoke:tuning-loop-dry-run
 pnpm run smoke:test
 pnpm run smoke:regression-gate
 pnpm run smoke:retrieval-gate

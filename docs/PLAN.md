@@ -161,6 +161,18 @@ Kabul kriterleri:
 - [x] OSS kaynak alimi icin registry + lisans guard otomasyonu (`pnpm run oss:guard`) ekle.
 - [x] Candidate retrieval katmanina ANN index prototipi ekle (hnswlib-node, in-memory fallback ile).
 - [x] Benchmark raporuna transition latency p95 + stall/drop rate metriklerini ekle.
+- [x] Benchmark baseline icin runtime SLO gate ekle (p95/stall/drop + minimum ornek).
+- [x] Benchmark oncesi label coverage gap listesini otomatik ve detayli (seed + eksik adet) hale getir.
+- [x] Bottom-3 tuning aksiyonlarini JSON artifact olarak ureten `tuning:loop` CLI akisini ekle.
+- [x] Event taxonomy genisletmesi (`build-up`, `bass-hit`) + scoring uyumluluk matrisini guncelle.
+- [x] Hard-negative rerank katmanina event-family ve target-zaman yogunlugu cesitlilik cezasi ekle.
+- [x] Tek-player handoff kalitesi icin dinamik transition envelope + pre-switch duck lead ekle.
+- [x] `tuning:loop` icin single + search(trials/validateBestWithGates) smoke testlerini otomatiklestir.
+- [x] Quality pipeline'a tuning dry-run fixture adimi ekle.
+- [x] Runtime gate esiklerini son auto-transition verisiyle kalibre eden akisi ekle.
+- [x] Benchmark runtime threshold drift raporunu (son kosular trendi) ekle.
+- [x] Benchmark seed seti icin min 10 + auto-bootstrap koruma davranisini ekle.
+- [x] CI quality gate'i tek komut (`pnpm run pipeline:quality`) ile zorunlu hale getir.
 
 ## Later
 ### 1) Geçiş kalitesi iyileştirme

@@ -11,9 +11,13 @@ Ana hedef: `A@t1 -> B@t2` gecis kalitesini olculebilir sekilde iyilestirmek.
 - Source moment pinleme (`Pinle`, `Simdiki Ani Al`, `Oto`) opsiyoneldir.
 - Aday hedef icin warmup/prefetch metadata hazirligi otomatik yapilir.
 - Otomatik gecis oncesi handoff pre-duck (pseudo-crossfade) uygulanir.
+- Gecis envelope parametreleri (attack/settle/release) loudness farkina gore dinamik ayarlanir.
+- Hedefe gecmeden hemen once kisa pre-switch duck lead uygulanir.
 - Otomatik transition tetigi uygun anda hedef sarkiya gecer.
 - Auto transition lead suresi son gecis gecikmesine gore dinamik ayarlanir.
-- Benchmark seed set aktifken `ready + label gate` kosuluyla otomatik korunur.
+- Benchmark seed set aktifken `ready + label gate` kosuluyla otomatik bootstrap/koruma yapilir (min 10).
+- Runtime gate esikleri son auto-transition verisine gore kalibre edilir.
+- Benchmark panelinde runtime threshold drift ozeti (son kosular trendi) gosterilir.
 
 ## Hızlı Komutlar
 - `pnpm run pipeline:quality` (onerilen tek komut)
@@ -25,6 +29,10 @@ Ana hedef: `A@t1 -> B@t2` gecis kalitesini olculebilir sekilde iyilestirmek.
 - `pnpm run smoke:test`
 - `pnpm run smoke:regression-gate`
 - `pnpm run smoke:retrieval-gate`
+- `pnpm run smoke:tuning-loop-dry-run`
+- `pnpm run tuning:loop -- --input <json> --output <json>`
+- `pnpm run runtime:drift-report -- --input <json> --output <json>`
+- `pnpm run dataset:pipeline -- --config ./configs/dataset-pipeline.example.json`
 
 ## Regression Kuralı
 - `Benchmark Baseline` kosusu regression gate ile calismalidir.
@@ -60,6 +68,7 @@ Ana hedef: `A@t1 -> B@t2` gecis kalitesini olculebilir sekilde iyilestirmek.
 - Scoring v2: tempo-ratio + harmonic compatibility sinyalleri eklendi.
 - Retrieval katmaninda ANN prototipi (hnswlib-node opsiyonel, brute-force fallback) eklendi.
 - Benchmark ozetine runtime metrikleri (`Latency p95`, `Stall`, `Drop`) eklendi.
+- Event taxonomy genisletildi (`build-up`, `bass-hit`) ve hard-negative rerank cesitlilik sinyalleri guclendirildi.
 
 ## Sonraki Oncelikler
 - Tek kaynak backlog: `docs/PLAN.md` altindaki `Next` bolumu.

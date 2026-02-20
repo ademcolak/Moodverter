@@ -137,6 +137,42 @@ test('scoring fixture C: sanitization clamps confidence and unknown event falls 
   assert.equal(diagnostic.primaryDriver, 'rhythm');
 });
 
+test('scoring fixture D: extended event taxonomy supports build-up and bass-hit pairs', () => {
+  const source = makeNode({
+    id: 'd-source',
+    trackId: 'd1',
+    eventType: 'build-up',
+    eventConfidence: 1,
+    embedding: [1, ...Array.from({ length: 15 }, () => 0)],
+    bpmLocal: 124,
+    chroma: [1, ...Array.from({ length: 11 }, () => 0)],
+    loudnessRms: -10,
+  });
+  const target = makeNode({
+    id: 'd-target',
+    trackId: 'd2',
+    eventType: 'bass-hit',
+    eventConfidence: 1,
+    embedding: [1, ...Array.from({ length: 15 }, () => 0)],
+    bpmLocal: 124,
+    chroma: [1, ...Array.from({ length: 11 }, () => 0)],
+    loudnessRms: -10,
+  });
+
+  const score = scoreTransitionPair(source, target);
+  const diagnostic = explainTransitionPair(source, target);
+
+  nearlyEqual(score.eventMatchScore, 0.8);
+  nearlyEqual(score.embeddingSimilarity, 1);
+  nearlyEqual(score.tempoRatioScore, 1);
+  nearlyEqual(score.harmonicCompatibilityScore, 1);
+  nearlyEqual(score.rhythmAlignmentScore, 1);
+  nearlyEqual(score.loudnessContinuityScore, 1);
+  nearlyEqual(score.artifactPenalty, 0);
+  nearlyEqual(score.finalScore, 0.93);
+  assert.equal(diagnostic.primaryDriver, 'embedding');
+});
+
 test('scoring version and weights are fixed for v2 minispec fixtures', () => {
   assert.equal(TRANSITION_SCORING_VERSION, 'v2');
   assert.deepEqual(TRANSITION_SCORE_WEIGHTS, {

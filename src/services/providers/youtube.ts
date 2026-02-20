@@ -26,6 +26,7 @@ const TRANSITION_VOLUME_DUCK_PERCENT = 16;
 const TRANSITION_VOLUME_STEP_MS = 120;
 const TRANSITION_VOLUME_MIN = 30;
 const TRANSITION_COMPENSATION_MAX_OFFSET = 18;
+const TRANSITION_PRE_SWITCH_DUCK_LEAD_MS = 90;
 const DEFAULT_TRANSITION_HANDOFF_DUCK_PERCENT = 10;
 const DEFAULT_TRANSITION_HANDOFF_RAMP_MS = 220;
 const DEFAULT_TRANSITION_HANDOFF_HOLD_MS = 360;
@@ -47,6 +48,14 @@ export interface TransitionHandoffProfile {
   duckPercent: number;
   rampMs: number;
   holdMs: number;
+}
+
+interface TransitionEnvelopePlan {
+  duckedVolume: number;
+  compensatedVolume: number;
+  attackMs: number;
+  settleMs: number;
+  releaseMs: number;
 }
 
 export class YouTubeProvider implements MusicProvider {
@@ -241,25 +250,91 @@ export class YouTubeProvider implements MusicProvider {
     return this.clampVolume(this.volume + offset);
   }
 
+  private buildTransitionEnvelopePlan(
+    sourceLoudnessRms: number | undefined,
+    targetLoudnessRms: number | undefined
+  ): TransitionEnvelopePlan {
+    const baseVolume = this.clampVolume(this.volume);
+    const compensatedVolume = this.computeCompensatedVolume(sourceLoudnessRms, targetLoudnessRms);
+    const loudnessDelta = (
+      typeof targetLoudnessRms === 'number'
+      && Number.isFinite(targetLoudnessRms)
+      && typeof sourceLoudnessRms === 'number'
+      && Number.isFinite(sourceLoudnessRms)
+    )
+      ? targetLoudnessRms - sourceLoudnessRms
+      : 0;
+    const louderTargetExtraDuck = Math.max(0, Math.min(8, Math.round(loudnessDelta * 1.2)));
+    const handoffInfluenceDuck = Math.round(this.transitionHandoffProfile.duckPercent * 0.45);
+    const dynamicDuckPercent = this.clampVolume(
+      Math.max(
+        TRANSITION_VOLUME_DUCK_PERCENT,
+        handoffInfluenceDuck + louderTargetExtraDuck
+      )
+    );
+    const duckedVolume = this.clampVolume(
+      Math.max(TRANSITION_VOLUME_MIN, baseVolume - dynamicDuckPercent)
+    );
+    const compensationDistance = Math.abs(compensatedVolume - baseVolume);
+    const attackMs = Math.max(
+      320,
+      Math.min(
+        1400,
+        Math.round(460 + compensationDistance * 16 + this.transitionHandoffProfile.rampMs * 0.35)
+      )
+    );
+    const settleMs = Math.max(
+      280,
+      Math.min(
+        1700,
+        Math.round(
+          560 + Math.max(0, loudnessDelta) * 60 + this.transitionHandoffProfile.holdMs * 0.4
+        )
+      )
+    );
+    const releaseMs = Math.max(
+      760,
+      Math.min(
+        2300,
+        Math.round(960 + compensationDistance * 20 + this.transitionHandoffProfile.rampMs * 0.7)
+      )
+    );
+
+    return {
+      duckedVolume,
+      compensatedVolume,
+      attackMs,
+      settleMs,
+      releaseMs,
+    };
+  }
+
   private startTransitionVolumeEnvelope(
     sourceLoudnessRms: number | undefined,
     targetLoudnessRms: number | undefined
   ): void {
     if (!this.player) return;
     const baseVolume = this.clampVolume(this.volume);
-    const duckedVolume = this.clampVolume(
-      Math.max(TRANSITION_VOLUME_MIN, baseVolume - TRANSITION_VOLUME_DUCK_PERCENT)
-    );
-    const compensatedVolume = this.computeCompensatedVolume(sourceLoudnessRms, targetLoudnessRms);
+    const envelopePlan = this.buildTransitionEnvelopePlan(sourceLoudnessRms, targetLoudnessRms);
     const token = this.transitionVolumeAutomationToken + 1;
     this.transitionVolumeAutomationToken = token;
 
-    this.applyPlayerVolume(duckedVolume);
+    this.applyPlayerVolume(envelopePlan.duckedVolume);
     void (async () => {
       await wait(140);
-      await this.rampPlayerVolume(duckedVolume, compensatedVolume, 700, token);
-      await wait(900);
-      await this.rampPlayerVolume(compensatedVolume, baseVolume, 1100, token);
+      await this.rampPlayerVolume(
+        envelopePlan.duckedVolume,
+        envelopePlan.compensatedVolume,
+        envelopePlan.attackMs,
+        token
+      );
+      await wait(envelopePlan.settleMs);
+      await this.rampPlayerVolume(
+        envelopePlan.compensatedVolume,
+        baseVolume,
+        envelopePlan.releaseMs,
+        token
+      );
     })();
   }
 
@@ -585,6 +660,7 @@ export class YouTubeProvider implements MusicProvider {
     this.transitionHandoffToken += 1;
     await this.warmupTransitionTarget(trackId);
     this.startTransitionVolumeEnvelope(options.sourceLoudnessRms, options.targetLoudnessRms);
+    await wait(TRANSITION_PRE_SWITCH_DUCK_LEAD_MS);
     await this.loadTrackAtTime(trackId, targetTimeMs);
   }
 

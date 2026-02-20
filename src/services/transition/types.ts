@@ -2,6 +2,8 @@ export type TransitionEventType =
   | 'scream-hit'
   | 'drop'
   | 'vocal-hit'
+  | 'build-up'
+  | 'bass-hit'
   | 'silence-break'
   | 'percussive-hit'
   | 'other';
@@ -89,6 +91,66 @@ export interface RecordTransitionRuntimeEventInput {
   mode?: TransitionRuntimeMode;
 }
 
+export interface RuntimeGateThresholds {
+  minTransitionRuntimeSampleCount: number;
+  maxTransitionLatencyP95Ms: number;
+  maxTransitionStallRate: number;
+  maxTransitionDropRate: number;
+}
+
+export interface RuntimeGateCalibrationInput {
+  seedTrackIds?: string[];
+  minCalibrationSampleCount?: number;
+}
+
+export interface RuntimeGateCalibration {
+  sampleCount: number;
+  observedLatencyP95Ms: number | null;
+  observedStallRate: number | null;
+  observedDropRate: number | null;
+  usedFallbackThresholds: boolean;
+  thresholds: RuntimeGateThresholds;
+  summary: string;
+}
+
+export interface RuntimeThresholdDriftInput {
+  scopeId?: string;
+  windowSize?: number;
+  stableToleranceRatio?: number;
+  degradingToleranceRatio?: number;
+}
+
+export type RuntimeDriftStatus = 'improving' | 'stable' | 'degrading' | 'unknown';
+
+export interface RuntimeThresholdDriftMetric {
+  key: 'latencyP95Ms' | 'stallRate' | 'dropRate';
+  latestObserved: number | null;
+  baselineObserved: number | null;
+  driftRatio: number | null;
+  threshold: number | null;
+  thresholdHeadroom: number | null;
+  thresholdDeltaRatio: number | null;
+  status: RuntimeDriftStatus;
+}
+
+export interface RuntimeThresholdDriftReport {
+  generatedAt: string;
+  scopeId: string;
+  runCount: number;
+  windowSize: number;
+  overallStatus: RuntimeDriftStatus;
+  summary: string;
+  metrics: RuntimeThresholdDriftMetric[];
+}
+
+export interface TransitionScoreWeights {
+  eventMatch: number;
+  embedding: number;
+  rhythm: number;
+  loudness: number;
+  artifactPenalty: number;
+}
+
 export interface BaselineEvaluationInput {
   seedTrackIds?: string[];
   limit?: number;
@@ -100,6 +162,11 @@ export interface BaselineEvaluationInput {
   requiredRelevantTargetsPerSeed?: number;
   enforceRelevantTargetMinimum?: boolean;
   enforceTuningValidationGate?: boolean;
+  enforceRuntimeGate?: boolean;
+  minTransitionRuntimeSampleCount?: number;
+  maxTransitionLatencyP95Ms?: number;
+  maxTransitionStallRate?: number;
+  maxTransitionDropRate?: number;
 }
 
 export type BaselineScopeLabel = 'selected' | 'all' | 'custom';
@@ -129,9 +196,17 @@ export interface BaselineTuningAction {
   confidence: number;
 }
 
+export interface SeedRelevantTargetGap {
+  trackId: string;
+  relevantTargetCount: number;
+  missingTargetCount: number;
+}
+
 export interface BaselineEvaluationResult {
   schemaVersion: number;
   analysisVersion: number;
+  scoringVersion: string;
+  scoreWeights: TransitionScoreWeights;
   runAt: string;
   scopeLabel: BaselineScopeLabel;
   scopeId: string;
@@ -157,11 +232,16 @@ export interface BaselineEvaluationResult {
   relevanceTargetGateEnforced: boolean;
   relevanceTargetGatePassed: boolean;
   seedsBelowRelevantTargetMinimum: string[];
+  seedsBelowRelevantTargetMinimumDetails: SeedRelevantTargetGap[];
   relevanceTargetGateSummary: string | null;
   transitionRuntimeSampleCount: number;
   transitionLatencyP95Ms: number | null;
   transitionStallRate: number | null;
   transitionDropRate: number | null;
+  runtimeGateEnforced: boolean;
+  runtimeGatePassed: boolean;
+  runtimeGateSummary: string | null;
+  runtimeGateThresholds: RuntimeGateThresholds;
   limit: number;
   goodThreshold: number;
 }

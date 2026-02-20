@@ -6,6 +6,7 @@ const stepDefinitions = [
   { name: 'QA Auto', command: 'pnpm', args: ['run', 'qa:auto'] },
   { name: 'OSS Guard', command: 'pnpm', args: ['run', 'oss:guard'] },
   { name: 'Retrieval Gate', command: 'pnpm', args: ['run', 'smoke:retrieval-gate'] },
+  { name: 'Tuning Dry Run', command: 'pnpm', args: ['run', 'smoke:tuning-loop-dry-run'] },
 ];
 
 function runStep(step) {

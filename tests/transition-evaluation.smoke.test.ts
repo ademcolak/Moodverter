@@ -150,6 +150,53 @@ test('runBaselineEvaluation reports runtime p95/stall/drop metrics for benchmark
   assert.equal(result.transitionDropRate, 0.5);
 });
 
+test('runtime gate rejects benchmark baseline when runtime slo is degraded', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-runtime-gate',
+    name: 'Seed Track Runtime Gate',
+    artist: 'Seed Artist Runtime Gate',
+    durationMs: 175_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-runtime-gate',
+    name: 'Target Track Runtime Gate',
+    artist: 'Target Artist Runtime Gate',
+    durationMs: 176_000,
+  });
+
+  recordTransitionRuntimeEvent({
+    sourceTrackId: 'seed-track-runtime-gate',
+    targetTrackId: 'target-track-runtime-gate',
+    latencyMs: 2600,
+    stalled: true,
+    dropped: true,
+    mode: 'auto',
+  });
+  recordTransitionRuntimeEvent({
+    sourceTrackId: 'seed-track-runtime-gate',
+    targetTrackId: 'target-track-runtime-gate',
+    latencyMs: 2400,
+    stalled: true,
+    dropped: false,
+    mode: 'auto',
+  });
+
+  await assert.rejects(
+    () => runBaselineEvaluation({
+      seedTrackIds: ['seed-track-runtime-gate'],
+      scopeLabel: 'custom',
+      scopeId: 'benchmark-v1',
+      limit: 5,
+      enforceRuntimeGate: true,
+      minTransitionRuntimeSampleCount: 2,
+      maxTransitionLatencyP95Ms: 2000,
+      maxTransitionStallRate: 0.2,
+      maxTransitionDropRate: 0.2,
+    }),
+    /Runtime gate failed/
+  );
+});
+
 test('findTransitionCandidates respects pinned source moment', async () => {
   await analyzeTrackWithHeuristicV1({
     id: 'seed-track-pin',

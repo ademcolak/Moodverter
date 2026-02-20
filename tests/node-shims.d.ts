@@ -1,5 +1,6 @@
 declare const process: {
   argv: string[];
+  execPath: string;
   env: Record<string, string | undefined>;
   cwd(): string;
   stderr: { write(message: string): void };

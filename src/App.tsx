@@ -7,7 +7,10 @@ import { getYouTubeProvider, type TransitionHandoffProfile } from './services/pr
 import { useProvider } from './hooks/useProvider';
 import {
   analyzeTrackWithHeuristicV1,
+  buildBenchmarkSeedSelection,
   buildEvaluationProgressReport,
+  buildRelevantTargetGaps,
+  buildRuntimeThresholdDriftReport,
   clearBenchmarkSeedTrackIds,
   clearTransitionData,
   computeMeanTransitionScore,
@@ -15,8 +18,10 @@ import {
   getAnalysisState,
   getBaselineRunHistory,
   getBenchmarkSeedTrackIds,
+  getRuntimeGateCalibration,
   getTransitionRelevanceMap,
   recordTransitionRuntimeEvent,
+  resolveBenchmarkSeedTargetCount,
   setTransitionRelevanceMap,
   setBenchmarkSeedTrackIds,
   type AnalysisState,
@@ -24,7 +29,9 @@ import {
   type BaselineRunArtifact,
   type BaselineTuningAction,
   type EvaluationProgressReport,
+  type RecordTransitionRuntimeEventInput,
   type TransitionRelevanceMap,
+  type RuntimeGateThresholds,
   runBaselineEvaluation,
   type TransitionCandidate,
 } from './services/transition';
@@ -32,7 +39,8 @@ import {
 const ONE_TIME_DATA_RESET_KEY = 'moodverter_data_reset_20260209';
 type BaselineScope = 'selected' | 'all' | 'benchmark';
 const REQUIRED_RELEVANT_TARGETS_PER_SEED = 2;
-const TARGET_BENCHMARK_SEED_COUNT = 10;
+const MIN_BENCHMARK_SEED_COUNT = 10;
+const PREFERRED_BENCHMARK_SEED_COUNT = 12;
 const BENCHMARK_SCOPE_ID = 'benchmark-v1';
 const AUTO_TRANSITION_BASE_LEAD_MS = 900;
 const AUTO_TRANSITION_MIN_LEAD_MS = 900;
@@ -46,6 +54,7 @@ const AUTO_TRANSITION_MISS_WINDOW_MS = 15_000;
 const AUTO_LABEL_RETRY_DELAY_MS = 45_000;
 const AUTO_LABEL_RETRY_DELAY_URGENT_MS = 10_000;
 const TRANSITION_STALL_THRESHOLD_MS = 1_800;
+const BENCHMARK_RUNTIME_CALIBRATION_MIN_SAMPLE_COUNT = 12;
 
 function formatTime(ms: number): string {
   if (!ms || ms < 0) return '0:00';
@@ -183,37 +192,10 @@ function buildHandoffProfileFromBenchmarkResult(
   };
 }
 
-interface BenchmarkSeedSelectionInput {
-  existingSeedTrackIds: string[];
-  sortedLibrary: UnifiedTrack[];
-  analysisStates: Record<string, AnalysisState>;
-  relevanceMap: TransitionRelevanceMap;
-  requiredRelevantTargetsPerSeed: number;
-  targetSeedCount: number;
-}
-
 interface AutoTransitionSnapshot {
   sourceTrackId: string;
   targetTrackId: string;
   atMs: number;
-}
-
-function buildBenchmarkSeedSelection(input: BenchmarkSeedSelectionInput): string[] {
-  const eligibleTrackIds = input.sortedLibrary
-    .map((track) => track.id)
-    .filter((trackId) =>
-      input.analysisStates[trackId]?.status === 'ready'
-      && (input.relevanceMap[trackId] ?? []).length >= input.requiredRelevantTargetsPerSeed
-    );
-  const eligibleSet = new Set(eligibleTrackIds);
-  const prioritizedExisting = input.existingSeedTrackIds
-    .map((trackId) => trackId.trim())
-    .filter((trackId) => trackId.length > 0 && eligibleSet.has(trackId));
-  const merged = [
-    ...prioritizedExisting,
-    ...eligibleTrackIds.filter((trackId) => !prioritizedExisting.includes(trackId)),
-  ];
-  return merged.slice(0, input.targetSeedCount);
 }
 
 function App() {
@@ -248,9 +230,11 @@ function App() {
   const [baselineHistory, setBaselineHistory] = useState<BaselineRunArtifact[]>([]);
   const [baselineScope, setBaselineScope] = useState<BaselineScope>('selected');
   const [benchmarkSeedTrackIds, setBenchmarkSeedTrackIdsState] = useState<string[]>([]);
+  const [benchmarkAutoBootstrapPaused, setBenchmarkAutoBootstrapPaused] = useState(false);
   const [relevanceMap, setRelevanceMap] = useState<TransitionRelevanceMap>({});
   const [autoTransitionLeadMs, setAutoTransitionLeadMs] = useState<number>(AUTO_TRANSITION_BASE_LEAD_MS);
   const [lastAutoTransitionLatencyMs, setLastAutoTransitionLatencyMs] = useState<number | null>(null);
+  const [runtimeEventVersion, setRuntimeEventVersion] = useState(0);
   const [handoffProfile, setHandoffProfile] = useState<TransitionHandoffProfile>(() =>
     getYouTubeProvider().getTransitionHandoffProfile()
   );
@@ -274,6 +258,8 @@ function App() {
     setTransitionError(null);
     setRelevanceMap({});
     setBenchmarkSeedTrackIdsState([]);
+    setBenchmarkAutoBootstrapPaused(false);
+    setRuntimeEventVersion(0);
     if (options?.clearInput) {
       setUiError(null);
       setUrlInput('');
@@ -513,6 +499,11 @@ function App() {
     }
   }, [library, refreshAnalysisStates, refreshTransitionCandidates, seedTrackId]);
 
+  const noteRuntimeEvent = useCallback((input: RecordTransitionRuntimeEventInput) => {
+    recordTransitionRuntimeEvent(input);
+    setRuntimeEventVersion((current) => current + 1);
+  }, []);
+
   const handlePlayTransitionCandidate = useCallback(async (
     candidate: TransitionCandidate,
     options: { reason?: 'auto' | 'manual' } = {}
@@ -541,7 +532,7 @@ function App() {
       const finishedAtMs =
         typeof performance !== 'undefined' ? performance.now() : Date.now();
       const observedLatencyMs = Math.max(0, Math.round(finishedAtMs - startedAtMs));
-      recordTransitionRuntimeEvent({
+      noteRuntimeEvent({
         sourceTrackId: candidate.sourceTrackId,
         targetTrackId: candidate.targetTrackId,
         latencyMs: observedLatencyMs,
@@ -573,7 +564,7 @@ function App() {
       const failedAtMs =
         typeof performance !== 'undefined' ? performance.now() : Date.now();
       const failureLatencyMs = Math.max(0, Math.round(failedAtMs - startedAtMs));
-      recordTransitionRuntimeEvent({
+      noteRuntimeEvent({
         sourceTrackId: candidate.sourceTrackId,
         targetTrackId: candidate.targetTrackId,
         latencyMs: failureLatencyMs,
@@ -584,7 +575,7 @@ function App() {
       console.error('Failed to play transition candidate:', error);
       setUiError('Transition adayi calinamadi.');
     }
-  }, [library, play, provider, seek]);
+  }, [library, noteRuntimeEvent, play, provider, seek]);
 
   const handlePreviewTransitionAB = useCallback(async (candidate: TransitionCandidate) => {
     if (isPreviewingRef.current) return;
@@ -741,7 +732,7 @@ function App() {
     if (progressNowMs < Math.max(0, transitionStartMs - 300)) return;
     if (progressNowMs > triggerAtMs + AUTO_TRANSITION_MISS_WINDOW_MS) {
       autoTransitionedSourceTrackIdRef.current = currentTrackId;
-      recordTransitionRuntimeEvent({
+      noteRuntimeEvent({
         sourceTrackId: candidate.sourceTrackId,
         targetTrackId: candidate.targetTrackId,
         latencyMs: AUTO_TRANSITION_MISS_WINDOW_MS,
@@ -760,6 +751,7 @@ function App() {
     })();
   }, [
     handlePlayTransitionCandidate,
+    noteRuntimeEvent,
     pinnedSourceTimeMs,
     playbackState?.currentTrack?.id,
     playbackState?.durationMs,
@@ -809,25 +801,29 @@ function App() {
     requiredRelevantTargetsPerSeed: REQUIRED_RELEVANT_TARGETS_PER_SEED,
     targetSeedCount: sortedLibrary.length,
   }), [analysisStates, relevanceMap, sortedLibrary]);
+  const benchmarkSeedTargetCount = useMemo(() => resolveBenchmarkSeedTargetCount({
+    eligibleSeedCount: benchmarkEligibleSeedTrackIds.length,
+    minimumSeedCount: MIN_BENCHMARK_SEED_COUNT,
+    preferredSeedCount: PREFERRED_BENCHMARK_SEED_COUNT,
+  }), [benchmarkEligibleSeedTrackIds.length]);
   const benchmarkSeedTrackIdsResolved = useMemo(() => benchmarkSeedTrackIds
     .map((trackId) => trackId.trim())
     .filter((trackId) => trackId.length > 0 && libraryTrackMap.has(trackId)), [benchmarkSeedTrackIds, libraryTrackMap]);
-  const benchmarkLabelGatePassed = useMemo(
-    () => benchmarkSeedTrackIdsResolved.every(
-      (trackId) => (relevanceMap[trackId] ?? []).length >= REQUIRED_RELEVANT_TARGETS_PER_SEED
+  const benchmarkRelevantTargetGaps = useMemo(
+    () => buildRelevantTargetGaps(
+      benchmarkSeedTrackIdsResolved,
+      relevanceMap,
+      REQUIRED_RELEVANT_TARGETS_PER_SEED
     ),
     [benchmarkSeedTrackIdsResolved, relevanceMap]
   );
-  const benchmarkSeedsBelowRelevantMinimum = useMemo(
-    () => benchmarkSeedTrackIdsResolved.filter(
-      (trackId) => (relevanceMap[trackId] ?? []).length < REQUIRED_RELEVANT_TARGETS_PER_SEED
+  const benchmarkLabelGatePassed = benchmarkRelevantTargetGaps.length === 0;
+  const allScopeRelevantTargetGaps = useMemo(
+    () => buildRelevantTargetGaps(
+      sortedLibrary.map((track) => track.id),
+      relevanceMap,
+      REQUIRED_RELEVANT_TARGETS_PER_SEED
     ),
-    [benchmarkSeedTrackIdsResolved, relevanceMap]
-  );
-  const allScopeSeedsBelowRelevantMinimum = useMemo(
-    () => sortedLibrary
-      .map((track) => track.id)
-      .filter((trackId) => (relevanceMap[trackId] ?? []).length < REQUIRED_RELEVANT_TARGETS_PER_SEED),
     [relevanceMap, sortedLibrary]
   );
   const allScopeSeedsMissingAnalysis = useMemo(
@@ -837,14 +833,14 @@ function App() {
     [analysisStates, sortedLibrary]
   );
   const benchmarkSeedShortfallCount = useMemo(
-    () => Math.max(0, TARGET_BENCHMARK_SEED_COUNT - benchmarkEligibleSeedTrackIds.length),
+    () => Math.max(0, MIN_BENCHMARK_SEED_COUNT - benchmarkEligibleSeedTrackIds.length),
     [benchmarkEligibleSeedTrackIds.length]
   );
   const autoLabelTargetSeedIds = useMemo(() => Array.from(new Set([
-    ...allScopeSeedsBelowRelevantMinimum,
+    ...allScopeRelevantTargetGaps.map((gap) => gap.trackId),
     ...allScopeSeedsMissingAnalysis,
-  ])), [allScopeSeedsBelowRelevantMinimum, allScopeSeedsMissingAnalysis]);
-  const allScopeLabelGatePassed = allScopeSeedsBelowRelevantMinimum.length === 0;
+  ])), [allScopeRelevantTargetGaps, allScopeSeedsMissingAnalysis]);
+  const allScopeLabelGatePassed = allScopeRelevantTargetGaps.length === 0;
   const evaluationProgressReport: EvaluationProgressReport = useMemo(() => {
     const seedTrackIds = Array.from(new Set([
       ...sortedLibrary.map((track) => track.id),
@@ -868,6 +864,23 @@ function App() {
     benchmarkSeedTrackIdsResolved,
     relevanceMap,
   ]);
+  const benchmarkRuntimeCalibration = useMemo(() => {
+    // runtimeEventVersion is a rerender trigger after each runtime event write.
+    void runtimeEventVersion;
+    return getRuntimeGateCalibration({
+      seedTrackIds: benchmarkSeedTrackIdsResolved,
+      minCalibrationSampleCount: BENCHMARK_RUNTIME_CALIBRATION_MIN_SAMPLE_COUNT,
+    });
+  }, [benchmarkSeedTrackIdsResolved, runtimeEventVersion]);
+  const benchmarkRuntimeThresholds: RuntimeGateThresholds = benchmarkRuntimeCalibration.thresholds;
+  const benchmarkRuntimeDriftReport = useMemo(() => {
+    // baselineHistory refresh after each baseline run; use it as drift report refresh trigger.
+    void baselineHistory;
+    return buildRuntimeThresholdDriftReport({
+      scopeId: BENCHMARK_SCOPE_ID,
+      windowSize: 8,
+    });
+  }, [baselineHistory]);
 
   useEffect(() => {
     if (benchmarkSeedTrackIds.length === 0) return;
@@ -877,7 +890,7 @@ function App() {
       analysisStates,
       relevanceMap,
       requiredRelevantTargetsPerSeed: REQUIRED_RELEVANT_TARGETS_PER_SEED,
-      targetSeedCount: TARGET_BENCHMARK_SEED_COUNT,
+      targetSeedCount: benchmarkSeedTargetCount,
     });
     const currentSignature = benchmarkSeedTrackIdsResolved.join('|');
     const nextSignature = nextBenchmarkSeedTrackIds.join('|');
@@ -888,6 +901,34 @@ function App() {
     analysisStates,
     benchmarkSeedTrackIds,
     benchmarkSeedTrackIdsResolved,
+    benchmarkSeedTargetCount,
+    relevanceMap,
+    sortedLibrary,
+  ]);
+
+  useEffect(() => {
+    if (benchmarkAutoBootstrapPaused) return;
+    if (benchmarkSeedTrackIds.length > 0) return;
+    if (benchmarkEligibleSeedTrackIds.length < MIN_BENCHMARK_SEED_COUNT) return;
+
+    const autoSeedTrackIds = buildBenchmarkSeedSelection({
+      existingSeedTrackIds: [],
+      sortedLibrary,
+      analysisStates,
+      relevanceMap,
+      requiredRelevantTargetsPerSeed: REQUIRED_RELEVANT_TARGETS_PER_SEED,
+      targetSeedCount: benchmarkSeedTargetCount,
+    });
+    if (autoSeedTrackIds.length < MIN_BENCHMARK_SEED_COUNT) return;
+
+    const persisted = setBenchmarkSeedTrackIds(autoSeedTrackIds);
+    setBenchmarkSeedTrackIdsState(persisted);
+  }, [
+    analysisStates,
+    benchmarkAutoBootstrapPaused,
+    benchmarkEligibleSeedTrackIds.length,
+    benchmarkSeedTargetCount,
+    benchmarkSeedTrackIds.length,
     relevanceMap,
     sortedLibrary,
   ]);
@@ -910,16 +951,21 @@ function App() {
       }
       return;
     }
-    if (scope === 'benchmark' && seedTrackIds.length < TARGET_BENCHMARK_SEED_COUNT) {
-      setUiError(`Benchmark set en az ${TARGET_BENCHMARK_SEED_COUNT} seed icermeli.`);
+    if (scope === 'benchmark' && seedTrackIds.length < MIN_BENCHMARK_SEED_COUNT) {
+      setUiError(`Benchmark set en az ${MIN_BENCHMARK_SEED_COUNT} seed icermeli.`);
       return;
     }
-    const seedsBelowRelevantMinimum = seedTrackIds.filter(
-      (trackId) => (relevanceMap[trackId] ?? []).length < REQUIRED_RELEVANT_TARGETS_PER_SEED
+    const relevantTargetGaps = buildRelevantTargetGaps(
+      seedTrackIds,
+      relevanceMap,
+      REQUIRED_RELEVANT_TARGETS_PER_SEED
     );
-    if (seedsBelowRelevantMinimum.length > 0) {
-      const missingSeedNames = seedsBelowRelevantMinimum
-        .map((trackId) => libraryTrackMap.get(trackId)?.name ?? trackId)
+    if (relevantTargetGaps.length > 0) {
+      const missingSeedNames = relevantTargetGaps
+        .map((gap) => {
+          const trackName = libraryTrackMap.get(gap.trackId)?.name ?? gap.trackId;
+          return `${trackName} (${gap.relevantTargetCount}/${REQUIRED_RELEVANT_TARGETS_PER_SEED}, +${gap.missingTargetCount})`;
+        })
         .join(', ');
       setUiError(
         `Label kalite kapisi: seed basina en az ${REQUIRED_RELEVANT_TARGETS_PER_SEED} relevant hedef gerekli. Eksik: ${missingSeedNames}`
@@ -939,6 +985,19 @@ function App() {
         scopeId: scope === 'benchmark' ? BENCHMARK_SCOPE_ID : undefined,
         enforceRegressionGate: scope === 'benchmark',
         enforceTuningValidationGate: scope === 'benchmark',
+        enforceRuntimeGate: scope === 'benchmark',
+        minTransitionRuntimeSampleCount: scope === 'benchmark'
+          ? benchmarkRuntimeThresholds.minTransitionRuntimeSampleCount
+          : undefined,
+        maxTransitionLatencyP95Ms: scope === 'benchmark'
+          ? benchmarkRuntimeThresholds.maxTransitionLatencyP95Ms
+          : undefined,
+        maxTransitionStallRate: scope === 'benchmark'
+          ? benchmarkRuntimeThresholds.maxTransitionStallRate
+          : undefined,
+        maxTransitionDropRate: scope === 'benchmark'
+          ? benchmarkRuntimeThresholds.maxTransitionDropRate
+          : undefined,
         requiredRelevantTargetsPerSeed: REQUIRED_RELEVANT_TARGETS_PER_SEED,
         enforceRelevantTargetMinimum: true,
       });
@@ -952,6 +1011,10 @@ function App() {
       setIsBaselineLoading(false);
     }
   }, [
+    benchmarkRuntimeThresholds.maxTransitionDropRate,
+    benchmarkRuntimeThresholds.maxTransitionLatencyP95Ms,
+    benchmarkRuntimeThresholds.maxTransitionStallRate,
+    benchmarkRuntimeThresholds.minTransitionRuntimeSampleCount,
     benchmarkSeedTrackIdsResolved,
     libraryTrackMap,
     relevanceMap,
@@ -1074,23 +1137,31 @@ function App() {
       analysisStates,
       relevanceMap,
       requiredRelevantTargetsPerSeed: REQUIRED_RELEVANT_TARGETS_PER_SEED,
-      targetSeedCount: TARGET_BENCHMARK_SEED_COUNT,
+      targetSeedCount: benchmarkSeedTargetCount,
     });
-    if (candidateSeedIds.length < TARGET_BENCHMARK_SEED_COUNT) {
+    if (candidateSeedIds.length < MIN_BENCHMARK_SEED_COUNT) {
       setUiError(
-        `Benchmark set icin en az ${TARGET_BENCHMARK_SEED_COUNT} hazir+labelli seed gerekli (mevcut ${candidateSeedIds.length}).`
+        `Benchmark set icin en az ${MIN_BENCHMARK_SEED_COUNT} hazir+labelli seed gerekli (mevcut ${candidateSeedIds.length}).`
       );
       return;
     }
 
     const nextIds = setBenchmarkSeedTrackIds(candidateSeedIds);
     setBenchmarkSeedTrackIdsState(nextIds);
+    setBenchmarkAutoBootstrapPaused(false);
     setUiError(null);
-  }, [analysisStates, benchmarkSeedTrackIds, relevanceMap, sortedLibrary]);
+  }, [
+    analysisStates,
+    benchmarkSeedTargetCount,
+    benchmarkSeedTrackIds,
+    relevanceMap,
+    sortedLibrary,
+  ]);
 
   const handleClearBenchmarkSeedSet = useCallback(() => {
     clearBenchmarkSeedTrackIds();
     setBenchmarkSeedTrackIdsState([]);
+    setBenchmarkAutoBootstrapPaused(true);
   }, []);
 
   const handlePinSourceFromSlider = useCallback(() => {
@@ -1269,24 +1340,45 @@ function App() {
               </div>
               <div className="border border-white/10 bg-white/5 px-2 py-1 space-y-1">
                 <div className="text-[10px] text-[var(--color-text-secondary)]">
-                  Benchmark Set: {benchmarkSeedTrackIdsResolved.length}/{TARGET_BENCHMARK_SEED_COUNT}
+                  Benchmark Set: {benchmarkSeedTrackIdsResolved.length}/{benchmarkSeedTargetCount}
+                  {' | '}
+                  Min {MIN_BENCHMARK_SEED_COUNT}
                   {' | '}
                   Hazir {benchmarkProgressReport.readySeedCount}/{benchmarkProgressReport.totalSeedCount}
                   {' | '}
-                  Label Eksigi {benchmarkSeedsBelowRelevantMinimum.length}
+                  Label Eksigi {benchmarkRelevantTargetGaps.length}
                   {' | '}
                   Uygun {benchmarkEligibleSeedTrackIds.length}
                 </div>
-                {benchmarkSeedsBelowRelevantMinimum.length > 0 && (
+                <div className="text-[10px] text-[var(--color-text-secondary)]">
+                  Runtime Kalibrasyon: {benchmarkRuntimeCalibration.summary}
+                </div>
+                {benchmarkRuntimeDriftReport && (
+                  <div className={`text-[10px] ${
+                    benchmarkRuntimeDriftReport.overallStatus === 'degrading'
+                      ? 'text-amber-400'
+                      : benchmarkRuntimeDriftReport.overallStatus === 'improving'
+                        ? 'text-emerald-300'
+                        : 'text-[var(--color-text-secondary)]'
+                  }`}>
+                    {benchmarkRuntimeDriftReport.summary}
+                  </div>
+                )}
+                {benchmarkRelevantTargetGaps.length > 0 && (
                   <div className="text-[10px] text-amber-400 truncate">
-                    Benchmark oncelik: {formatTrackNames(benchmarkSeedsBelowRelevantMinimum, libraryTrackMap)}
+                    Benchmark oncelik: {benchmarkRelevantTargetGaps
+                      .map((gap) => {
+                        const trackName = libraryTrackMap.get(gap.trackId)?.name ?? gap.trackId;
+                        return `${trackName} (+${gap.missingTargetCount})`;
+                      })
+                      .join(', ')}
                   </div>
                 )}
                 <div className="flex items-center gap-2">
                   <button
                     onClick={handleGenerateBenchmarkSeedSet}
                     className="px-2 py-0.5 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                    title={`Ilk ${TARGET_BENCHMARK_SEED_COUNT} hazir analizli track ile benchmark set olustur`}
+                    title={`En az ${MIN_BENCHMARK_SEED_COUNT}, hedef ${benchmarkSeedTargetCount} hazir+labelli seed ile benchmark set olustur`}
                   >
                     Benchmark Olustur
                   </button>
@@ -1362,7 +1454,7 @@ function App() {
                   onClick={() => void handleRunBaseline('benchmark')}
                   disabled={
                     isBaselineLoading
-                    || benchmarkSeedTrackIdsResolved.length < TARGET_BENCHMARK_SEED_COUNT
+                    || benchmarkSeedTrackIdsResolved.length < MIN_BENCHMARK_SEED_COUNT
                     || !benchmarkLabelGatePassed
                   }
                   className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
@@ -1395,6 +1487,18 @@ function App() {
                   Drop {formatOptionalPercent(baselineResult.transitionDropRate)}
                   {' | '}
                   Ornek {baselineResult.transitionRuntimeSampleCount}
+                </div>
+              )}
+              {baselineResult && (
+                <div className={`text-[10px] border px-2 py-1 ${
+                  baselineResult.runtimeGatePassed
+                    ? 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10'
+                    : 'text-amber-400 border-amber-400/30 bg-amber-500/10'
+                }`}>
+                  Runtime Gate {formatGateLabel(baselineResult.runtimeGatePassed)}
+                  {baselineResult.runtimeGateSummary
+                    ? ` | ${baselineResult.runtimeGateSummary}`
+                    : ` | p95<=${baselineResult.runtimeGateThresholds.maxTransitionLatencyP95Ms}ms stall<=${formatPercent(baselineResult.runtimeGateThresholds.maxTransitionStallRate)} drop<=${formatPercent(baselineResult.runtimeGateThresholds.maxTransitionDropRate)}`}
                 </div>
               )}
               {baselineResult && (

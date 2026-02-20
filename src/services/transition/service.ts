@@ -9,6 +9,13 @@ import type {
   BaselineTuningAction,
   FindTransitionCandidatesInput,
   RecordTransitionRuntimeEventInput,
+  RuntimeDriftStatus,
+  RuntimeGateCalibration,
+  RuntimeGateCalibrationInput,
+  RuntimeThresholdDriftInput,
+  RuntimeThresholdDriftMetric,
+  RuntimeThresholdDriftReport,
+  SeedRelevantTargetGap,
   TransitionCandidate,
   TransitionEdgeScore,
   TransitionScoreDiagnostic,
@@ -45,11 +52,20 @@ export const TRANSITION_SCORE_WEIGHTS = {
   ...SCORE_WEIGHTS,
 } as const;
 
+export const DEFAULT_RUNTIME_GATE_THRESHOLDS = {
+  minTransitionRuntimeSampleCount: 5,
+  maxTransitionLatencyP95Ms: 2200,
+  maxTransitionStallRate: 0.2,
+  maxTransitionDropRate: 0.1,
+} as const;
+
 const EVENT_COMPATIBILITY: Record<string, Partial<Record<string, number>>> = {
   'scream-hit': {
     'scream-hit': 1,
     'vocal-hit': 0.75,
+    'build-up': 0.45,
     drop: 0.5,
+    'bass-hit': 0.55,
     'percussive-hit': 0.35,
     'silence-break': 0.25,
     other: 0.2,
@@ -57,22 +73,48 @@ const EVENT_COMPATIBILITY: Record<string, Partial<Record<string, number>>> = {
   'vocal-hit': {
     'vocal-hit': 1,
     'scream-hit': 0.75,
+    'build-up': 0.7,
     drop: 0.45,
+    'bass-hit': 0.5,
     'percussive-hit': 0.3,
     'silence-break': 0.2,
     other: 0.2,
   },
+  'build-up': {
+    'build-up': 1,
+    drop: 0.9,
+    'bass-hit': 0.8,
+    'vocal-hit': 0.7,
+    'percussive-hit': 0.55,
+    'scream-hit': 0.45,
+    'silence-break': 0.25,
+    other: 0.3,
+  },
   drop: {
     drop: 1,
+    'bass-hit': 0.85,
+    'build-up': 0.7,
     'percussive-hit': 0.65,
     'vocal-hit': 0.45,
     'scream-hit': 0.5,
     'silence-break': 0.2,
     other: 0.25,
   },
+  'bass-hit': {
+    'bass-hit': 1,
+    drop: 0.85,
+    'build-up': 0.8,
+    'percussive-hit': 0.75,
+    'vocal-hit': 0.5,
+    'scream-hit': 0.55,
+    'silence-break': 0.2,
+    other: 0.25,
+  },
   'percussive-hit': {
     'percussive-hit': 1,
+    'bass-hit': 0.75,
     drop: 0.65,
+    'build-up': 0.55,
     'vocal-hit': 0.3,
     'scream-hit': 0.35,
     'silence-break': 0.2,
@@ -80,7 +122,9 @@ const EVENT_COMPATIBILITY: Record<string, Partial<Record<string, number>>> = {
   },
   'silence-break': {
     'silence-break': 1,
+    'build-up': 0.45,
     drop: 0.3,
+    'bass-hit': 0.3,
     'vocal-hit': 0.2,
     'scream-hit': 0.2,
     'percussive-hit': 0.2,
@@ -90,7 +134,9 @@ const EVENT_COMPATIBILITY: Record<string, Partial<Record<string, number>>> = {
     other: 1,
     'vocal-hit': 0.25,
     'scream-hit': 0.25,
+    'build-up': 0.3,
     drop: 0.25,
+    'bass-hit': 0.3,
     'percussive-hit': 0.25,
     'silence-break': 0.25,
   },
@@ -126,6 +172,31 @@ function nowIsoString(): string {
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
+}
+
+function clampInteger(value: number, min: number, max: number): number {
+  return Math.round(clamp(value, min, max));
+}
+
+function normalizeTrackIds(trackIds: string[] | undefined): string[] {
+  if (!Array.isArray(trackIds)) return [];
+  return Array.from(
+    new Set(
+      trackIds
+        .map((trackId) => trackId.trim())
+        .filter((trackId) => trackId.length > 0)
+    )
+  );
+}
+
+function computePercentile(values: number[], ratio: number): number | null {
+  if (values.length === 0) return null;
+  const sortedValues = [...values].sort((a, b) => a - b);
+  const index = Math.max(
+    0,
+    Math.min(sortedValues.length - 1, Math.ceil(sortedValues.length * ratio) - 1)
+  );
+  return sortedValues[index];
 }
 
 function toFiniteNumber(value: unknown, fallback: number): number {
@@ -284,10 +355,81 @@ function hydrateFromStorage(): void {
             .map((action) => sanitizeBaselineTuningAction(action))
             .filter((action): action is BaselineTuningAction => action !== null)
         : [];
+      const requiredRelevantTargetsPerSeed = Math.max(
+        1,
+        Math.floor(Number(run.requiredRelevantTargetsPerSeed ?? 2))
+      );
+      const seedsBelowRelevantTargetMinimumDetails = Array.isArray(run.seedsBelowRelevantTargetMinimumDetails)
+        ? run.seedsBelowRelevantTargetMinimumDetails
+            .map((item) => {
+              if (!item || typeof item !== 'object') return null;
+              const gap = item as Partial<SeedRelevantTargetGap>;
+              const trackId = typeof gap.trackId === 'string' ? gap.trackId.trim() : '';
+              if (!trackId) return null;
+              const relevantTargetCount = Math.max(
+                0,
+                Math.floor(Number(gap.relevantTargetCount ?? 0))
+              );
+              const missingTargetCount = Math.max(
+                0,
+                Math.floor(Number(gap.missingTargetCount ?? requiredRelevantTargetsPerSeed))
+              );
+              return {
+                trackId,
+                relevantTargetCount,
+                missingTargetCount,
+              } as SeedRelevantTargetGap;
+            })
+            .filter((item): item is SeedRelevantTargetGap => item !== null)
+        : [];
+      const legacySeedsBelowRelevantTargetMinimum = Array.isArray(run.seedsBelowRelevantTargetMinimum)
+        ? run.seedsBelowRelevantTargetMinimum
+            .map((trackId) => (typeof trackId === 'string' ? trackId.trim() : ''))
+            .filter((trackId) => trackId.length > 0)
+        : [];
+      const normalizedSeedsBelowRelevantTargetMinimumDetails = seedsBelowRelevantTargetMinimumDetails.length > 0
+        ? seedsBelowRelevantTargetMinimumDetails
+        : legacySeedsBelowRelevantTargetMinimum.map((trackId) => ({
+            trackId,
+            relevantTargetCount: 0,
+            missingTargetCount: requiredRelevantTargetsPerSeed,
+          }));
+      const normalizedSeedsBelowRelevantTargetMinimum = normalizedSeedsBelowRelevantTargetMinimumDetails
+        .map((item) => item.trackId);
       return {
         ...run,
         schemaVersion: Math.max(1, Math.floor(Number(run.schemaVersion ?? BASELINE_RUN_SCHEMA_VERSION))),
         analysisVersion: Math.max(1, Math.floor(Number(run.analysisVersion ?? ANALYSIS_VERSION))),
+        scoringVersion: typeof run.scoringVersion === 'string'
+          ? run.scoringVersion
+          : TRANSITION_SCORING_VERSION,
+        scoreWeights: {
+          eventMatch: clamp(
+            Number(run.scoreWeights?.eventMatch ?? TRANSITION_SCORE_WEIGHTS.eventMatch),
+            0,
+            1
+          ),
+          embedding: clamp(
+            Number(run.scoreWeights?.embedding ?? TRANSITION_SCORE_WEIGHTS.embedding),
+            0,
+            1
+          ),
+          rhythm: clamp(
+            Number(run.scoreWeights?.rhythm ?? TRANSITION_SCORE_WEIGHTS.rhythm),
+            0,
+            1
+          ),
+          loudness: clamp(
+            Number(run.scoreWeights?.loudness ?? TRANSITION_SCORE_WEIGHTS.loudness),
+            0,
+            1
+          ),
+          artifactPenalty: clamp(
+            Number(run.scoreWeights?.artifactPenalty ?? TRANSITION_SCORE_WEIGHTS.artifactPenalty),
+            0,
+            1
+          ),
+        },
         scopeLabel,
         scopeId: normalizeScopeId(
           scopeLabel,
@@ -309,19 +451,13 @@ function hydrateFromStorage(): void {
         regressionGatePassed: typeof run.regressionGatePassed === 'boolean'
           ? run.regressionGatePassed
           : !regressionDetected,
-        requiredRelevantTargetsPerSeed: Math.max(
-          1,
-          Math.floor(Number(run.requiredRelevantTargetsPerSeed ?? 2))
-        ),
+        requiredRelevantTargetsPerSeed,
         relevanceTargetGateEnforced: Boolean(run.relevanceTargetGateEnforced),
         relevanceTargetGatePassed: typeof run.relevanceTargetGatePassed === 'boolean'
           ? run.relevanceTargetGatePassed
           : true,
-        seedsBelowRelevantTargetMinimum: Array.isArray(run.seedsBelowRelevantTargetMinimum)
-          ? run.seedsBelowRelevantTargetMinimum
-              .map((trackId) => (typeof trackId === 'string' ? trackId.trim() : ''))
-              .filter((trackId) => trackId.length > 0)
-          : [],
+        seedsBelowRelevantTargetMinimum: normalizedSeedsBelowRelevantTargetMinimum,
+        seedsBelowRelevantTargetMinimumDetails: normalizedSeedsBelowRelevantTargetMinimumDetails,
         relevanceTargetGateSummary: typeof run.relevanceTargetGateSummary === 'string'
           ? run.relevanceTargetGateSummary
           : null,
@@ -335,6 +471,45 @@ function hydrateFromStorage(): void {
           : null,
         transitionStallRate: toOptionalFiniteRate(run.transitionStallRate),
         transitionDropRate: toOptionalFiniteRate(run.transitionDropRate),
+        runtimeGateEnforced: Boolean(run.runtimeGateEnforced),
+        runtimeGatePassed: typeof run.runtimeGatePassed === 'boolean'
+          ? run.runtimeGatePassed
+          : true,
+        runtimeGateSummary: typeof run.runtimeGateSummary === 'string'
+          ? run.runtimeGateSummary
+          : null,
+        runtimeGateThresholds: {
+          minTransitionRuntimeSampleCount: Math.max(
+            1,
+            Math.floor(Number(
+              run.runtimeGateThresholds?.minTransitionRuntimeSampleCount
+              ?? DEFAULT_RUNTIME_GATE_THRESHOLDS.minTransitionRuntimeSampleCount
+            ))
+          ),
+          maxTransitionLatencyP95Ms: Math.max(
+            1,
+            Math.floor(Number(
+              run.runtimeGateThresholds?.maxTransitionLatencyP95Ms
+              ?? DEFAULT_RUNTIME_GATE_THRESHOLDS.maxTransitionLatencyP95Ms
+            ))
+          ),
+          maxTransitionStallRate: clamp(
+            Number(
+              run.runtimeGateThresholds?.maxTransitionStallRate
+              ?? DEFAULT_RUNTIME_GATE_THRESHOLDS.maxTransitionStallRate
+            ),
+            0,
+            1
+          ),
+          maxTransitionDropRate: clamp(
+            Number(
+              run.runtimeGateThresholds?.maxTransitionDropRate
+              ?? DEFAULT_RUNTIME_GATE_THRESHOLDS.maxTransitionDropRate
+            ),
+            0,
+            1
+          ),
+        },
         seedTrackIds,
       };
     })
@@ -776,6 +951,8 @@ function sanitizeNode(trackId: string, node: TransitionNode): TransitionNode {
     'scream-hit',
     'drop',
     'vocal-hit',
+    'build-up',
+    'bass-hit',
     'silence-break',
     'percussive-hit',
     'other',
@@ -986,15 +1163,32 @@ export async function findTransitionCandidates(
   const includedKeys = new Set<string>();
   const uniqueTargetTrackIds = new Set<string>();
   const targetUseCount = new Map<string, number>();
+  const targetSelectedTimesByTrack = new Map<string, number[]>();
   const eventPairUseCount = new Map<string, number>();
+  const eventFamilyPairUseCount = new Map<string, number>();
   const driverUseCount = new Map<string, number>();
 
   const getCandidateKey = (candidate: CandidateWithTags): string =>
     `${candidate.targetTrackId}:${candidate.targetTimeMs}:${candidate.sourceTimeMs}`;
+  const getEventFamily = (eventType: TransitionEventType): string => {
+    if (eventType === 'vocal-hit' || eventType === 'scream-hit') return 'vocal';
+    if (eventType === 'drop' || eventType === 'build-up' || eventType === 'bass-hit') return 'energy';
+    if (eventType === 'percussive-hit') return 'rhythm';
+    if (eventType === 'silence-break') return 'break';
+    return 'other';
+  };
   const getEventPairKey = (candidate: CandidateWithTags): string =>
     `${candidate.sourceEventType}->${candidate.targetEventType}`;
+  const getEventFamilyPairKey = (candidate: CandidateWithTags): string =>
+    `${getEventFamily(candidate.sourceEventType)}->${getEventFamily(candidate.targetEventType)}`;
   const incrementMap = (counter: Map<string, number>, key: string): void => {
     counter.set(key, (counter.get(key) ?? 0) + 1);
+  };
+  const countNearbyTargetMoments = (candidate: CandidateWithTags): number => {
+    const selectedTimes = targetSelectedTimesByTrack.get(candidate.targetTrackId) ?? [];
+    return selectedTimes.reduce((count, selectedTime) => (
+      count + (Math.abs(selectedTime - candidate.targetTimeMs) <= 7000 ? 1 : 0)
+    ), 0);
   };
 
   const includeCandidate = (candidate: CandidateWithTags): boolean => {
@@ -1005,7 +1199,12 @@ export async function findTransitionCandidates(
     uniqueTargetTrackIds.add(candidate.targetTrackId);
     incrementMap(targetUseCount, candidate.targetTrackId);
     incrementMap(eventPairUseCount, getEventPairKey(candidate));
+    incrementMap(eventFamilyPairUseCount, getEventFamilyPairKey(candidate));
     incrementMap(driverUseCount, candidate.diagnostic.primaryDriver);
+    targetSelectedTimesByTrack.set(candidate.targetTrackId, [
+      ...(targetSelectedTimesByTrack.get(candidate.targetTrackId) ?? []),
+      candidate.targetTimeMs,
+    ]);
     return true;
   };
 
@@ -1035,10 +1234,33 @@ export async function findTransitionCandidates(
     let bestAdjustedScore = Number.NEGATIVE_INFINITY;
 
     remaining.forEach((candidate, index) => {
-      const targetPenalty = 0.08 * (targetUseCount.get(candidate.targetTrackId) ?? 0);
-      const eventPairPenalty = 0.06 * (eventPairUseCount.get(getEventPairKey(candidate)) ?? 0);
-      const driverPenalty = 0.04 * (driverUseCount.get(candidate.diagnostic.primaryDriver) ?? 0);
-      const adjustedScore = candidate.score.finalScore - targetPenalty - eventPairPenalty - driverPenalty;
+      const targetCount = targetUseCount.get(candidate.targetTrackId) ?? 0;
+      const eventPairCount = eventPairUseCount.get(getEventPairKey(candidate)) ?? 0;
+      const eventFamilyCount = eventFamilyPairUseCount.get(getEventFamilyPairKey(candidate)) ?? 0;
+      const driverCount = driverUseCount.get(candidate.diagnostic.primaryDriver) ?? 0;
+      const nearbyMomentCount = countNearbyTargetMoments(candidate);
+
+      const targetPenalty = 0.09 * targetCount;
+      const targetSaturationPenalty = reranked.length === 0
+        ? 0
+        : 0.05 * (targetCount / reranked.length);
+      const eventPairPenalty = 0.06 * eventPairCount;
+      const eventFamilyPenalty = 0.045 * eventFamilyCount;
+      const driverPenalty = 0.03 * driverCount;
+      const temporalPenalty = 0.05 * nearbyMomentCount;
+      const noveltyBonus =
+        (targetCount === 0 ? 0.02 : 0)
+        + (eventPairCount === 0 ? 0.03 : 0)
+        + (eventFamilyCount === 0 ? 0.02 : 0);
+      const adjustedScore =
+        candidate.score.finalScore
+        + noveltyBonus
+        - targetPenalty
+        - targetSaturationPenalty
+        - eventPairPenalty
+        - eventFamilyPenalty
+        - driverPenalty
+        - temporalPenalty;
       if (adjustedScore > bestAdjustedScore) {
         bestAdjustedScore = adjustedScore;
         bestIndex = index;
@@ -1062,6 +1284,35 @@ export async function runBaselineEvaluation(
   const scopeLabel: BaselineScopeLabel = input.scopeLabel ?? 'custom';
   const regressionGateEnforced = Boolean(input.enforceRegressionGate);
   const tuningValidationGateEnforced = Boolean(input.enforceTuningValidationGate);
+  const runtimeGateEnforced = Boolean(input.enforceRuntimeGate);
+  const runtimeGateThresholds = {
+    minTransitionRuntimeSampleCount: Math.max(
+      1,
+      Math.floor(
+        input.minTransitionRuntimeSampleCount
+        ?? DEFAULT_RUNTIME_GATE_THRESHOLDS.minTransitionRuntimeSampleCount
+      )
+    ),
+    maxTransitionLatencyP95Ms: Math.max(
+      1,
+      Math.floor(
+        input.maxTransitionLatencyP95Ms
+        ?? DEFAULT_RUNTIME_GATE_THRESHOLDS.maxTransitionLatencyP95Ms
+      )
+    ),
+    maxTransitionStallRate: clamp(
+      input.maxTransitionStallRate
+      ?? DEFAULT_RUNTIME_GATE_THRESHOLDS.maxTransitionStallRate,
+      0,
+      1
+    ),
+    maxTransitionDropRate: clamp(
+      input.maxTransitionDropRate
+      ?? DEFAULT_RUNTIME_GATE_THRESHOLDS.maxTransitionDropRate,
+      0,
+      1
+    ),
+  };
   const requiredRelevantTargetsPerSeed = Math.max(
     1,
     Math.floor(input.requiredRelevantTargetsPerSeed ?? 2)
@@ -1087,9 +1338,20 @@ export async function runBaselineEvaluation(
       ),
     ])
   );
-  const seedsBelowRelevantTargetMinimum = seedTrackIds.filter(
-    (trackId) => (relevantTargetsBySeed[trackId] ?? []).length < requiredRelevantTargetsPerSeed
-  );
+  const seedsBelowRelevantTargetMinimumDetails: SeedRelevantTargetGap[] = seedTrackIds
+    .map((trackId) => {
+      const relevantTargetCount = (relevantTargetsBySeed[trackId] ?? []).length;
+      const missingTargetCount = Math.max(0, requiredRelevantTargetsPerSeed - relevantTargetCount);
+      if (missingTargetCount === 0) return null;
+      return {
+        trackId,
+        relevantTargetCount,
+        missingTargetCount,
+      } as SeedRelevantTargetGap;
+    })
+    .filter((item): item is SeedRelevantTargetGap => item !== null);
+  const seedsBelowRelevantTargetMinimum = seedsBelowRelevantTargetMinimumDetails
+    .map((item) => item.trackId);
 
   let seedWithCandidates = 0;
   let labeledSeedCount = 0;
@@ -1168,41 +1430,46 @@ export async function runBaselineEvaluation(
 
   const safeDiv = (numerator: number, denominator: number): number =>
     denominator === 0 ? 0 : numerator / denominator;
-  const percentile = (values: number[], ratio: number): number | null => {
-    if (values.length === 0) return null;
-    const sortedValues = [...values].sort((a, b) => a - b);
-    const index = Math.max(
-      0,
-      Math.min(sortedValues.length - 1, Math.ceil(sortedValues.length * ratio) - 1)
-    );
-    return sortedValues[index];
-  };
   const bottomSeeds = seedReports
     .filter((seed) => seed.candidateCount > 0)
     .sort((a, b) => a.meanTopKScore - b.meanTopKScore || a.top1Score - b.top1Score)
     .slice(0, 3);
   const tuningActions = bottomSeeds.map((seed) => buildSeedTuningAction(seed));
 
-  const scopedRuntimeEvents = transitionRuntimeEvents
-    .filter((event) =>
-      event.mode === 'auto'
-      && seedTrackIds.includes(event.sourceTrackId)
-    )
-    .slice(-200);
-  const runtimeLatencies = scopedRuntimeEvents
-    .map((event) => event.latencyMs)
-    .filter((latency) => Number.isFinite(latency));
-  const transitionRuntimeSampleCount = runtimeLatencies.length;
-  const transitionLatencyP95MsRaw = percentile(runtimeLatencies, 0.95);
-  const transitionLatencyP95Ms = transitionLatencyP95MsRaw === null
-    ? null
-    : Math.max(0, Math.round(transitionLatencyP95MsRaw));
-  const transitionStallRate = transitionRuntimeSampleCount === 0
-    ? null
-    : safeDiv(scopedRuntimeEvents.filter((event) => event.stalled).length, transitionRuntimeSampleCount);
-  const transitionDropRate = transitionRuntimeSampleCount === 0
-    ? null
-    : safeDiv(scopedRuntimeEvents.filter((event) => event.dropped).length, transitionRuntimeSampleCount);
+  const runtimeStats = computeRuntimeStats(getScopedRuntimeEvents(seedTrackIds));
+  const transitionRuntimeSampleCount = runtimeStats.sampleCount;
+  const transitionLatencyP95Ms = runtimeStats.latencyP95Ms;
+  const transitionStallRate = runtimeStats.stallRate;
+  const transitionDropRate = runtimeStats.dropRate;
+  const runtimeGateReasons: string[] = [];
+  if (transitionRuntimeSampleCount < runtimeGateThresholds.minTransitionRuntimeSampleCount) {
+    runtimeGateReasons.push(
+      `Ornek yetersiz ${transitionRuntimeSampleCount}/${runtimeGateThresholds.minTransitionRuntimeSampleCount}`
+    );
+  }
+  if (transitionLatencyP95Ms === null) {
+    runtimeGateReasons.push('Latency p95 yok');
+  } else if (transitionLatencyP95Ms > runtimeGateThresholds.maxTransitionLatencyP95Ms) {
+    runtimeGateReasons.push(
+      `p95 ${transitionLatencyP95Ms}ms > ${runtimeGateThresholds.maxTransitionLatencyP95Ms}ms`
+    );
+  }
+  if (transitionStallRate === null) {
+    runtimeGateReasons.push('Stall metriği yok');
+  } else if (transitionStallRate > runtimeGateThresholds.maxTransitionStallRate) {
+    runtimeGateReasons.push(
+      `Stall ${formatPercentLabel(transitionStallRate)} > ${formatPercentLabel(runtimeGateThresholds.maxTransitionStallRate)}`
+    );
+  }
+  if (transitionDropRate === null) {
+    runtimeGateReasons.push('Drop metriği yok');
+  } else if (transitionDropRate > runtimeGateThresholds.maxTransitionDropRate) {
+    runtimeGateReasons.push(
+      `Drop ${formatPercentLabel(transitionDropRate)} > ${formatPercentLabel(runtimeGateThresholds.maxTransitionDropRate)}`
+    );
+  }
+  const runtimeGatePassed = runtimeGateReasons.length === 0;
+  const runtimeGateSummary = runtimeGatePassed ? null : runtimeGateReasons.join(' | ');
 
   const previousComparableRun = [...baselineRunHistory]
     .reverse()
@@ -1228,11 +1495,15 @@ export async function runBaselineEvaluation(
   const relevanceTargetGatePassed = seedsBelowRelevantTargetMinimum.length === 0;
   const relevanceTargetGateSummary = relevanceTargetGatePassed
     ? null
-    : `Seed basina en az ${requiredRelevantTargetsPerSeed} relevant hedef gerekli. Eksik seed: ${seedsBelowRelevantTargetMinimum.join(', ')}`;
+    : `Seed basina en az ${requiredRelevantTargetsPerSeed} relevant hedef gerekli. Eksik: ${seedsBelowRelevantTargetMinimumDetails
+      .map((item) => `${item.trackId} (${item.relevantTargetCount}/${requiredRelevantTargetsPerSeed}, +${item.missingTargetCount})`)
+      .join(', ')}`;
 
   const result: BaselineEvaluationResult = {
     schemaVersion: BASELINE_RUN_SCHEMA_VERSION,
     analysisVersion: ANALYSIS_VERSION,
+    scoringVersion: TRANSITION_SCORING_VERSION,
+    scoreWeights: TRANSITION_SCORE_WEIGHTS,
     runAt: nowIsoString(),
     scopeLabel,
     scopeId,
@@ -1258,11 +1529,16 @@ export async function runBaselineEvaluation(
     relevanceTargetGateEnforced,
     relevanceTargetGatePassed,
     seedsBelowRelevantTargetMinimum,
+    seedsBelowRelevantTargetMinimumDetails,
     relevanceTargetGateSummary,
     transitionRuntimeSampleCount,
     transitionLatencyP95Ms,
     transitionStallRate,
     transitionDropRate,
+    runtimeGateEnforced,
+    runtimeGatePassed,
+    runtimeGateSummary,
+    runtimeGateThresholds,
     limit,
     goodThreshold,
   };
@@ -1285,8 +1561,283 @@ export async function runBaselineEvaluation(
   if (result.tuningValidationGateEnforced && !result.tuningValidationPassed) {
     throw new Error(`Tuning validation failed: ${result.tuningValidationSummary ?? 'Top issue degraded'}`);
   }
+  if (result.runtimeGateEnforced && !result.runtimeGatePassed) {
+    throw new Error(`Runtime gate failed: ${result.runtimeGateSummary ?? 'Runtime SLO degraded'}`);
+  }
 
   return result;
+}
+
+function getScopedRuntimeEvents(seedTrackIds: string[] = []): TransitionRuntimeEvent[] {
+  const normalizedSeedTrackIds = normalizeTrackIds(seedTrackIds);
+  if (normalizedSeedTrackIds.length === 0) {
+    return transitionRuntimeEvents
+      .filter((event) => event.mode === 'auto')
+      .slice(-200);
+  }
+
+  const seedSet = new Set(normalizedSeedTrackIds);
+  return transitionRuntimeEvents
+    .filter((event) =>
+      event.mode === 'auto'
+      && seedSet.has(event.sourceTrackId)
+    )
+    .slice(-200);
+}
+
+function computeRuntimeStats(events: TransitionRuntimeEvent[]): {
+  sampleCount: number;
+  latencyP95Ms: number | null;
+  stallRate: number | null;
+  dropRate: number | null;
+} {
+  const latencies = events
+    .map((event) => event.latencyMs)
+    .filter((latency) => Number.isFinite(latency));
+  const sampleCount = latencies.length;
+  const latencyP95Raw = computePercentile(latencies, 0.95);
+  const latencyP95Ms = latencyP95Raw === null ? null : Math.max(0, Math.round(latencyP95Raw));
+
+  const stallRate = sampleCount === 0
+    ? null
+    : events.filter((event) => event.stalled).length / sampleCount;
+  const dropRate = sampleCount === 0
+    ? null
+    : events.filter((event) => event.dropped).length / sampleCount;
+
+  return {
+    sampleCount,
+    latencyP95Ms,
+    stallRate,
+    dropRate,
+  };
+}
+
+export function getRuntimeGateCalibration(
+  input: RuntimeGateCalibrationInput = {}
+): RuntimeGateCalibration {
+  hydrateFromStorage();
+
+  const minCalibrationSampleCount = Math.max(
+    DEFAULT_RUNTIME_GATE_THRESHOLDS.minTransitionRuntimeSampleCount,
+    Math.floor(input.minCalibrationSampleCount ?? 12)
+  );
+  const scopedRuntimeEvents = getScopedRuntimeEvents(input.seedTrackIds);
+  const runtimeStats = computeRuntimeStats(scopedRuntimeEvents);
+  const hasObservedStats = runtimeStats.latencyP95Ms !== null
+    && runtimeStats.stallRate !== null
+    && runtimeStats.dropRate !== null;
+  const usedFallbackThresholds = runtimeStats.sampleCount < minCalibrationSampleCount || !hasObservedStats;
+
+  const thresholds = usedFallbackThresholds
+    ? { ...DEFAULT_RUNTIME_GATE_THRESHOLDS }
+    : {
+        minTransitionRuntimeSampleCount: clampInteger(
+          Math.max(
+            DEFAULT_RUNTIME_GATE_THRESHOLDS.minTransitionRuntimeSampleCount,
+            runtimeStats.sampleCount * 0.4
+          ),
+          DEFAULT_RUNTIME_GATE_THRESHOLDS.minTransitionRuntimeSampleCount,
+          30
+        ),
+        maxTransitionLatencyP95Ms: clampInteger(
+          Math.max(
+            DEFAULT_RUNTIME_GATE_THRESHOLDS.maxTransitionLatencyP95Ms * 0.8,
+            (runtimeStats.latencyP95Ms ?? DEFAULT_RUNTIME_GATE_THRESHOLDS.maxTransitionLatencyP95Ms) * 1.12
+          ),
+          1200,
+          5000
+        ),
+        maxTransitionStallRate: clamp(
+          Math.max(
+            DEFAULT_RUNTIME_GATE_THRESHOLDS.maxTransitionStallRate * 0.75,
+            (runtimeStats.stallRate ?? DEFAULT_RUNTIME_GATE_THRESHOLDS.maxTransitionStallRate) + 0.05
+          ),
+          0.05,
+          0.45
+        ),
+        maxTransitionDropRate: clamp(
+          Math.max(
+            DEFAULT_RUNTIME_GATE_THRESHOLDS.maxTransitionDropRate * 0.75,
+            (runtimeStats.dropRate ?? DEFAULT_RUNTIME_GATE_THRESHOLDS.maxTransitionDropRate) + 0.04
+          ),
+          0.03,
+          0.4
+        ),
+      };
+
+  const summary = usedFallbackThresholds
+    ? `Fallback esikler kullanildi (${runtimeStats.sampleCount}/${minCalibrationSampleCount} runtime ornek).`
+    : `Kalibre edildi (${runtimeStats.sampleCount} ornek): p95<=${thresholds.maxTransitionLatencyP95Ms}ms stall<=${formatPercentLabel(thresholds.maxTransitionStallRate)} drop<=${formatPercentLabel(thresholds.maxTransitionDropRate)}.`;
+
+  return {
+    sampleCount: runtimeStats.sampleCount,
+    observedLatencyP95Ms: runtimeStats.latencyP95Ms,
+    observedStallRate: runtimeStats.stallRate,
+    observedDropRate: runtimeStats.dropRate,
+    usedFallbackThresholds,
+    thresholds,
+    summary,
+  };
+}
+
+function computeDriftMetric(params: {
+  key: RuntimeThresholdDriftMetric['key'];
+  latestObserved: number | null;
+  baselineObserved: number | null;
+  threshold: number | null;
+  stableToleranceRatio: number;
+  degradingToleranceRatio: number;
+}): RuntimeThresholdDriftMetric {
+  const { key, latestObserved, baselineObserved, threshold, stableToleranceRatio, degradingToleranceRatio } = params;
+
+  if (latestObserved === null || baselineObserved === null) {
+    return {
+      key,
+      latestObserved,
+      baselineObserved,
+      driftRatio: null,
+      threshold,
+      thresholdHeadroom: threshold === null || latestObserved === null ? null : threshold - latestObserved,
+      thresholdDeltaRatio:
+        threshold === null || latestObserved === null || threshold === 0
+          ? null
+          : latestObserved / threshold - 1,
+      status: 'unknown',
+    };
+  }
+
+  const baselineDenominator = Math.max(Math.abs(baselineObserved), 0.0001);
+  const driftRatio = (latestObserved - baselineObserved) / baselineDenominator;
+  const thresholdHeadroom = threshold === null ? null : threshold - latestObserved;
+  const thresholdDeltaRatio = threshold === null || threshold === 0
+    ? null
+    : latestObserved / threshold - 1;
+
+  let status: RuntimeDriftStatus = 'stable';
+  if (driftRatio <= -stableToleranceRatio) {
+    status = 'improving';
+  } else if (driftRatio >= degradingToleranceRatio) {
+    status = 'degrading';
+  }
+  if (thresholdHeadroom !== null && thresholdHeadroom < 0) {
+    status = 'degrading';
+  }
+
+  return {
+    key,
+    latestObserved,
+    baselineObserved,
+    driftRatio,
+    threshold,
+    thresholdHeadroom,
+    thresholdDeltaRatio,
+    status,
+  };
+}
+
+function formatDriftMetric(metric: RuntimeThresholdDriftMetric): string {
+  if (
+    metric.latestObserved === null
+    || metric.baselineObserved === null
+    || metric.driftRatio === null
+  ) {
+    return `${metric.key}: NA`;
+  }
+  const trend = metric.driftRatio > 0 ? '+' : '';
+  const driftLabel = `${trend}${Math.round(metric.driftRatio * 100)}%`;
+  if (metric.key === 'latencyP95Ms') {
+    return `p95 ${Math.round(metric.latestObserved)}ms (${driftLabel})`;
+  }
+  if (metric.key === 'stallRate') {
+    return `stall ${formatPercentLabel(metric.latestObserved)} (${driftLabel})`;
+  }
+  return `drop ${formatPercentLabel(metric.latestObserved)} (${driftLabel})`;
+}
+
+export function buildRuntimeThresholdDriftReport(
+  input: RuntimeThresholdDriftInput = {}
+): RuntimeThresholdDriftReport | null {
+  hydrateFromStorage();
+
+  const scopeId = (input.scopeId ?? '').trim();
+  const windowSize = Math.max(3, Math.min(30, Math.floor(input.windowSize ?? 8)));
+  const stableToleranceRatio = clamp(input.stableToleranceRatio ?? 0.05, 0.01, 0.4);
+  const degradingToleranceRatio = clamp(input.degradingToleranceRatio ?? 0.12, 0.02, 0.8);
+
+  const scopedRuns = baselineRunHistory
+    .filter((run) =>
+      (scopeId.length === 0 || run.scopeId === scopeId)
+      && run.transitionRuntimeSampleCount > 0
+    )
+    .slice(-windowSize);
+
+  if (scopedRuns.length < 2) return null;
+
+  const latestRun = scopedRuns[scopedRuns.length - 1];
+  const previousRuns = scopedRuns.slice(0, -1);
+
+  const computeAverageOf = (values: Array<number | null>): number | null => {
+    const finiteValues = values.filter((value): value is number => value !== null && Number.isFinite(value));
+    if (finiteValues.length === 0) return null;
+    return finiteValues.reduce((sum, value) => sum + value, 0) / finiteValues.length;
+  };
+
+  const baselineLatency = computeAverageOf(previousRuns.map((run) => run.transitionLatencyP95Ms));
+  const baselineStall = computeAverageOf(previousRuns.map((run) => run.transitionStallRate));
+  const baselineDrop = computeAverageOf(previousRuns.map((run) => run.transitionDropRate));
+  const latestThresholds = latestRun.runtimeGateThresholds;
+
+  const metrics: RuntimeThresholdDriftMetric[] = [
+    computeDriftMetric({
+      key: 'latencyP95Ms',
+      latestObserved: latestRun.transitionLatencyP95Ms,
+      baselineObserved: baselineLatency,
+      threshold: latestThresholds.maxTransitionLatencyP95Ms,
+      stableToleranceRatio,
+      degradingToleranceRatio,
+    }),
+    computeDriftMetric({
+      key: 'stallRate',
+      latestObserved: latestRun.transitionStallRate,
+      baselineObserved: baselineStall,
+      threshold: latestThresholds.maxTransitionStallRate,
+      stableToleranceRatio,
+      degradingToleranceRatio,
+    }),
+    computeDriftMetric({
+      key: 'dropRate',
+      latestObserved: latestRun.transitionDropRate,
+      baselineObserved: baselineDrop,
+      threshold: latestThresholds.maxTransitionDropRate,
+      stableToleranceRatio,
+      degradingToleranceRatio,
+    }),
+  ];
+
+  const hasDegrading = metrics.some((metric) => metric.status === 'degrading');
+  const hasImproving = metrics.some((metric) => metric.status === 'improving');
+  const hasKnownMetrics = metrics.some((metric) => metric.status !== 'unknown');
+  const overallStatus: RuntimeDriftStatus =
+    !hasKnownMetrics
+      ? 'unknown'
+      : hasDegrading
+        ? 'degrading'
+        : hasImproving
+          ? 'improving'
+          : 'stable';
+
+  const summary = `Runtime drift (${overallStatus}): ${metrics.map((metric) => formatDriftMetric(metric)).join(' | ')}`;
+
+  return {
+    generatedAt: nowIsoString(),
+    scopeId: latestRun.scopeId,
+    runCount: scopedRuns.length,
+    windowSize,
+    overallStatus,
+    summary,
+    metrics,
+  };
 }
 
 export function getBaselineRunHistory(limit = 10): BaselineRunArtifact[] {

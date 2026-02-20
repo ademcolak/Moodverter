@@ -48,10 +48,14 @@ pnpm dev
 - [x] Prefetch/warmup + start-time cue ile geçiş bekleme hissinin azaltılması
 - [x] Geçişte loudness envelope + otomatik compensation
 - [x] Geçiş öncesi handoff pre-duck (pseudo-crossfade hissi)
+- [x] Dinamik transition envelope (loudness farkına göre attack/settle/release)
+- [x] Geçişten hemen önce kısa pre-switch duck lead
 - [x] Baseline özetinin kısa, aksiyon odaklı hale getirilmesi
 - [x] Bottom-3 seed için tuning action önerileri
 - [x] Benchmark run’larında tuning validation özeti/gate
-- [x] Benchmark set aktifken otomatik kalite koruma (`ready + label gate`)
+- [x] Benchmark set aktifken otomatik kalite koruma (`ready + label gate`, min 10)
+- [x] Benchmark runtime gate esiklerini son auto-transition verisine gore kalibrasyon
+- [x] Benchmark panelinde runtime threshold drift trend ozeti
 - [x] Benchmark runtime ozet satiri (`Latency p95`, `Stall`, `Drop`)
 - [x] Scoring v2 (`tempo-ratio` + `harmonic compatibility`)
 
@@ -63,6 +67,10 @@ Tek komut (önerilen):
 pnpm run pipeline:quality
 pnpm run qa:auto
 pnpm run oss:guard
+pnpm run dataset:pipeline -- --config ./configs/dataset-pipeline.example.json
+pnpm run tuning:loop -- --input <json> --output <json>
+pnpm run runtime:drift-report -- --input <json> --output <json>
+pnpm run smoke:tuning-loop-dry-run
 ```
 
 Ayrı çalıştırma:
@@ -75,6 +83,7 @@ pnpm run oss:guard
 pnpm smoke:test
 pnpm smoke:regression-gate
 pnpm run smoke:retrieval-gate
+pnpm run smoke:tuning-loop-dry-run
 ```
 
 ## 6) Aktif Takip Maddeleri

@@ -35,7 +35,9 @@ function seededVector(seed: number, size: number): number[] {
 function pickEventType(seed: number, index: number): TransitionEventType {
   const eventTypes: TransitionEventType[] = [
     'vocal-hit',
+    'build-up',
     'drop',
+    'bass-hit',
     'percussive-hit',
     'silence-break',
     'scream-hit',
