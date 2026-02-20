@@ -7,6 +7,7 @@ declare const process: {
   stdout: { write(message: string): void };
   exitCode?: number;
 };
+declare const __dirname: string;
 
 declare module 'node:test' {
   const test: {
@@ -33,4 +34,19 @@ declare module 'node:fs/promises' {
 declare module 'node:path' {
   const path: any;
   export default path;
+}
+
+declare module 'node:child_process' {
+  export function execFile(
+    file: string,
+    args: string[],
+    options: { cwd?: string },
+    callback: (error: Error | null, stdout: string, stderr: string) => void
+  ): void;
+}
+
+declare module 'node:os' {
+  function tmpdir(): string;
+  const os: { tmpdir: typeof tmpdir };
+  export default os;
 }
