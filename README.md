@@ -2,7 +2,7 @@
 
 Moodverter, YouTube kütüphanesi üzerinde çalışan ve çalan şarkıdan bir sonraki şarkıya `A@t1 -> B@t2` otomatik geçiş deneyen masaüstü uygulamasıdır.
 
-## Mevcut Durum (19 Şubat 2026)
+## Mevcut Durum (20 Şubat 2026)
 
 - YouTube linki ile şarkı ekleme
 - YouTube araması ile şarkı bulma/ekleme
@@ -18,9 +18,12 @@ Moodverter, YouTube kütüphanesi üzerinde çalışan ve çalan şarkıdan bir 
 - Transition panelinde sürükleyerek yükseklik ayarlama (`resize-y`)
 - Player init için timeout + hata fallback (sonsuz "Player hazirlaniyor..." beklemesini azaltma)
 - Baseline/benchmark metrik akışı (`Hit@3`, `Hit@5`, regression gate)
+- Benchmark runtime metrikleri (`Latency p95`, `Stall`, `Drop`)
 - Kısa baseline özeti + `Bottom-3` için tuning action önerileri
 - Benchmark run’larında tuning validation özeti/gate
 - Benchmark seed seti aktifken otomatik kalite koruma (`ready + label gate`)
+- Scoring v2 (tempo-ratio + harmonic compatibility)
+- Retrieval katmanında ANN prototipi (hnswlib-node opsiyonel, brute-force fallback)
 
 ## Yapıldı
 
@@ -33,11 +36,14 @@ Moodverter, YouTube kütüphanesi üzerinde çalışan ve çalan şarkıdan bir 
 - [x] Kütüphane UI sadeleştirme (tek tıkla oynatma)
 - [x] Checklist/ID gürültüsünü azaltan durum görünümü
 
-## Yapılacaklar
+## Aktif Backlog
 
-- [x] Benchmark seed havuzunu genişletmek (yetersiz aday durumunda seti 10’da tutacak etiket kapsamı)
-- [x] Tuning validation çıktısını ağırlık tuning workflow’unda daha görünür hale getirmek
-- [x] Handoff envelope parametrelerini seed bazlı benchmark sonuçlarına göre tune etmek
+Kaynak: `docs/PLAN.md` altındaki `Next` bölümü.
+
+- [ ] Labelled seed sayısını en az 10 seviyesinde sürekli korumak
+- [ ] Seed başına minimum 2 relevant target etiketini korumak
+- [ ] Düşük performanslı (`Bottom-3`) seed’lerde score breakdown odaklı tuning döngüsünü sürdürmek
+- [ ] Her scoring/penalty değişikliğinden sonra benchmark baseline + regression gate çalıştırmak
 
 ## Hızlı Başlangıç
 
@@ -51,9 +57,12 @@ Not: Tauri geliştirme için Rust kurulu olmalıdır.
 ## Kalite Komutları
 
 ```bash
+pnpm run pipeline:quality
 pnpm run qa:auto
+pnpm run oss:guard
 pnpm run smoke:test
 pnpm run smoke:regression-gate
+pnpm run smoke:retrieval-gate
 ```
 
 ## Plan ve Faz Dokümanları

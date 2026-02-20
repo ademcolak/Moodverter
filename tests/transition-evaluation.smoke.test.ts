@@ -3,7 +3,6 @@ import test, { before, beforeEach } from 'node:test';
 import {
   addRelevantTarget,
   analyzeTrackWithHeuristicV1,
-  clearManualListeningChecklistMap,
   clearTransitionData,
   clearTransitionRelevanceMap,
   computeHitAtK,
@@ -12,12 +11,10 @@ import {
   getAnalysisState,
   getAnalyzedNodes,
   getBaselineRunHistory,
-  getManualListeningChecklist,
-  getManualListeningChecklistMap,
   getTransitionRelevanceMap,
+  recordTransitionRuntimeEvent,
   removeRelevantTarget,
   runBaselineEvaluation,
-  updateManualListeningChecklist,
 } from '../src/services/transition';
 import { installBrowserMocks, resetBrowserMocks } from './helpers/browser-mocks';
 
@@ -29,7 +26,6 @@ beforeEach(() => {
   resetBrowserMocks();
   clearTransitionData();
   clearTransitionRelevanceMap();
-  clearManualListeningChecklistMap();
 });
 
 test('runBaselineEvaluation computes Hit@3/5 when labeled relevance exists', async () => {
@@ -92,6 +88,66 @@ test('runBaselineEvaluation returns null Hit@K when no labels are provided', asy
   assert.equal(result.labeledSeedCount, 0);
   assert.equal(result.hitAt3, null);
   assert.equal(result.hitAt5, null);
+});
+
+test('runBaselineEvaluation reports runtime p95/stall/drop metrics for benchmark scope seeds', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-runtime',
+    name: 'Seed Track Runtime',
+    artist: 'Seed Artist Runtime',
+    durationMs: 175_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-runtime',
+    name: 'Target Track Runtime',
+    artist: 'Target Artist Runtime',
+    durationMs: 176_000,
+  });
+
+  recordTransitionRuntimeEvent({
+    sourceTrackId: 'seed-track-runtime',
+    targetTrackId: 'target-track-runtime',
+    latencyMs: 800,
+    stalled: false,
+    dropped: false,
+    mode: 'auto',
+  });
+  recordTransitionRuntimeEvent({
+    sourceTrackId: 'seed-track-runtime',
+    targetTrackId: 'target-track-runtime',
+    latencyMs: 1200,
+    stalled: false,
+    dropped: false,
+    mode: 'manual',
+  });
+  recordTransitionRuntimeEvent({
+    sourceTrackId: 'seed-track-runtime',
+    targetTrackId: 'target-track-runtime',
+    latencyMs: 2200,
+    stalled: true,
+    dropped: true,
+    mode: 'auto',
+  });
+  recordTransitionRuntimeEvent({
+    sourceTrackId: 'seed-track-other',
+    targetTrackId: 'target-track-runtime',
+    latencyMs: 2800,
+    stalled: true,
+    dropped: true,
+    mode: 'auto',
+  });
+
+  const result = await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-runtime'],
+    scopeLabel: 'custom',
+    scopeId: 'benchmark-v1',
+    limit: 5,
+  });
+
+  assert.equal(result.transitionRuntimeSampleCount, 2);
+  assert.equal(result.transitionLatencyP95Ms, 2200);
+  assert.equal(result.transitionStallRate, 0.5);
+  assert.equal(result.transitionDropRate, 0.5);
 });
 
 test('findTransitionCandidates respects pinned source moment', async () => {
@@ -185,38 +241,6 @@ test('relevance map helpers add and remove targets without duplicates', () => {
   assert.equal(map['seed-track-3'], undefined);
 });
 
-test('manual listening checklist helpers persist per seed and keep defaults', () => {
-  const firstMap = updateManualListeningChecklist('seed-check-1', {
-    transitionSmooth: true,
-    timingAligned: true,
-  });
-
-  assert.equal(firstMap['seed-check-1'].transitionSmooth, true);
-  assert.equal(firstMap['seed-check-1'].timingAligned, true);
-  assert.equal(firstMap['seed-check-1'].loudnessAcceptable, false);
-  assert.equal(firstMap['seed-check-1'].eventContinuity, false);
-  assert.equal(firstMap['seed-check-1'].replayWorth, false);
-
-  const secondMap = updateManualListeningChecklist('seed-check-2', {
-    replayWorth: true,
-  });
-  assert.equal(secondMap['seed-check-2'].replayWorth, true);
-  assert.equal(secondMap['seed-check-1'].transitionSmooth, true);
-
-  const firstSeed = getManualListeningChecklist('seed-check-1');
-  assert.equal(firstSeed.transitionSmooth, true);
-  assert.equal(firstSeed.timingAligned, true);
-  assert.equal(firstSeed.replayWorth, false);
-
-  const unknownSeed = getManualListeningChecklist('seed-check-unknown');
-  assert.equal(unknownSeed.transitionSmooth, false);
-  assert.equal(unknownSeed.replayWorth, false);
-
-  const storedMap = getManualListeningChecklistMap();
-  assert.equal(storedMap['seed-check-1'].transitionSmooth, true);
-  assert.equal(storedMap['seed-check-2'].replayWorth, true);
-});
-
 test('baseline run history persists latest runs', async () => {
   await analyzeTrackWithHeuristicV1({
     id: 'seed-track-history',
@@ -289,6 +313,8 @@ test('baseline evaluation reports bottom seeds and detects Hit@K regression per 
   assert.equal(firstResult.regressionDetected, false);
   assert.equal(firstResult.bottomSeeds.length, 1);
   assert.equal(firstResult.bottomSeeds[0].trackId, 'seed-track-regression');
+  assert.ok(firstResult.bottomSeeds[0].averageTempoRatioScore >= 0);
+  assert.ok(firstResult.bottomSeeds[0].averageHarmonicCompatibilityScore >= 0);
   assert.ok(firstResult.bottomSeeds[0].averageArtifactPenalty >= 0);
   assert.ok(firstResult.bottomSeeds[0].dominantDriver !== null);
   assert.equal(firstResult.tuningActions.length, 1);

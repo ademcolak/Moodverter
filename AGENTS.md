@@ -16,12 +16,15 @@ Ana hedef: `A@t1 -> B@t2` gecis kalitesini olculebilir sekilde iyilestirmek.
 - Benchmark seed set aktifken `ready + label gate` kosuluyla otomatik korunur.
 
 ## Hızlı Komutlar
-- `pnpm run qa:auto` (onerilen tek komut)
+- `pnpm run pipeline:quality` (onerilen tek komut)
+- `pnpm run qa:auto`
+- `pnpm run oss:guard`
 - `pnpm run lint`
 - `pnpm run typecheck`
 - `pnpm run build`
 - `pnpm run smoke:test`
 - `pnpm run smoke:regression-gate`
+- `pnpm run smoke:retrieval-gate`
 
 ## Regression Kuralı
 - `Benchmark Baseline` kosusu regression gate ile calismalidir.
@@ -38,6 +41,8 @@ Ana hedef: `A@t1 -> B@t2` gecis kalitesini olculebilir sekilde iyilestirmek.
 - Baseline metrik davranisini etkileyen degisiklikte yeni/duzenlenmis test eklenmeli.
 - Scope bazli karsilastirmalarda `scopeId` korunmali (farkli benchmark setleri birbirine karismamali).
 - Subjektif ses kalitesi disindaki kontroller once otomasyonla dogrulanmali.
+- `.smoke-dist` derleme artefakti olarak git takibi disinda tutulur.
+- Dis kaynak kod/model referansi eklendiginde `docs/oss/source-registry.json` guncellenip `pnpm run oss:guard` gecmelidir.
 
 ## Son Donemde Yapildi
 - Kutuphane UI sadeleştirildi (satira tikla -> oynat).
@@ -52,8 +57,13 @@ Ana hedef: `A@t1 -> B@t2` gecis kalitesini olculebilir sekilde iyilestirmek.
 - Baseline ozeti kisaltildi ve `Bottom-3` icin tuning action onerileri eklendi.
 - Benchmark run'larinda tuning action dogrulama ozeti/gate eklendi.
 - Benchmark seed seti icin otomatik kalite koruma (>=10 uygun seed hedefi) eklendi.
+- Scoring v2: tempo-ratio + harmonic compatibility sinyalleri eklendi.
+- Retrieval katmaninda ANN prototipi (hnswlib-node opsiyonel, brute-force fallback) eklendi.
+- Benchmark ozetine runtime metrikleri (`Latency p95`, `Stall`, `Drop`) eklendi.
 
 ## Sonraki Oncelikler
-- Benchmark seed kapsamini buyutmek (en az 10 labeled seedin surekli korunmasi).
-- Tuning validation metrigini agirlik degisimi workflow'unda daha gorunur hale getirmek.
-- Tek-player limitinde handoff envelope parametrelerini (duck/ramp) benchmark sonuclarina gore tune etmek.
+- Tek kaynak backlog: `docs/PLAN.md` altindaki `Next` bolumu.
+- Labelled seed sayisini en az 10 seviyesinde surekli korumak.
+- Seed basina minimum 2 relevant target etiketini korumak.
+- Dusuk performansli (`Bottom-3`) seed'lerde score breakdown odakli tuning dongusunu surdurmek.
+- Her scoring/penalty degisimi sonrasinda benchmark baseline + regression gate kosmak.

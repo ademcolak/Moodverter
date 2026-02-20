@@ -101,8 +101,9 @@ Kabul kriterleri:
 - Cok yavas aglarda startup/playback stall etkisini azaltan oynatma baslangic toparlama adimi eklendi.
 - Uygulama genelindeki panel/buton metinleri daha sade ve tutarli terminolojiye cekildi.
 
-### Yapilacak
-- Bu sprintte acik kalan zorunlu madde yok.
+### Yapilacak (Sprint Scope)
+- Bu sprintte acik kalan zorunlu uygulama maddesi yok.
+- Aktif urun/kalite takip maddeleri asagidaki `Next` bolumunde tutulur.
 
 ## Sprint Plani (Baslangic: 2026-02-17)
 ### Sprint 1 - Kontrat ve hata modeli
@@ -153,6 +154,13 @@ Kabul kriterleri:
 - Scoring minispec + test fixture setini kodla birebir hizala.
 - Baseline run history + regresyon gate mekanizmasini devreye al.
 - Hata siniflama/mesaj standardini provider ve transition katmanina uygula.
+
+### 4) Uygulama Plani (2026-02-20)
+- [x] Scoring v2: tempo-ratio (1x/0.5x/2x) toleransi + harmonic compatibility sinyalini rhythm hesabina ekle.
+- [x] Scoring minispec ve fixture testlerini v2 ile birebir hizala.
+- [x] OSS kaynak alimi icin registry + lisans guard otomasyonu (`pnpm run oss:guard`) ekle.
+- [x] Candidate retrieval katmanina ANN index prototipi ekle (hnswlib-node, in-memory fallback ile).
+- [x] Benchmark raporuna transition latency p95 + stall/drop rate metriklerini ekle.
 
 ## Later
 ### 1) Geçiş kalitesi iyileştirme

@@ -56,6 +56,8 @@ test('scoring fixture A: perfect alignment produces max score and event driver',
 
   nearlyEqual(score.eventMatchScore, 1);
   nearlyEqual(score.embeddingSimilarity, 1);
+  nearlyEqual(score.tempoRatioScore, 1);
+  nearlyEqual(score.harmonicCompatibilityScore, 1);
   nearlyEqual(score.rhythmAlignmentScore, 1);
   nearlyEqual(score.loudnessContinuityScore, 1);
   nearlyEqual(score.artifactPenalty, 0);
@@ -90,7 +92,9 @@ test('scoring fixture B: harsh mismatch clamps final score to zero and penalty d
 
   nearlyEqual(score.eventMatchScore, 0.05);
   nearlyEqual(score.embeddingSimilarity, 0);
-  nearlyEqual(score.rhythmAlignmentScore, 0);
+  nearlyEqual(score.tempoRatioScore, 0.5);
+  nearlyEqual(score.harmonicCompatibilityScore, 0.3);
+  nearlyEqual(score.rhythmAlignmentScore, 0.325);
   nearlyEqual(score.loudnessContinuityScore, 0);
   nearlyEqual(score.artifactPenalty, 1);
   nearlyEqual(score.finalScore, 0);
@@ -124,15 +128,17 @@ test('scoring fixture C: sanitization clamps confidence and unknown event falls 
 
   nearlyEqual(score.eventMatchScore, 0.2);
   nearlyEqual(score.embeddingSimilarity, 0);
-  nearlyEqual(score.rhythmAlignmentScore, 0.3);
+  nearlyEqual(score.tempoRatioScore, 0.5);
+  nearlyEqual(score.harmonicCompatibilityScore, 1);
+  nearlyEqual(score.rhythmAlignmentScore, 0.5);
   nearlyEqual(score.loudnessContinuityScore, 0.5);
   nearlyEqual(score.artifactPenalty, 7 / 24);
-  nearlyEqual(score.finalScore, 317 / 2400);
-  assert.equal(diagnostic.primaryDriver, 'loudness');
+  nearlyEqual(score.finalScore, 413 / 2400);
+  assert.equal(diagnostic.primaryDriver, 'rhythm');
 });
 
-test('scoring version and weights are fixed for v1 minispec fixtures', () => {
-  assert.equal(TRANSITION_SCORING_VERSION, 'v1');
+test('scoring version and weights are fixed for v2 minispec fixtures', () => {
+  assert.equal(TRANSITION_SCORING_VERSION, 'v2');
   assert.deepEqual(TRANSITION_SCORE_WEIGHTS, {
     eventMatch: 0.35,
     embedding: 0.3,

@@ -10,14 +10,13 @@ import {
   buildEvaluationProgressReport,
   clearBenchmarkSeedTrackIds,
   clearTransitionData,
-  clearManualListeningChecklistMap,
   computeMeanTransitionScore,
   findTransitionCandidates,
   getAnalysisState,
   getBaselineRunHistory,
   getBenchmarkSeedTrackIds,
-  getManualListeningChecklistMap,
   getTransitionRelevanceMap,
+  recordTransitionRuntimeEvent,
   setTransitionRelevanceMap,
   setBenchmarkSeedTrackIds,
   type AnalysisState,
@@ -25,7 +24,6 @@ import {
   type BaselineRunArtifact,
   type BaselineTuningAction,
   type EvaluationProgressReport,
-  type ManualListeningChecklistMap,
   type TransitionRelevanceMap,
   runBaselineEvaluation,
   type TransitionCandidate,
@@ -47,6 +45,7 @@ const AUTO_TRANSITION_PREVIEW_SUPPRESS_MS = 7_000;
 const AUTO_TRANSITION_MISS_WINDOW_MS = 15_000;
 const AUTO_LABEL_RETRY_DELAY_MS = 45_000;
 const AUTO_LABEL_RETRY_DELAY_URGENT_MS = 10_000;
+const TRANSITION_STALL_THRESHOLD_MS = 1_800;
 
 function formatTime(ms: number): string {
   if (!ms || ms < 0) return '0:00';
@@ -64,6 +63,11 @@ function formatPercent(value: number): string {
 function formatOptionalPercent(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return 'N/A';
   return formatPercent(value);
+}
+
+function formatOptionalMs(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return 'N/A';
+  return `${Math.round(value)}ms`;
 }
 
 function wait(ms: number): Promise<void> {
@@ -245,7 +249,6 @@ function App() {
   const [baselineScope, setBaselineScope] = useState<BaselineScope>('selected');
   const [benchmarkSeedTrackIds, setBenchmarkSeedTrackIdsState] = useState<string[]>([]);
   const [relevanceMap, setRelevanceMap] = useState<TransitionRelevanceMap>({});
-  const [manualListeningChecklistMap, setManualListeningChecklistMap] = useState<ManualListeningChecklistMap>({});
   const [autoTransitionLeadMs, setAutoTransitionLeadMs] = useState<number>(AUTO_TRANSITION_BASE_LEAD_MS);
   const [lastAutoTransitionLatencyMs, setLastAutoTransitionLatencyMs] = useState<number | null>(null);
   const [handoffProfile, setHandoffProfile] = useState<TransitionHandoffProfile>(() =>
@@ -259,6 +262,24 @@ function App() {
   const warmedTransitionCandidateKeyRef = useRef<string | null>(null);
   const handoffPrimedCandidateKeyRef = useRef<string | null>(null);
   const autoTransitionLeadMsRef = useRef<number>(AUTO_TRANSITION_BASE_LEAD_MS);
+  const resetRuntimeState = useCallback((options?: { clearInput?: boolean }) => {
+    setLibrary([]);
+    setAnalysisStates({});
+    setSeedTrackId(null);
+    setTransitionCandidates([]);
+    setPinnedSourceTimeMs(null);
+    setSourceSliderTimeMs(0);
+    setBaselineResult(null);
+    setBaselineHistory([]);
+    setTransitionError(null);
+    setRelevanceMap({});
+    setBenchmarkSeedTrackIdsState([]);
+    if (options?.clearInput) {
+      setUiError(null);
+      setUrlInput('');
+      setIsSubmittingUrl(false);
+    }
+  }, []);
 
   const refreshLibrary = useCallback(async () => {
     try {
@@ -278,7 +299,6 @@ function App() {
   useEffect(() => {
     setRelevanceMap(getTransitionRelevanceMap());
     setBaselineHistory(getBaselineRunHistory(5));
-    setManualListeningChecklistMap(getManualListeningChecklistMap());
     setBenchmarkSeedTrackIdsState(getBenchmarkSeedTrackIds());
   }, []);
 
@@ -293,23 +313,12 @@ function App() {
 
     clearYouTubeLocalData();
     clearTransitionData();
-    clearManualListeningChecklistMap();
+    clearBenchmarkSeedTrackIds();
     window.localStorage.setItem(ONE_TIME_DATA_RESET_KEY, '1');
 
-    setLibrary([]);
-    setAnalysisStates({});
-    setSeedTrackId(null);
-    setTransitionCandidates([]);
-    setPinnedSourceTimeMs(null);
-    setSourceSliderTimeMs(0);
-    setBaselineResult(null);
-    setBaselineHistory([]);
-    setTransitionError(null);
-    setRelevanceMap({});
-    setManualListeningChecklistMap({});
-    setBenchmarkSeedTrackIdsState([]);
+    resetRuntimeState();
     void refreshLibrary();
-  }, [refreshLibrary]);
+  }, [refreshLibrary, resetRuntimeState]);
 
   const refreshAnalysisStates = useCallback(() => {
     const nextStates: Record<string, AnalysisState> = {};
@@ -508,10 +517,10 @@ function App() {
     candidate: TransitionCandidate,
     options: { reason?: 'auto' | 'manual' } = {}
   ) => {
+    const startedAtMs =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
     setUiError(null);
     try {
-      const startedAtMs =
-        typeof performance !== 'undefined' ? performance.now() : Date.now();
       const targetTrack = library.find((track) => track.id === candidate.targetTrackId);
       const targetTimeMs = clampTimeToTrackDuration(candidate.targetTimeMs, targetTrack?.durationMs);
       const activeProvider = provider ?? getYouTubeProvider();
@@ -532,6 +541,14 @@ function App() {
       const finishedAtMs =
         typeof performance !== 'undefined' ? performance.now() : Date.now();
       const observedLatencyMs = Math.max(0, Math.round(finishedAtMs - startedAtMs));
+      recordTransitionRuntimeEvent({
+        sourceTrackId: candidate.sourceTrackId,
+        targetTrackId: candidate.targetTrackId,
+        latencyMs: observedLatencyMs,
+        stalled: observedLatencyMs >= TRANSITION_STALL_THRESHOLD_MS,
+        dropped: false,
+        mode: options.reason === 'auto' ? 'auto' : 'manual',
+      });
       setLastAutoTransitionLatencyMs(observedLatencyMs);
       const nextLead = computeAdaptiveTransitionLeadMs(
         autoTransitionLeadMsRef.current,
@@ -553,6 +570,17 @@ function App() {
       warmedTransitionCandidateKeyRef.current = null;
       handoffPrimedCandidateKeyRef.current = null;
     } catch (error) {
+      const failedAtMs =
+        typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const failureLatencyMs = Math.max(0, Math.round(failedAtMs - startedAtMs));
+      recordTransitionRuntimeEvent({
+        sourceTrackId: candidate.sourceTrackId,
+        targetTrackId: candidate.targetTrackId,
+        latencyMs: failureLatencyMs,
+        stalled: true,
+        dropped: true,
+        mode: options.reason === 'auto' ? 'auto' : 'manual',
+      });
       console.error('Failed to play transition candidate:', error);
       setUiError('Transition adayi calinamadi.');
     }
@@ -713,6 +741,14 @@ function App() {
     if (progressNowMs < Math.max(0, transitionStartMs - 300)) return;
     if (progressNowMs > triggerAtMs + AUTO_TRANSITION_MISS_WINDOW_MS) {
       autoTransitionedSourceTrackIdRef.current = currentTrackId;
+      recordTransitionRuntimeEvent({
+        sourceTrackId: candidate.sourceTrackId,
+        targetTrackId: candidate.targetTrackId,
+        latencyMs: AUTO_TRANSITION_MISS_WINDOW_MS,
+        stalled: true,
+        dropped: true,
+        mode: 'auto',
+      });
       return;
     }
 
@@ -813,27 +849,23 @@ function App() {
     const seedTrackIds = Array.from(new Set([
       ...sortedLibrary.map((track) => track.id),
       ...Object.keys(relevanceMap),
-      ...Object.keys(manualListeningChecklistMap),
       ...Object.keys(analysisStates),
     ]));
     return buildEvaluationProgressReport({
       seedTrackIds,
       analysisStates,
       relevanceMap,
-      manualChecklistMap: manualListeningChecklistMap,
       requiredRelevantTargetsPerSeed: REQUIRED_RELEVANT_TARGETS_PER_SEED,
     });
-  }, [analysisStates, manualListeningChecklistMap, relevanceMap, sortedLibrary]);
+  }, [analysisStates, relevanceMap, sortedLibrary]);
   const benchmarkProgressReport: EvaluationProgressReport = useMemo(() => buildEvaluationProgressReport({
     seedTrackIds: benchmarkSeedTrackIdsResolved,
     analysisStates,
     relevanceMap,
-    manualChecklistMap: manualListeningChecklistMap,
     requiredRelevantTargetsPerSeed: REQUIRED_RELEVANT_TARGETS_PER_SEED,
   }), [
     analysisStates,
     benchmarkSeedTrackIdsResolved,
-    manualListeningChecklistMap,
     relevanceMap,
   ]);
 
@@ -1094,24 +1126,8 @@ function App() {
 
       clearYouTubeLocalData();
       clearTransitionData();
-      clearManualListeningChecklistMap();
       clearBenchmarkSeedTrackIds();
-
-      setLibrary([]);
-      setAnalysisStates({});
-      setSeedTrackId(null);
-      setTransitionCandidates([]);
-      setPinnedSourceTimeMs(null);
-      setSourceSliderTimeMs(0);
-      setBaselineResult(null);
-      setBaselineHistory([]);
-      setTransitionError(null);
-      setUiError(null);
-      setUrlInput('');
-      setIsSubmittingUrl(false);
-      setRelevanceMap({});
-      setManualListeningChecklistMap({});
-      setBenchmarkSeedTrackIdsState([]);
+      resetRuntimeState({ clearInput: true });
 
       await refreshLibrary();
       await youtubeProvider.authenticate();
@@ -1120,7 +1136,7 @@ function App() {
       console.error('Failed to reset local data:', error);
       setUiError('Veri temizleme basarisiz oldu.');
     }
-  }, [refreshLibrary]);
+  }, [refreshLibrary, resetRuntimeState]);
 
   return (
     <div className="w-full h-screen bg-[var(--color-background)] overflow-hidden flex flex-col border border-white/10">
@@ -1370,6 +1386,17 @@ function App() {
                   Etiketli {baselineResult.labeledSeedCount}
                 </div>
               )}
+              {baselineResult && baselineResult.transitionRuntimeSampleCount > 0 && (
+                <div className="text-[10px] text-[var(--color-text-secondary)] border border-white/10 bg-white/5 px-2 py-1">
+                  Runtime: p95 {formatOptionalMs(baselineResult.transitionLatencyP95Ms)}
+                  {' | '}
+                  Stall {formatOptionalPercent(baselineResult.transitionStallRate)}
+                  {' | '}
+                  Drop {formatOptionalPercent(baselineResult.transitionDropRate)}
+                  {' | '}
+                  Ornek {baselineResult.transitionRuntimeSampleCount}
+                </div>
+              )}
               {baselineResult && (
                 <div className={`text-[10px] border px-2 py-1 ${
                   baselineResult.tuningValidationPassed
@@ -1388,21 +1415,18 @@ function App() {
                   {' | '}
                   Son Hit@5 {formatOptionalPercent(baselineHistory[0].hitAt5)}
                   {' | '}
+                  Son p95 {formatOptionalMs(baselineHistory[0].transitionLatencyP95Ms)}
+                  {' | '}
+                  Son Stall {formatOptionalPercent(baselineHistory[0].transitionStallRate)}
+                  {' | '}
+                  Son Drop {formatOptionalPercent(baselineHistory[0].transitionDropRate)}
+                  {' | '}
                   Son Tuning {formatGateLabel(baselineHistory[0].tuningValidationPassed)}
                 </div>
               )}
               {baselineResult?.regressionSummary && (
                 <div className="text-[10px] text-amber-400 border border-amber-400/30 bg-amber-500/10 px-2 py-1">
                   Regresyon kapi: {baselineResult.regressionSummary}
-                </div>
-              )}
-              {baselineResult?.tuningValidationSummary && (
-                <div className={`text-[10px] border px-2 py-1 ${
-                  baselineResult.tuningValidationPassed
-                    ? 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10'
-                    : 'text-amber-400 border-amber-400/30 bg-amber-500/10'
-                }`}>
-                  Tuning dogrulama: {baselineResult.tuningValidationSummary}
                 </div>
               )}
               {baselineResult?.relevanceTargetGateSummary && (
@@ -1416,7 +1440,7 @@ function App() {
                   {baselineResult.bottomSeeds
                     .map((seed) => {
                       const trackName = libraryTrackMap.get(seed.trackId)?.name ?? seed.trackId;
-                      return `${trackName} (${formatPercent(seed.meanTopKScore)})`;
+                      return `${trackName} (${formatPercent(seed.meanTopKScore)} | Tempo ${formatPercent(seed.averageTempoRatioScore)} | Harm ${formatPercent(seed.averageHarmonicCompatibilityScore)})`;
                     })
                     .join(' | ')}
                 </div>
@@ -1462,7 +1486,17 @@ function App() {
                         </div>
                         <div className="flex items-center justify-between gap-2">
                           <div className="text-[var(--color-text-secondary)] truncate">
-                            Score {formatPercent(candidate.score.finalScore)} | Event {formatPercent(candidate.score.eventMatchScore)} | LoudΔ {Math.round((candidate.targetLoudnessRms - candidate.sourceLoudnessRms) * 10) / 10}dB | Etken {candidate.diagnostic.primaryDriver}
+                            Score {formatPercent(candidate.score.finalScore)}
+                            {' | '}
+                            Event {formatPercent(candidate.score.eventMatchScore)}
+                            {' | '}
+                            Tempo {formatPercent(candidate.score.tempoRatioScore)}
+                            {' | '}
+                            Harm {formatPercent(candidate.score.harmonicCompatibilityScore)}
+                            {' | '}
+                            LoudΔ {Math.round((candidate.targetLoudnessRms - candidate.sourceLoudnessRms) * 10) / 10}dB
+                            {' | '}
+                            Etken {candidate.diagnostic.primaryDriver}
                           </div>
                           <button
                             onClick={() => void handlePlayTransitionCandidate(candidate)}

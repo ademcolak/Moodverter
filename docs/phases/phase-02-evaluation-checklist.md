@@ -3,7 +3,7 @@
 ## Purpose
 Track baseline transition quality while iterating on moment matching and scoring.
 
-## Status Snapshot (2026-02-19)
+## Status Snapshot (2026-02-20)
 - In-app baseline supports both `Seed Baseline` and `Tum Seed Baseline`.
 - Relevance labels are persisted and consumed by metrics (`Hit@3`, `Hit@5`).
 - Baseline run history is persisted locally and latest runs are visible in UI.
@@ -19,6 +19,7 @@ Track baseline transition quality while iterating on moment matching and scoring
 - Baseline sonucu `Bottom-3` seed icin otomatik tuning action onerileri uretiyor.
 - Benchmark run sonucu tuning action'lari onceki run ile karsilastirip validation ozeti veriyor.
 - Benchmark set aktifken seed listesi `ready + label gate` kosuluyla otomatik korunuyor.
+- Benchmark ozetinde runtime metrikleri (`Latency p95`, `Stall rate`, `Drop rate`) raporlaniyor.
 - Latest Kaggle parity run indicates metric flow is healthy, but sample size is too small for strong conclusions.
 
 ## Seed Set
@@ -26,10 +27,13 @@ Track baseline transition quality while iterating on moment matching and scoring
 - Include mixed genres and vocal/percussive-heavy examples
 - Each seed track should have at least 5 analyzed target tracks
 
-## Metrics (Baseline v1)
+## Metrics (Baseline v2)
 - `Hit@3`: Is at least one relevant transition in top 3?
 - `Hit@5`: Is at least one relevant transition in top 5?
 - `MeanScore@5`: Mean `finalScore` for top 5 candidates
+- `TransitionLatencyP95Ms`: Otomatik gecis latency p95 (ms)
+- `TransitionStallRate`: Stall flag oranı
+- `TransitionDropRate`: Drop flag oranı
 
 ## Labeled Relevance Workflow
 - Open Transition panel and play any track (playing track becomes active seed).

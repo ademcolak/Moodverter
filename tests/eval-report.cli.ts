@@ -1,14 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { buildEvaluationProgressReport, type AnalysisState } from '../src/services/transition';
-import type { ManualListeningChecklistMap } from '../src/services/transition';
 import type { TransitionRelevanceMap } from '../src/services/transition';
 
 interface ReportInputFile {
   seedTrackIds?: string[];
   requiredRelevantTargetsPerSeed?: number;
   relevanceMap?: TransitionRelevanceMap;
-  manualChecklistMap?: ManualListeningChecklistMap;
   analysisStates?: Record<string, Partial<AnalysisState>>;
 }
 
@@ -52,7 +50,7 @@ async function loadInputFile(filePath: string | null): Promise<ReportInputFile |
 
 function printUsage(): void {
   console.log('Usage: pnpm run eval:report -- --input <path-to-json>');
-  console.log('Input schema keys: seedTrackIds, analysisStates, relevanceMap, manualChecklistMap, requiredRelevantTargetsPerSeed');
+  console.log('Input schema keys: seedTrackIds, analysisStates, relevanceMap, requiredRelevantTargetsPerSeed');
 }
 
 async function main(): Promise<void> {
@@ -70,7 +68,6 @@ async function main(): Promise<void> {
     seedTrackIds: inputFile?.seedTrackIds ?? [],
     analysisStates: normalizeAnalysisStates(inputFile?.analysisStates),
     relevanceMap: inputFile?.relevanceMap ?? {},
-    manualChecklistMap: inputFile?.manualChecklistMap ?? {},
     requiredRelevantTargetsPerSeed: inputFile?.requiredRelevantTargetsPerSeed ?? 2,
   });
 
@@ -78,7 +75,6 @@ async function main(): Promise<void> {
   console.log(`GeneratedAt: ${report.generatedAt}`);
   console.log(`Ready: ${report.readySeedCount}/${report.totalSeedCount}`);
   console.log(`Label Gate: ${report.labelGatePassedSeedCount}/${report.totalSeedCount}`);
-  console.log(`Checklist Gate: ${report.checklistGatePassedSeedCount}/${report.totalSeedCount}`);
 
   if (report.rows.length === 0) {
     console.log('No seed rows found.');
@@ -88,7 +84,7 @@ async function main(): Promise<void> {
   console.log('Rows:');
   report.rows.forEach((row) => {
     console.log(
-      `- ${row.seedTrackId} | analysis=${row.analysisStatus} | labels=${row.relevantTargetCount}/${report.requiredRelevantTargetsPerSeed} | checklist=${row.checklistCompletedCount}/${row.checklistTotalCount} | ready=${row.readyForBaseline ? 'yes' : 'no'}`
+      `- ${row.seedTrackId} | analysis=${row.analysisStatus} | labels=${row.relevantTargetCount}/${report.requiredRelevantTargetsPerSeed} | ready=${row.readyForBaseline ? 'yes' : 'no'}`
     );
   });
 }

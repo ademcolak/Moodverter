@@ -21,6 +21,8 @@ export interface TransitionNode {
 export interface TransitionEdgeScore {
   eventMatchScore: number;
   embeddingSimilarity: number;
+  tempoRatioScore: number;
+  harmonicCompatibilityScore: number;
   rhythmAlignmentScore: number;
   loudnessContinuityScore: number;
   artifactPenalty: number;
@@ -66,6 +68,27 @@ export interface TransitionCandidate {
   diagnostic: TransitionScoreDiagnostic;
 }
 
+export type TransitionRuntimeMode = 'auto' | 'manual';
+
+export interface TransitionRuntimeEvent {
+  recordedAt: string;
+  sourceTrackId: string;
+  targetTrackId: string;
+  latencyMs: number;
+  stalled: boolean;
+  dropped: boolean;
+  mode: TransitionRuntimeMode;
+}
+
+export interface RecordTransitionRuntimeEventInput {
+  sourceTrackId: string;
+  targetTrackId: string;
+  latencyMs: number;
+  stalled?: boolean;
+  dropped?: boolean;
+  mode?: TransitionRuntimeMode;
+}
+
 export interface BaselineEvaluationInput {
   seedTrackIds?: string[];
   limit?: number;
@@ -91,6 +114,8 @@ export interface BaselineSeedReport {
   hitAt5: number | null;
   averageEventMatchScore: number;
   averageEmbeddingSimilarity: number;
+  averageTempoRatioScore: number;
+  averageHarmonicCompatibilityScore: number;
   averageRhythmAlignmentScore: number;
   averageLoudnessContinuityScore: number;
   averageArtifactPenalty: number;
@@ -133,6 +158,10 @@ export interface BaselineEvaluationResult {
   relevanceTargetGatePassed: boolean;
   seedsBelowRelevantTargetMinimum: string[];
   relevanceTargetGateSummary: string | null;
+  transitionRuntimeSampleCount: number;
+  transitionLatencyP95Ms: number | null;
+  transitionStallRate: number | null;
+  transitionDropRate: number | null;
   limit: number;
   goodThreshold: number;
 }

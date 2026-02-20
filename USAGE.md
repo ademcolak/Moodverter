@@ -52,13 +52,17 @@ pnpm dev
 - [x] Bottom-3 seed için tuning action önerileri
 - [x] Benchmark run’larında tuning validation özeti/gate
 - [x] Benchmark set aktifken otomatik kalite koruma (`ready + label gate`)
+- [x] Benchmark runtime ozet satiri (`Latency p95`, `Stall`, `Drop`)
+- [x] Scoring v2 (`tempo-ratio` + `harmonic compatibility`)
 
 ## 5) Kalite Komutları
 
 Tek komut (önerilen):
 
 ```bash
+pnpm run pipeline:quality
 pnpm run qa:auto
+pnpm run oss:guard
 ```
 
 Ayrı çalıştırma:
@@ -67,12 +71,17 @@ Ayrı çalıştırma:
 pnpm lint
 pnpm typecheck
 pnpm build
+pnpm run oss:guard
 pnpm smoke:test
 pnpm smoke:regression-gate
+pnpm run smoke:retrieval-gate
 ```
 
-## 6) Kalan İşler
+## 6) Aktif Takip Maddeleri
 
-- [x] Benchmark seed havuzunu genişletmek (eligible adaylar 10’un altına düştüğünde)
-- [x] Tuning validation çıktısını ağırlık tuning workflow’unda daha görünür hale getirmek
-- [x] Handoff envelope parametrelerini benchmark sonuçlarına göre tune etmek
+Kaynak: `docs/PLAN.md` altındaki `Next` bölümü.
+
+- [ ] Labelled seed sayısını en az 10 seviyesinde sürekli koru
+- [ ] Seed başına minimum 2 relevant target etiketini koru
+- [ ] Düşük performanslı (`Bottom-3`) seed’ler için düzenli score breakdown + tuning döngüsü yürüt
+- [ ] Her scoring/penalty değişikliğinden sonra benchmark baseline + regression gate çalıştır

@@ -1,0 +1,51 @@
+[
+  {
+    "name": "DJtransGAN",
+    "url": "https://github.com/ChenPaulYu/DJtransGAN",
+    "licenseSpdx": "MIT",
+    "usage": "reference",
+    "notes": "Transition pipeline fikirleri (boundary, alignment, mixability)."
+  },
+  {
+    "name": "DJtransGAN-dg-pipeline",
+    "url": "https://github.com/ChenPaulYu/DJtransGAN-dg-pipeline",
+    "licenseSpdx": "MIT",
+    "usage": "reference",
+    "notes": "Beat/downbeat + key + structure extraction referansi."
+  },
+  {
+    "name": "hnswlib-node",
+    "url": "https://github.com/yoshoku/hnswlib-node",
+    "licenseSpdx": "Apache-2.0",
+    "usage": "reference",
+    "notes": "Node tarafi ANN index entegrasyonu icin referans."
+  },
+  {
+    "name": "hnswlib",
+    "url": "https://github.com/nmslib/hnswlib",
+    "licenseSpdx": "Apache-2.0",
+    "usage": "reference",
+    "notes": "ANN index stratejisi ve parametre tuning yaklasimi."
+  },
+  {
+    "name": "faiss",
+    "url": "https://github.com/facebookresearch/faiss",
+    "licenseSpdx": "MIT",
+    "usage": "reference",
+    "notes": "KNN/ANN retrieval ve evaluation patternleri."
+  },
+  {
+    "name": "annoy",
+    "url": "https://github.com/spotify/annoy",
+    "licenseSpdx": "Apache-2.0",
+    "usage": "reference",
+    "notes": "Read-only mmap index deseni."
+  },
+  {
+    "name": "mir_eval",
+    "url": "https://github.com/mir-evaluation/mir_eval",
+    "licenseSpdx": "MIT",
+    "usage": "reference",
+    "notes": "MIR metric tasarim referansi."
+  }
+]

@@ -1,19 +1,11 @@
 import type { AnalysisState } from './types';
 import type { TransitionRelevanceMap } from './relevance';
-import {
-  MANUAL_LISTENING_CHECKLIST_ITEM_COUNT,
-  countCompletedManualListeningChecklistItems,
-  type ManualListeningChecklistMap,
-} from './manual-checklist';
 
 export interface EvaluationProgressSeedRow {
   seedTrackId: string;
   analysisStatus: AnalysisState['status'] | 'missing';
   relevantTargetCount: number;
-  checklistCompletedCount: number;
-  checklistTotalCount: number;
   passesLabelGate: boolean;
-  passesManualChecklistGate: boolean;
   readyForBaseline: boolean;
 }
 
@@ -23,9 +15,7 @@ export interface EvaluationProgressReport {
   totalSeedCount: number;
   readySeedCount: number;
   labelGatePassedSeedCount: number;
-  checklistGatePassedSeedCount: number;
   seedsNeedingLabels: string[];
-  seedsNeedingManualChecklist: string[];
   seedsMissingAnalysis: string[];
   rows: EvaluationProgressSeedRow[];
 }
@@ -34,7 +24,6 @@ interface BuildEvaluationProgressReportInput {
   seedTrackIds: string[];
   analysisStates: Record<string, AnalysisState>;
   relevanceMap: TransitionRelevanceMap;
-  manualChecklistMap: ManualListeningChecklistMap;
   requiredRelevantTargetsPerSeed?: number;
 }
 
@@ -68,28 +57,14 @@ export function buildEvaluationProgressReport(
     .map((seedTrackId) => {
       const analysisStatus = input.analysisStates[seedTrackId]?.status ?? 'missing';
       const relevantTargetCount = (input.relevanceMap[seedTrackId] ?? []).length;
-      const checklistCompletedCount = countCompletedManualListeningChecklistItems(
-        input.manualChecklistMap[seedTrackId] ?? {
-          transitionSmooth: false,
-          timingAligned: false,
-          loudnessAcceptable: false,
-          eventContinuity: false,
-          replayWorth: false,
-          updatedAt: '',
-        }
-      );
       const passesLabelGate = relevantTargetCount >= requiredRelevantTargetsPerSeed;
-      const passesManualChecklistGate = checklistCompletedCount >= MANUAL_LISTENING_CHECKLIST_ITEM_COUNT;
-      const readyForBaseline = analysisStatus === 'ready' && passesLabelGate && passesManualChecklistGate;
+      const readyForBaseline = analysisStatus === 'ready' && passesLabelGate;
 
       return {
         seedTrackId,
         analysisStatus,
         relevantTargetCount,
-        checklistCompletedCount,
-        checklistTotalCount: MANUAL_LISTENING_CHECKLIST_ITEM_COUNT,
         passesLabelGate,
-        passesManualChecklistGate,
         readyForBaseline,
       };
     })
@@ -97,9 +72,6 @@ export function buildEvaluationProgressReport(
 
   const seedsNeedingLabels = rows
     .filter((row) => !row.passesLabelGate)
-    .map((row) => row.seedTrackId);
-  const seedsNeedingManualChecklist = rows
-    .filter((row) => !row.passesManualChecklistGate)
     .map((row) => row.seedTrackId);
   const seedsMissingAnalysis = rows
     .filter((row) => row.analysisStatus !== 'ready')
@@ -111,9 +83,7 @@ export function buildEvaluationProgressReport(
     totalSeedCount: rows.length,
     readySeedCount: rows.filter((row) => row.readyForBaseline).length,
     labelGatePassedSeedCount: rows.filter((row) => row.passesLabelGate).length,
-    checklistGatePassedSeedCount: rows.filter((row) => row.passesManualChecklistGate).length,
     seedsNeedingLabels,
-    seedsNeedingManualChecklist,
     seedsMissingAnalysis,
     rows,
   };

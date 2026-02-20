@@ -10,7 +10,7 @@ Given a seed track, find high-quality transition points into other tracks:
   - Analysis queue and status tracking
   - Anchor/moment extraction per track
   - Candidate retrieval from embedding index
-  - Transition scoring v1 and top-N ranking
+  - Transition scoring v2 and top-N ranking
 - Out of scope:
   - Global catalog crawling
   - Guaranteed perfect transition for every track
@@ -41,13 +41,14 @@ Given a seed track, find high-quality transition points into other tracks:
 - `updatedAt`
 - `version`
 
-## Scoring v1
+## Scoring v2
 Weighted score (higher is better):
 
 `finalScore = w1*eventMatch + w2*embeddingSim + w3*rhythmAlign + w4*loudnessContinuity - w5*artifactPenalty`
 
 Notes:
 - `eventMatch` is a hard quality signal for cases like scream-to-scream.
+- `rhythmAlignment` now includes tempo-ratio tolerance (`1x`, `0.5x`, `2x`) and harmonic compatibility.
 - `artifactPenalty` prevents harsh or broken transitions.
 - Weights will be tuned via listening tests.
 - Phase 03 minispec (formula + fixtures): `docs/phases/phase-03-scoring-minispec.md`.
@@ -96,6 +97,7 @@ Notes:
 - [x] Add adaptive autoplay lead based on observed transition latency.
 - [x] Add transition loudness smoothing envelope + compensation.
 - [x] Add pre-transition handoff pre-duck (pseudo-crossfade approximation).
+- [x] Add ANN retrieval prototype (hnswlib-node optional, brute-force fallback).
 
 ### D) Evaluation
 - [x] Define baseline metrics (`Hit@K`, `MeanScore`) utility functions.
@@ -108,7 +110,7 @@ Notes:
 - [x] Add `Bottom-3` tuning action validation summary/gate on benchmark runs.
 - [x] Auto-maintain benchmark seed set quality while benchmark set is active.
 
-## Recent Notes (2026-02-19)
+## Recent Notes (2026-02-20)
 - Baseline values staying constant while switching seed was caused by global run scope, not a scoring bug.
 - Scope split in UI fixed interpretation: seed-level checks and full-set checks are now explicit.
 - Current bottleneck is data quality (label coverage), not missing evaluation infrastructure.
@@ -120,6 +122,7 @@ Notes:
 - Pseudo-crossfade handoff uses short pre-duck before autoplay jump.
 - Benchmark scope now reports tuning validation summary against previous comparable run.
 - Checklist panel was removed from UI; checklist remains as manual QA guidance in docs.
+- Retrieval stage now supports ANN index prototype with in-memory fallback.
 
 ## Acceptance
 - Given one seed track, system returns ranked transition candidates.
