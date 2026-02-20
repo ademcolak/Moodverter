@@ -25,16 +25,18 @@ pnpm dev
 ## 3) Güncel Kullanım Akışı
 
 1. Link ile şarkı ekle veya aramada bulup kütüphaneye al.
-2. Kütüphanede bir şarkı satırına tıkla.
-3. Uygulama çalan şarkıyı otomatik seed kabul eder.
-4. Transition panelindeki adaylara göre otomatik geçişi uygular.
-5. Geçiş öncesi hedef şarkı için warmup/prefetch hazırlığı arka planda çalışır.
-6. Geçiş sırasında hedef zamanına start-time cue ile atlanır ve loudness smoothing uygulanır.
-7. Geçişten hemen önce handoff pre-duck (pseudo-crossfade) uygulanır.
-8. İstersen source moment ayarı yap:
-9. `Pinle`: slider konumunu kullan.
-10. `Simdiki Ani Al`: o anki playback zamanını al.
-11. `Oto`: pinlemeyi kaldır.
+2. Toplu import icin once `pnpm run dataset:pipeline -- --config ./configs/dataset-pipeline.example.json` calistir.
+3. Uygulamada `Dataset JSON Yukle` butonundan `dataset/output/playlist.moodverter.json` sec.
+4. Kütüphanede bir şarkı satırına tıkla.
+5. Uygulama çalan şarkıyı otomatik seed kabul eder.
+6. Transition panelindeki adaylara göre otomatik geçişi uygular.
+7. Geçiş öncesi hedef şarkı için warmup/prefetch hazırlığı arka planda çalışır.
+8. Geçiş sırasında hedef zamanına start-time cue ile atlanır ve loudness smoothing uygulanır.
+9. Geçişten hemen önce handoff pre-duck (pseudo-crossfade) uygulanır.
+10. İstersen source moment ayarı yap:
+11. `Pinle`: slider konumunu kullan.
+12. `Simdiki Ani Al`: o anki playback zamanını al.
+13. `Oto`: pinlemeyi kaldır.
 
 ## 4) Yapıldı (Kullanım Tarafı)
 

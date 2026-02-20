@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LibrarySearch } from './components/LibrarySearch';
 import type { UnifiedTrack } from './types/provider';
 import type { YouTubeSearchResult } from './services/youtube/search';
@@ -198,6 +198,69 @@ interface AutoTransitionSnapshot {
   atMs: number;
 }
 
+interface DatasetPlaylistTrackInput {
+  videoId?: unknown;
+  id?: unknown;
+  title?: unknown;
+  name?: unknown;
+  artist?: unknown;
+  thumbnail?: unknown;
+  albumArt?: unknown;
+  duration?: unknown;
+  durationMs?: unknown;
+  addedAt?: unknown;
+}
+
+function toOptionalFiniteNumber(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return value;
+}
+
+function normalizeDatasetPlaylistTrack(entry: unknown): UnifiedTrack | null {
+  if (!entry || typeof entry !== 'object') return null;
+  const row = entry as DatasetPlaylistTrackInput;
+  const id = typeof row.videoId === 'string'
+    ? row.videoId.trim()
+    : typeof row.id === 'string'
+      ? row.id.trim()
+      : '';
+  if (!id) return null;
+
+  const name = typeof row.title === 'string'
+    ? row.title.trim()
+    : typeof row.name === 'string'
+      ? row.name.trim()
+      : '';
+  if (!name) return null;
+
+  const artist = typeof row.artist === 'string' && row.artist.trim().length > 0
+    ? row.artist.trim()
+    : 'Unknown Artist';
+  const albumArt = typeof row.thumbnail === 'string' && row.thumbnail.trim().length > 0
+    ? row.thumbnail.trim()
+    : typeof row.albumArt === 'string' && row.albumArt.trim().length > 0
+      ? row.albumArt.trim()
+      : `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+  const durationFromMs = toOptionalFiniteNumber(row.durationMs);
+  const durationFromDuration = toOptionalFiniteNumber(row.duration);
+  const durationMs = Math.max(
+    0,
+    Math.floor(durationFromMs ?? durationFromDuration ?? 0)
+  );
+  const addedAt = toOptionalFiniteNumber(row.addedAt);
+
+  return {
+    id,
+    provider: 'youtube',
+    name,
+    artist,
+    albumArt,
+    durationMs,
+    playCount: 0,
+    providerData: addedAt === null ? undefined : { addedAt },
+  };
+}
+
 function App() {
   const {
     provider,
@@ -214,6 +277,8 @@ function App() {
   const [library, setLibrary] = useState<UnifiedTrack[]>([]);
   const [urlInput, setUrlInput] = useState('');
   const [isSubmittingUrl, setIsSubmittingUrl] = useState(false);
+  const [isDatasetImporting, setIsDatasetImporting] = useState(false);
+  const [datasetImportSummary, setDatasetImportSummary] = useState<string | null>(null);
   const [uiError, setUiError] = useState<string | null>(null);
   const [analysisStates, setAnalysisStates] = useState<Record<string, AnalysisState>>({});
   const [seedTrackId, setSeedTrackId] = useState<string | null>(null);
@@ -243,6 +308,7 @@ function App() {
   const autoTransitionCooldownUntilRef = useRef<number>(0);
   const lastAutoTransitionRef = useRef<AutoTransitionSnapshot | null>(null);
   const isPreviewingRef = useRef(false);
+  const datasetImportInputRef = useRef<HTMLInputElement | null>(null);
   const warmedTransitionCandidateKeyRef = useRef<string | null>(null);
   const handoffPrimedCandidateKeyRef = useRef<string | null>(null);
   const autoTransitionLeadMsRef = useRef<number>(AUTO_TRANSITION_BASE_LEAD_MS);
@@ -258,6 +324,8 @@ function App() {
     setTransitionError(null);
     setRelevanceMap({});
     setBenchmarkSeedTrackIdsState([]);
+    setDatasetImportSummary(null);
+    setIsDatasetImporting(false);
     setBenchmarkAutoBootstrapPaused(false);
     setRuntimeEventVersion(0);
     if (options?.clearInput) {
@@ -454,6 +522,55 @@ function App() {
       setIsSubmittingUrl(false);
     }
   }, [play, refreshLibrary, urlInput]);
+
+  const handleOpenDatasetImportPicker = useCallback(() => {
+    datasetImportInputRef.current?.click();
+  }, []);
+
+  const handleImportDatasetFile = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setUiError(null);
+    setDatasetImportSummary(null);
+    setIsDatasetImporting(true);
+
+    try {
+      const raw = await file.text();
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) {
+        throw new Error('Dataset dosyasi array olmali.');
+      }
+
+      const normalizedTracks = parsed
+        .map((entry) => normalizeDatasetPlaylistTrack(entry))
+        .filter((track): track is UnifiedTrack => track !== null);
+
+      if (normalizedTracks.length === 0) {
+        throw new Error('Gecerli track bulunamadi.');
+      }
+
+      const youtubeProvider = getYouTubeProvider();
+      const existingTrackIds = new Set(library.map((track) => track.id));
+      let importedCount = 0;
+
+      for (const track of normalizedTracks) {
+        if (existingTrackIds.has(track.id)) continue;
+        youtubeProvider.addTrackToLibrary(track);
+        existingTrackIds.add(track.id);
+        importedCount += 1;
+      }
+
+      await refreshLibrary();
+      setDatasetImportSummary(`${importedCount} sarki datasetten eklendi (${normalizedTracks.length} kayit okundu).`);
+    } catch (error) {
+      console.error('Dataset import failed:', error);
+      setUiError('Dataset import basarisiz. playlist.moodverter.json formatini kontrol et.');
+    } finally {
+      setIsDatasetImporting(false);
+    }
+  }, [library, refreshLibrary]);
 
   const handlePlayFromLibrary = useCallback(async (trackId: string) => {
     setUiError(null);
@@ -1249,6 +1366,29 @@ function App() {
               {isSubmittingUrl ? 'Ekleniyor...' : 'Ekle'}
             </button>
           </form>
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              ref={datasetImportInputRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={(event) => {
+                void handleImportDatasetFile(event);
+              }}
+            />
+            <button
+              type="button"
+              onClick={handleOpenDatasetImportPicker}
+              disabled={isDatasetImporting}
+              className="px-3 py-2 border border-white/10 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-60"
+              title="dataset/output/playlist.moodverter.json dosyasini secip kutuphaneye ekle"
+            >
+              {isDatasetImporting ? 'Dataset Yukleniyor...' : 'Dataset JSON Yukle'}
+            </button>
+            {datasetImportSummary && (
+              <span className="text-[10px] text-emerald-300 truncate">{datasetImportSummary}</span>
+            )}
+          </div>
         </section>
 
         <section className="bg-[var(--color-surface)] border border-white/10 p-3">

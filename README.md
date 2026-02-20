@@ -75,6 +75,10 @@ pnpm run smoke:regression-gate
 pnpm run smoke:retrieval-gate
 ```
 
+Dataset kullanim notu:
+- `dataset:pipeline` komutu dataset dosyasini uretir (`dataset/output/playlist.moodverter.json`).
+- Uygulamada `Dataset JSON Yukle` butonu ile bu dosya kutuphaneye import edilir (otomatik degil).
+
 ## Plan ve Faz Dokümanları
 
 - [`docs/PLAN.md`](docs/PLAN.md)

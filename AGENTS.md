@@ -33,6 +33,7 @@ Ana hedef: `A@t1 -> B@t2` gecis kalitesini olculebilir sekilde iyilestirmek.
 - `pnpm run tuning:loop -- --input <json> --output <json>`
 - `pnpm run runtime:drift-report -- --input <json> --output <json>`
 - `pnpm run dataset:pipeline -- --config ./configs/dataset-pipeline.example.json`
+- Uygulamada `Dataset JSON Yukle` ile `dataset/output/playlist.moodverter.json` import edilir (otomatik degil).
 
 ## Regression Kuralı
 - `Benchmark Baseline` kosusu regression gate ile calismalidir.
