@@ -1,0 +1,16 @@
+{
+  "generatedAt": "2026-02-23T06:33:10.562Z",
+  "mode": "collect+curate",
+  "targetCount": 1000,
+  "selectedCount": 0,
+  "candidateCount": 0,
+  "filteredCandidateCount": 0,
+  "uniqueArtists": 0,
+  "uniqueQueries": 0,
+  "constraints": {
+    "artistMaxTracks": 2,
+    "minDurationMs": 90000,
+    "maxDurationMs": 480000,
+    "perQueryCap": 2500
+  }
+}
