@@ -51,6 +51,26 @@ Kaynak: `docs/PLAN.md` altındaki `Next` bölümü.
 - [ ] Düşük performanslı (`Bottom-3`) seed’lerde score breakdown odaklı tuning döngüsünü sürdürmek
 - [ ] Her scoring/penalty değişikliğinden sonra benchmark baseline + regression gate çalıştırmak
 
+## Operasyon Kuralları
+
+- Benchmark baseline koşusu regression gate ile çalışmalıdır.
+- `Hit@3` veya `Hit@5` düşerse tuning değişikliği kabul edilmez.
+- Benchmark değerlendirmesi aynı seed seti ve aynı `scopeId` ile karşılaştırılmalıdır.
+- Benchmark set en az `10` seed olmalı; seed başına en az `2` relevant target etiketi olmalı.
+- Benchmark set aktifken `ready + label gate` sağlanmadan karar koşusu yapılmamalıdır.
+- Label coverage yetersizse benchmark koşusu karar amacıyla kullanılmamalıdır.
+- Benchmark seed havuzu, otomatik korumanın `>=10` eligible seed seviyesini sürdürecek kadar geniş tutulmalıdır.
+- Her tuning turunda `Bottom-3` seed’ler score breakdown ile incelenmelidir.
+- Tuning action önerileri benchmark geçmişi ile doğrulanmadan ağırlık/penalty güncellemesi kalıcılaştırılmamalıdır.
+- Her scoring/penalty değişikliğinden sonra benchmark baseline + regression gate tekrar çalıştırılmalıdır.
+- Runtime gate (`Latency p95`, `Stall`, `Drop`) bozulursa tuning reddedilmelidir.
+- Scoring/formül değişikliğinde smoke testler zorunludur; pratik varsayılan komut `pnpm run pipeline:quality` olmalıdır.
+- Baseline metrik davranışını etkileyen değişikliklerde test eklenmeli/güncellenmelidir.
+- Subjektif ses kalitesi dışındaki kontroller önce otomasyonla doğrulanmalıdır.
+- Manual checklist UI’da olmasa da geçiş kalitesi subjektif QA adımında dinleme ile doğrulanmalıdır.
+- `.smoke-dist` derleme artefaktı olarak git takibi dışında tutulmalıdır.
+- Dış kaynak kod/model referansı eklendiğinde `docs/oss/source-registry.json` güncellenmeli ve `pnpm run oss:guard` geçmelidir.
+
 ## Hızlı Başlangıç
 
 ```bash
@@ -78,6 +98,7 @@ pnpm run smoke:retrieval-gate
 Dataset kullanim notu:
 - `dataset:pipeline` komutu dataset dosyasini uretir (`dataset/output/playlist.moodverter.json`).
 - Uygulamada `Dataset JSON Yukle` butonu ile bu dosya kutuphaneye import edilir (otomatik degil).
+- `.smoke-dist` klasoru derleme artefaktidir; git takibi disinda tutulmalidir.
 
 ## Plan ve Faz Dokümanları
 

@@ -103,11 +103,9 @@ Track baseline transition quality while iterating on moment matching and scoring
 
 ## Immediate Next Step (Impact-First, Sure Bagimsiz)
 - Expand labelled seeds to at least 10 before changing score weights.
-- Enforce minimum 2 relevant target labels per seed to reduce metric noise.
-- Freeze a benchmark seed set and rerun it after every scoring/penalty change.
-- Track and compare bottom 3 seeds across runs to guide penalty/weight tuning.
-- Persist each baseline run as an artifact (`runAt`, scope, Hit@3, Hit@5, MeanScore@5, notes).
-- Add a regression gate: reject tuning changes if benchmark Hit@3 or Hit@5 drops.
+- Keep enforcing minimum 2 relevant target labels per seed to reduce metric noise.
+- Keep benchmark seed set (and `scopeId`) stable and rerun it after every scoring/penalty change.
+- Track and compare bottom 3 seeds across runs to guide penalty/weight tuning (use latest run history artifact).
 - Attach score breakdown snapshots for failure cases in every tuning iteration.
 - Keep benchmark seed pool wide enough so auto-maintained set can stay at 10.
-- Validate tuning action recommendations against benchmark history before every weight update.
+- Validate tuning action recommendations against benchmark history before every weight update (use benchmark validation summary/gate).

@@ -151,9 +151,10 @@ Kabul kriterleri:
 - Her tuning sonrası aynı seed set ile tekrar baseline çalıştır.
 
 ### 3) Kalite ve urun etkisi yuksek teknik kaldiraclar
-- Scoring minispec + test fixture setini kodla birebir hizala.
-- Baseline run history + regresyon gate mekanizmasini devreye al.
-- Hata siniflama/mesaj standardini provider ve transition katmanina uygula.
+- Benchmark kararlarinda runtime gate (`Latency p95`, `Stall`, `Drop`) sonucunu metrik regression ile birlikte degerlendir.
+- Tuning action onerilerini benchmark gecmisiyle dogrulamayinca agirlik/penalty guncellemesini kalici yapma.
+- Scoring/penalty degisimi sonrasinda ayni benchmark seed seti + ayni `scopeId` ile baseline + regression gate kos.
+- Scoring/formul degisikliklerinde `pnpm run pipeline:quality` ve ilgili smoke gate'leri zorunlu tut.
 
 ### 4) Uygulama Plani (2026-02-20)
 - [x] Scoring v2: tempo-ratio (1x/0.5x/2x) toleransi + harmonic compatibility sinyalini rhythm hesabina ekle.

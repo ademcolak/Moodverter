@@ -38,11 +38,17 @@ Ana hedef: `A@t1 -> B@t2` gecis kalitesini olculebilir sekilde iyilestirmek.
 ## Regression Kuralı
 - `Benchmark Baseline` kosusu regression gate ile calismalidir.
 - Hit@3 veya Hit@5 duserse tuning kabul edilmez.
+- Tuning etkisi ayni benchmark seed seti ve ayni `scopeId` ile karsilastirilmalidir.
+- Runtime gate (`Latency p95`, `Stall`, `Drop`) bozuluyorsa tuning kabul edilmez.
 
 ## Benchmark Prensibi
 - Benchmark set en az `10` seed olmali.
 - Seed basina en az `2` relevant target etiketi olmali.
 - Relevance map label kalitesi yetersizse benchmark kosusu yapilmaz.
+- Benchmark set (seed listesi + `scopeId`) dondurulup tuning turlarinda sabit tutulmali.
+- Benchmark set aktifken `ready + label gate` kosulu saglanmadan karar kosusu yapilmaz.
+- Benchmark seed havuzu, otomatik korumanin `>=10` eligible seed seviyesini surekli koruyacagi genislikte tutulmali.
+- `Bottom-3` seed listesi kosular arasi takip edilip tuning hedefi olarak kullanilmali.
 - Manual checklist UI'da yok; subjektif dinleme notlari manuel QA adiminda tutulur.
 
 ## Değişiklik Politikası
@@ -50,6 +56,10 @@ Ana hedef: `A@t1 -> B@t2` gecis kalitesini olculebilir sekilde iyilestirmek.
 - Baseline metrik davranisini etkileyen degisiklikte yeni/duzenlenmis test eklenmeli.
 - Scope bazli karsilastirmalarda `scopeId` korunmali (farkli benchmark setleri birbirine karismamali).
 - Subjektif ses kalitesi disindaki kontroller once otomasyonla dogrulanmali.
+- Her scoring/penalty degisimi sonrasinda benchmark baseline + regression gate tekrar kosulmali.
+- Tuning karari verilmeden once `Bottom-3` seed failure case'leri icin score breakdown snapshot'lari incelenmeli.
+- Tuning action onerileri benchmark gecmisi ile dogrulanmadan agirlik/penalty guncellemesi kalici yapilmamali.
+- Kalite dogrulamada varsayilan yol `pnpm run pipeline:quality` olmalidir (tek komut).
 - `.smoke-dist` derleme artefakti olarak git takibi disinda tutulur.
 - Dis kaynak kod/model referansi eklendiginde `docs/oss/source-registry.json` guncellenip `pnpm run oss:guard` gecmelidir.
 

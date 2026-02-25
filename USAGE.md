@@ -88,7 +88,27 @@ pnpm run smoke:retrieval-gate
 pnpm run smoke:tuning-loop-dry-run
 ```
 
-## 6) Aktif Takip Maddeleri
+## 6) Operasyon Kuralları
+
+- Benchmark baseline koşusunu regression gate ile çalıştır.
+- `Hit@3` veya `Hit@5` düşerse tuning değişikliğini kabul etme.
+- Benchmark karşılaştırmalarında aynı seed setini ve aynı `scopeId` değerini koru.
+- Benchmark seti `>=10` seed tut; her seed için en az `2` relevant target etiketi olmadan karar koşusu yapma.
+- Benchmark set aktifken `ready + label gate` sağlanmadan karar koşusu yapma.
+- Label coverage yetersizse benchmark sonucunu karar için kullanma.
+- Benchmark seed havuzunu, otomatik korumanın `>=10` eligible seed seviyesini sürdürecek kadar geniş tut.
+- Her tuning turunda `Bottom-3` seed’leri score breakdown ile incele.
+- Tuning action önerilerini benchmark geçmişi ile doğrulamadan ağırlık/penalty güncellemesini kalıcılaştırma.
+- Her scoring/penalty değişikliğinden sonra benchmark baseline + regression gate’i tekrar çalıştır.
+- Runtime gate (`Latency p95`, `Stall`, `Drop`) bozulursa tuning’i reddet.
+- Scoring/formül değişikliğinde smoke testleri zorunlu çalıştır (önerilen tek komut: `pnpm run pipeline:quality`).
+- Baseline metrik davranışını etkileyen değişiklikte test ekle/güncelle.
+- Subjektif ses kalitesi dışındaki kontrolleri önce otomasyonla doğrula.
+- Dış kaynak kod/model referansı eklersen `docs/oss/source-registry.json` güncelle ve `pnpm run oss:guard` geçir.
+- Manual checklist UI’da olmasa da geçiş kalitesini subjektif QA adımında dinleme ile doğrula.
+- `.smoke-dist` klasörünü derleme artefaktı olarak git takibi dışında tut.
+
+## 7) Aktif Takip Maddeleri
 
 Kaynak: `docs/PLAN.md` altındaki `Next` bölümü.
 
