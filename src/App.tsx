@@ -1,5 +1,11 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { LibrarySearch } from './components/LibrarySearch';
+import { AppFrame } from './components/layout/AppFrame';
+import { BottomTabBar } from './components/navigation/BottomTabBar';
+import { HistoryPage } from './components/pages/HistoryPage';
+import { LibraryPage } from './components/pages/LibraryPage';
+import { SettingsPage } from './components/pages/SettingsPage';
+import { TransitionPage } from './components/pages/TransitionPage';
+import { PlayerBar } from './components/player/PlayerBar';
 import type { UnifiedTrack } from './types/provider';
 import type { YouTubeSearchResult } from './services/youtube/search';
 import { clearYouTubeLocalData, searchResultToUnifiedTrack } from './services/youtube/search';
@@ -13,7 +19,6 @@ import {
   buildRuntimeThresholdDriftReport,
   clearBenchmarkSeedTrackIds,
   clearTransitionData,
-  computeMeanTransitionScore,
   findTransitionCandidates,
   getAnalysisState,
   getBaselineRunHistory,
@@ -37,6 +42,7 @@ import {
 } from './services/transition';
 
 const ONE_TIME_DATA_RESET_KEY = 'moodverter_data_reset_20260209';
+type AppTab = 'library' | 'transition' | 'history' | 'settings';
 type BaselineScope = 'selected' | 'all' | 'benchmark';
 const REQUIRED_RELEVANT_TARGETS_PER_SEED = 2;
 const MIN_BENCHMARK_SEED_COUNT = 10;
@@ -49,7 +55,6 @@ const AUTO_TRANSITION_WARMUP_WINDOW_MS = 2600;
 const AUTO_TRANSITION_HANDOFF_PRIME_MS = 360;
 const AUTO_TRANSITION_POST_SWITCH_COOLDOWN_MS = 12_000;
 const AUTO_TRANSITION_REVERSE_PAIR_GUARD_MS = 90_000;
-const AUTO_TRANSITION_PREVIEW_SUPPRESS_MS = 7_000;
 const AUTO_TRANSITION_MISS_WINDOW_MS = 15_000;
 const AUTO_LABEL_RETRY_DELAY_MS = 45_000;
 const AUTO_LABEL_RETRY_DELAY_URGENT_MS = 10_000;
@@ -110,13 +115,6 @@ function clampTimeToTrackDuration(timeMs: number, trackDurationMs?: number): num
   if (!trackDurationMs || trackDurationMs <= 0) return Math.round(timeMs);
   const maxSafeTime = Math.max(0, trackDurationMs - 1000);
   return Math.min(Math.round(timeMs), maxSafeTime);
-}
-
-function formatAnalysisStatusLabel(status: 'pending' | 'ready' | 'failed' | 'missing'): string {
-  if (status === 'ready') return 'hazir';
-  if (status === 'pending') return 'bekliyor';
-  if (status === 'failed') return 'hatali';
-  return 'yok';
 }
 
 function formatTrackNames(trackIds: string[], trackMap: Map<string, UnifiedTrack>, limit = 6): string {
@@ -196,6 +194,11 @@ interface AutoTransitionSnapshot {
   sourceTrackId: string;
   targetTrackId: string;
   atMs: number;
+}
+
+interface QueuedManualTransition {
+  candidate: TransitionCandidate;
+  queuedAtMs: number;
 }
 
 interface DatasetPlaylistTrackInput {
@@ -288,8 +291,7 @@ function App() {
   const [isAutoTransitioning, setIsAutoTransitioning] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
   const [pinnedSourceTimeMs, setPinnedSourceTimeMs] = useState<number | null>(null);
-  const [sourceSliderTimeMs, setSourceSliderTimeMs] = useState(0);
-  const [showTransitionPanel, setShowTransitionPanel] = useState(false);
+  const [activeTab, setActiveTab] = useState<AppTab>('library');
   const [isBaselineLoading, setIsBaselineLoading] = useState(false);
   const [baselineResult, setBaselineResult] = useState<BaselineEvaluationResult | null>(null);
   const [baselineHistory, setBaselineHistory] = useState<BaselineRunArtifact[]>([]);
@@ -308,6 +310,7 @@ function App() {
   const autoTransitionCooldownUntilRef = useRef<number>(0);
   const lastAutoTransitionRef = useRef<AutoTransitionSnapshot | null>(null);
   const isPreviewingRef = useRef(false);
+  const queuedManualTransitionRef = useRef<QueuedManualTransition | null>(null);
   const datasetImportInputRef = useRef<HTMLInputElement | null>(null);
   const warmedTransitionCandidateKeyRef = useRef<string | null>(null);
   const handoffPrimedCandidateKeyRef = useRef<string | null>(null);
@@ -318,7 +321,6 @@ function App() {
     setSeedTrackId(null);
     setTransitionCandidates([]);
     setPinnedSourceTimeMs(null);
-    setSourceSliderTimeMs(0);
     setBaselineResult(null);
     setBaselineHistory([]);
     setTransitionError(null);
@@ -328,6 +330,7 @@ function App() {
     setIsDatasetImporting(false);
     setBenchmarkAutoBootstrapPaused(false);
     setRuntimeEventVersion(0);
+    setActiveTab('library');
     if (options?.clearInput) {
       setUiError(null);
       setUrlInput('');
@@ -436,9 +439,9 @@ function App() {
   }, [pinnedSourceTimeMs, seedTrackId]);
 
   useEffect(() => {
-    if (!showTransitionPanel) return;
+    if (activeTab !== 'transition') return;
     void refreshTransitionCandidates();
-  }, [refreshTransitionCandidates, showTransitionPanel]);
+  }, [activeTab, refreshTransitionCandidates]);
 
   useEffect(() => {
     if (!seedTrackId) return;
@@ -447,7 +450,6 @@ function App() {
 
   useEffect(() => {
     setPinnedSourceTimeMs(null);
-    setSourceSliderTimeMs(0);
   }, [seedTrackId]);
 
   useEffect(() => {
@@ -594,28 +596,6 @@ function App() {
     }
   }, [refreshLibrary]);
 
-  const handleAnalyzeTrack = useCallback(async (trackId: string) => {
-    const track = library.find((item) => item.id === trackId);
-    if (!track) return;
-
-    setUiError(null);
-    try {
-      await analyzeTrackWithHeuristicV1({
-        id: track.id,
-        durationMs: track.durationMs,
-        name: track.name,
-        artist: track.artist,
-      });
-      refreshAnalysisStates();
-      if (seedTrackId === trackId) {
-        await refreshTransitionCandidates();
-      }
-    } catch (error) {
-      console.error('Failed to analyze track:', error);
-      setUiError('Sarki analizi basarisiz oldu.');
-    }
-  }, [library, refreshAnalysisStates, refreshTransitionCandidates, seedTrackId]);
-
   const noteRuntimeEvent = useCallback((input: RecordTransitionRuntimeEventInput) => {
     recordTransitionRuntimeEvent(input);
     setRuntimeEventVersion((current) => current + 1);
@@ -675,6 +655,18 @@ function App() {
       } else {
         autoTransitionCooldownUntilRef.current = Date.now() + 5_000;
       }
+      const queuedCandidate = queuedManualTransitionRef.current?.candidate;
+      if (
+        queuedCandidate
+        && queuedCandidate.sourceTrackId === candidate.sourceTrackId
+        && queuedCandidate.targetTrackId === candidate.targetTrackId
+        && queuedCandidate.targetTimeMs === candidate.targetTimeMs
+      ) {
+        queuedManualTransitionRef.current = null;
+      }
+      if (options.reason !== 'auto') {
+        queuedManualTransitionRef.current = null;
+      }
       warmedTransitionCandidateKeyRef.current = null;
       handoffPrimedCandidateKeyRef.current = null;
     } catch (error) {
@@ -690,41 +682,60 @@ function App() {
         mode: options.reason === 'auto' ? 'auto' : 'manual',
       });
       console.error('Failed to play transition candidate:', error);
+      queuedManualTransitionRef.current = null;
       setUiError('Transition adayi calinamadi.');
     }
   }, [library, noteRuntimeEvent, play, provider, seek]);
 
-  const handlePreviewTransitionAB = useCallback(async (candidate: TransitionCandidate) => {
-    if (isPreviewingRef.current) return;
-    setUiError(null);
-    isPreviewingRef.current = true;
-    autoTransitionCooldownUntilRef.current = Date.now() + AUTO_TRANSITION_PREVIEW_SUPPRESS_MS;
-    try {
-      const sourceTrack = library.find((track) => track.id === candidate.sourceTrackId);
-      const targetTrack = library.find((track) => track.id === candidate.targetTrackId);
-      const sourceTimeMs = clampTimeToTrackDuration(candidate.sourceTimeMs, sourceTrack?.durationMs);
-      const targetTimeMs = clampTimeToTrackDuration(candidate.targetTimeMs, targetTrack?.durationMs);
+  const handleNowTransition = useCallback(async (candidate: TransitionCandidate) => {
+    const currentTrackId = playbackState?.currentTrack?.id ?? null;
+    const currentProgressMs = playbackState?.progressMs ?? 0;
+    const isCurrentlyPlaying = Boolean(playbackState?.isPlaying);
 
-      await play(candidate.sourceTrackId);
-      await wait(450);
-      await seek(sourceTimeMs);
-      await wait(850);
-
-      await play(candidate.targetTrackId);
-      await wait(450);
-      await seek(targetTimeMs);
-      await wait(250);
-      await seek(targetTimeMs);
-    } catch (error) {
-      console.error('Failed to preview A/B transition candidate:', error);
-      setUiError('A/B onizleme basarisiz oldu.');
-    } finally {
-      isPreviewingRef.current = false;
-      autoTransitionedSourceTrackIdRef.current = null;
-      warmedTransitionCandidateKeyRef.current = null;
-      handoffPrimedCandidateKeyRef.current = null;
+    if (!isCurrentlyPlaying || currentTrackId !== candidate.sourceTrackId) {
+      queuedManualTransitionRef.current = null;
+      await handlePlayTransitionCandidate(candidate, { reason: 'manual' });
+      return;
     }
-  }, [library, play, seek]);
+
+    const latestUsefulSeekStartMs = Math.max(0, candidate.sourceTimeMs - 1000);
+    if (currentProgressMs >= latestUsefulSeekStartMs) {
+      queuedManualTransitionRef.current = null;
+      await handlePlayTransitionCandidate(candidate, { reason: 'manual' });
+      return;
+    }
+
+    const sourceTrack = library.find((track) => track.id === candidate.sourceTrackId);
+    const seekTargetMs = clampTimeToTrackDuration(
+      Math.max(0, candidate.sourceTimeMs - 5000),
+      sourceTrack?.durationMs
+    );
+
+    queuedManualTransitionRef.current = {
+      candidate,
+      queuedAtMs: Date.now(),
+    };
+    autoTransitionedSourceTrackIdRef.current = null;
+    autoTransitionCooldownUntilRef.current = 0;
+    warmedTransitionCandidateKeyRef.current = null;
+    handoffPrimedCandidateKeyRef.current = null;
+    setUiError(null);
+
+    try {
+      await seek(seekTargetMs);
+    } catch (error) {
+      console.warn('Manual transition seek preparation failed, falling back to direct transition:', error);
+      queuedManualTransitionRef.current = null;
+      await handlePlayTransitionCandidate(candidate, { reason: 'manual' });
+    }
+  }, [
+    handlePlayTransitionCandidate,
+    library,
+    playbackState?.currentTrack?.id,
+    playbackState?.isPlaying,
+    playbackState?.progressMs,
+    seek,
+  ]);
 
   const pickAutoTransitionCandidate = useCallback((
     currentTrackId: string,
@@ -734,6 +745,21 @@ function App() {
       (item) => item.sourceTrackId === currentTrackId
     );
     if (candidatesForSource.length === 0) return null;
+
+    const queuedCandidate = queuedManualTransitionRef.current?.candidate;
+    if (queuedCandidate && queuedCandidate.sourceTrackId === currentTrackId) {
+      const matchedQueuedCandidate = candidatesForSource.find((candidate) => (
+        candidate.sourceTrackId === queuedCandidate.sourceTrackId
+        && candidate.targetTrackId === queuedCandidate.targetTrackId
+        && candidate.targetTimeMs === queuedCandidate.targetTimeMs
+      ));
+      if (matchedQueuedCandidate) {
+        return matchedQueuedCandidate;
+      }
+      queuedManualTransitionRef.current = null;
+    } else if (queuedCandidate && queuedCandidate.sourceTrackId !== currentTrackId) {
+      queuedManualTransitionRef.current = null;
+    }
 
     const lastAutoTransition = lastAutoTransitionRef.current;
     const reverseGuardActive = Boolean(
@@ -753,6 +779,11 @@ function App() {
   useEffect(() => {
     warmedTransitionCandidateKeyRef.current = null;
     handoffPrimedCandidateKeyRef.current = null;
+    const currentTrackId = playbackState?.currentTrack?.id ?? null;
+    const queuedCandidate = queuedManualTransitionRef.current?.candidate;
+    if (queuedCandidate && queuedCandidate.sourceTrackId !== currentTrackId) {
+      queuedManualTransitionRef.current = null;
+    }
   }, [playbackState?.currentTrack?.id]);
 
   useEffect(() => {
@@ -893,14 +924,6 @@ function App() {
   const libraryTrackMap = useMemo(
     () => new Map(library.map((track) => [track.id, track])),
     [library]
-  );
-  const selectedSeedTrack = useMemo(
-    () => (seedTrackId ? libraryTrackMap.get(seedTrackId) ?? null : null),
-    [libraryTrackMap, seedTrackId]
-  );
-  const meanCandidateScore = useMemo(
-    () => computeMeanTransitionScore(transitionCandidates),
-    [transitionCandidates]
   );
   const selectedSeedRelevantTargets = useMemo(
     () => (seedTrackId ? relevanceMap[seedTrackId] ?? [] : []),
@@ -1223,7 +1246,7 @@ function App() {
         const persistedMap = setTransitionRelevanceMap(nextMap);
         setRelevanceMap(persistedMap);
         refreshAnalysisStates();
-        if (showTransitionPanel && seedTrackId) {
+        if (activeTab === 'transition' && seedTrackId) {
           await refreshTransitionCandidates();
         }
       } catch (error) {
@@ -1243,7 +1266,7 @@ function App() {
     refreshAnalysisStates,
     refreshTransitionCandidates,
     seedTrackId,
-    showTransitionPanel,
+    activeTab,
     sortedLibrary.length,
   ]);
 
@@ -1281,32 +1304,6 @@ function App() {
     setBenchmarkAutoBootstrapPaused(true);
   }, []);
 
-  const handlePinSourceFromSlider = useCallback(() => {
-    if (!seedTrackId) return;
-    const clamped = clampTimeToTrackDuration(sourceSliderTimeMs, selectedSeedTrack?.durationMs);
-    setPinnedSourceTimeMs(clamped);
-  }, [seedTrackId, selectedSeedTrack?.durationMs, sourceSliderTimeMs]);
-
-  const handlePinSourceFromCurrentPosition = useCallback(() => {
-    if (!seedTrackId) return;
-    if (playbackState?.currentTrack?.id !== seedTrackId) {
-      setUiError('Su anki konumu pinlemek icin once bir sarki cal.');
-      return;
-    }
-
-    const clamped = clampTimeToTrackDuration(
-      playbackState.progressMs ?? 0,
-      selectedSeedTrack?.durationMs
-    );
-    setUiError(null);
-    setSourceSliderTimeMs(clamped);
-    setPinnedSourceTimeMs(clamped);
-  }, [playbackState?.currentTrack?.id, playbackState?.progressMs, seedTrackId, selectedSeedTrack?.durationMs]);
-
-  const handleClearPinnedSource = useCallback(() => {
-    setPinnedSourceTimeMs(null);
-  }, []);
-
   const handleResetAllData = useCallback(async () => {
     try {
       const youtubeProvider = getYouTubeProvider();
@@ -1326,555 +1323,302 @@ function App() {
     }
   }, [refreshLibrary, resetRuntimeState]);
 
-  return (
-    <div className="w-full h-screen bg-[var(--color-background)] overflow-hidden flex flex-col border border-white/10">
-      <div
-        className="h-10 flex items-center justify-between px-4 bg-[var(--color-surface)] no-select cursor-default relative z-20 shrink-0 border-b border-white/10"
-      >
-        <span data-tauri-drag-region className="text-sm font-semibold text-[var(--color-text-primary)] pointer-events-none">
-          Moodverter
-        </span>
-        <span className="text-xs text-[var(--color-text-secondary)]">
-          YouTube • {library.length} sarki
-        </span>
-        <button
-          onClick={() => void handleResetAllData()}
-          className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-red-300 hover:border-red-400/50"
-          title="Yerel verileri temizle"
-        >
-          Veriyi Temizle
-        </button>
+  const advancedToolsContent = (
+    <>
+      <div className="border border-white/10 bg-white/5 p-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <div className="text-xs uppercase tracking-wide text-[var(--color-text-secondary)]">
+              Dataset & Veri
+            </div>
+            <div className="text-xs text-[var(--color-text-secondary)]">
+              Dataset import ve yerel veri bakım araçları
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleResetAllData()}
+            className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-red-300 hover:border-red-400/50"
+            title="Yerel verileri temizle"
+          >
+            Veriyi Temizle
+          </button>
+        </div>
+        <input
+          ref={datasetImportInputRef}
+          type="file"
+          accept=".json,application/json"
+          className="hidden"
+          onChange={(event) => {
+            void handleImportDatasetFile(event);
+          }}
+        />
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleOpenDatasetImportPicker}
+            disabled={isDatasetImporting}
+            className="px-3 py-2 border border-white/10 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-60"
+            title="dataset/output/playlist.moodverter.json dosyasini secip kutuphaneye ekle"
+          >
+            {isDatasetImporting ? 'Dataset Yükleniyor...' : 'Dataset JSON Yükle'}
+          </button>
+          {datasetImportSummary && (
+            <span className="text-[10px] text-emerald-300 truncate">{datasetImportSummary}</span>
+          )}
+        </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-hidden p-4 flex flex-col gap-4">
-        <section className="bg-[var(--color-surface)] border border-white/10 p-3">
-          <h2 className="text-xs uppercase tracking-wide text-[var(--color-text-secondary)] mb-2">
-            YouTube Link Ekle
-          </h2>
-          <form onSubmit={handleSubmitUrl} className="flex gap-2">
-            <input
-              value={urlInput}
-              onChange={(e) => setUrlInput(e.target.value)}
-              placeholder="https://www.youtube.com/watch?v=..."
-              className="flex-1 px-3 py-2 bg-white/5 border border-white/10 text-sm text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] focus:outline-none focus:border-[var(--color-primary)]"
-            />
-            <button
-              type="submit"
-              disabled={isSubmittingUrl}
-              className="px-3 py-2 bg-[var(--color-primary)] text-white text-sm font-medium hover:bg-[var(--color-primary-dark)] disabled:opacity-60"
-            >
-              {isSubmittingUrl ? 'Ekleniyor...' : 'Ekle'}
-            </button>
-          </form>
-          <div className="mt-2 flex items-center gap-2">
-            <input
-              ref={datasetImportInputRef}
-              type="file"
-              accept=".json,application/json"
-              className="hidden"
-              onChange={(event) => {
-                void handleImportDatasetFile(event);
-              }}
-            />
-            <button
-              type="button"
-              onClick={handleOpenDatasetImportPicker}
-              disabled={isDatasetImporting}
-              className="px-3 py-2 border border-white/10 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-60"
-              title="dataset/output/playlist.moodverter.json dosyasini secip kutuphaneye ekle"
-            >
-              {isDatasetImporting ? 'Dataset Yukleniyor...' : 'Dataset JSON Yukle'}
-            </button>
-            {datasetImportSummary && (
-              <span className="text-[10px] text-emerald-300 truncate">{datasetImportSummary}</span>
+      <div className="border border-white/10 bg-white/5 p-3 space-y-2">
+        <div className="text-xs uppercase tracking-wide text-[var(--color-text-secondary)]">
+          Benchmark Durumu
+        </div>
+        <div className="text-[11px] text-[var(--color-text-secondary)]">
+          Set: {benchmarkSeedTrackIdsResolved.length}/{benchmarkSeedTargetCount}
+          {' | '} Min {MIN_BENCHMARK_SEED_COUNT}
+          {' | '} Hazır {benchmarkProgressReport.readySeedCount}/{benchmarkProgressReport.totalSeedCount}
+          {' | '} Etiket eksiği {benchmarkRelevantTargetGaps.length}
+          {' | '} Uygun {benchmarkEligibleSeedTrackIds.length}
+        </div>
+        <div className="text-[11px] text-[var(--color-text-secondary)]">
+          Runtime kalibrasyon: {benchmarkRuntimeCalibration.summary}
+        </div>
+        <div className="text-[11px] text-[var(--color-text-secondary)]">
+          Handoff profili: duck {handoffProfile.duckPercent}% • ramp {handoffProfile.rampMs}ms • hold {handoffProfile.holdMs}ms
+        </div>
+        {benchmarkRuntimeDriftReport && (
+          <div className={`text-[11px] ${
+            benchmarkRuntimeDriftReport.overallStatus === 'degrading'
+              ? 'text-amber-400'
+              : benchmarkRuntimeDriftReport.overallStatus === 'improving'
+                ? 'text-emerald-300'
+                : 'text-[var(--color-text-secondary)]'
+          }`}>
+            {benchmarkRuntimeDriftReport.summary}
+          </div>
+        )}
+        {benchmarkRelevantTargetGaps.length > 0 && (
+          <div className="text-[11px] text-amber-400">
+            Öncelik: {benchmarkRelevantTargetGaps
+              .map((gap) => {
+                const trackName = libraryTrackMap.get(gap.trackId)?.name ?? gap.trackId;
+                return `${trackName} (+${gap.missingTargetCount})`;
+              })
+              .join(', ')}
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleGenerateBenchmarkSeedSet}
+            className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+          >
+            Benchmark Oluştur
+          </button>
+          <button
+            type="button"
+            onClick={handleClearBenchmarkSeedSet}
+            disabled={benchmarkSeedTrackIdsResolved.length === 0}
+            className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+          >
+            Benchmark Temizle
+          </button>
+        </div>
+      </div>
+
+      <div className="border border-white/10 bg-white/5 p-3 space-y-2">
+        <div className="text-xs uppercase tracking-wide text-[var(--color-text-secondary)]">
+          Baseline Araçları
+        </div>
+        <div className="text-[11px] text-[var(--color-text-secondary)]">
+          Değerlendirme: Hazır {evaluationProgressReport.readySeedCount}/{evaluationProgressReport.totalSeedCount}
+          {' | '} Etiket kapısı {evaluationProgressReport.labelGatePassedSeedCount}/{evaluationProgressReport.totalSeedCount}
+          {' | '} Etiket eksiği {evaluationProgressReport.seedsNeedingLabels.length}
+          {' | '} Analiz eksiği {evaluationProgressReport.seedsMissingAnalysis.length}
+        </div>
+        {(evaluationProgressReport.seedsNeedingLabels.length > 0 || evaluationProgressReport.seedsMissingAnalysis.length > 0) && (
+          <div className="text-[11px] text-amber-400">
+            Öncelik: {formatTrackNames(
+              evaluationProgressReport.seedsNeedingLabels.length > 0
+                ? evaluationProgressReport.seedsNeedingLabels
+                : evaluationProgressReport.seedsMissingAnalysis,
+              libraryTrackMap
             )}
           </div>
-        </section>
-
-        <section className="bg-[var(--color-surface)] border border-white/10 p-3">
-          <h2 className="text-xs uppercase tracking-wide text-[var(--color-text-secondary)] mb-2">
-            YouTube Arama
-          </h2>
-          <div className="h-44 border border-white/10 bg-[var(--color-background)]">
-            <LibrarySearch
-              onTrackSelect={handleSelectSearchResult}
-              onAddToLibrary={handleAddSearchResultToLibrary}
-            />
-          </div>
-        </section>
-
-        <section className="bg-[var(--color-surface)] border border-white/10 p-3 flex-1 min-h-0 overflow-hidden flex flex-col">
-          <div className="flex items-center justify-between mb-2 gap-2">
-            <h2 className="text-xs uppercase tracking-wide text-[var(--color-text-secondary)]">
-              Kutuphane + Transition
-            </h2>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setShowTransitionPanel((prev) => !prev)}
-                className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-              >
-                {showTransitionPanel ? 'Transition Kapat' : 'Transition Ac'}
-              </button>
-              {showTransitionPanel && (
-                <button
-                  onClick={() => void refreshTransitionCandidates()}
-                  className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                >
-                  Adaylari Yenile
-                </button>
-              )}
-            </div>
-          </div>
-
-          {showTransitionPanel ? (
-            <div className="border border-white/10 bg-[var(--color-background)] p-2 mb-2 space-y-2 h-56 min-h-40 max-h-[72vh] resize-y overflow-y-auto shrink-0">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-[10px] text-[var(--color-text-secondary)] truncate">
-                  Aktif Kaynak: {selectedSeedTrack ? `${selectedSeedTrack.name} - ${selectedSeedTrack.artist}` : 'calan sarki bekleniyor'}
-                </div>
-                <button
-                  onClick={() => {
-                    if (!seedTrackId) return;
-                    void handleAnalyzeTrack(seedTrackId);
-                  }}
-                  disabled={!seedTrackId}
-                  className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
-                >
-                  Analiz Et
-                </button>
-              </div>
-
-              <div className="text-[10px] text-[var(--color-text-secondary)]">
-                Ortalama Skor@{transitionCandidates.length}: {formatPercent(meanCandidateScore)}
-              </div>
-              <div className="text-[10px] text-[var(--color-text-secondary)]">
-                Otomatik Gecis: {isAutoTransitioning ? 'gecis yapiliyor...' : 'aktif'}
-                {' | '}
-                Lead {Math.round(autoTransitionLeadMs / 10) / 100}s
-                {lastAutoTransitionLatencyMs !== null ? ` | son gecis ${lastAutoTransitionLatencyMs}ms` : ''}
-                {` | Handoff d${handoffProfile.duckPercent} r${handoffProfile.rampMs}ms h${handoffProfile.holdMs}ms`}
-              </div>
-              <div className="text-[10px] text-[var(--color-text-secondary)]">
-                Label Durumu: {selectedSeedRelevantTargets.length}/{REQUIRED_RELEVANT_TARGETS_PER_SEED}
-              </div>
-              <div className="border border-white/10 bg-white/5 px-2 py-1 space-y-1">
-                <div className="text-[10px] text-[var(--color-text-secondary)]">
-                  Degerlendirme: Hazir {evaluationProgressReport.readySeedCount}/{evaluationProgressReport.totalSeedCount}
-                  {' | '}
-                  Label Gate {evaluationProgressReport.labelGatePassedSeedCount}/{evaluationProgressReport.totalSeedCount}
-                  {' | '}
-                  Label Eksigi {evaluationProgressReport.seedsNeedingLabels.length}
-                  {' | '}
-                  Analiz Eksigi {evaluationProgressReport.seedsMissingAnalysis.length}
-                </div>
-                {(evaluationProgressReport.seedsNeedingLabels.length > 0 || evaluationProgressReport.seedsMissingAnalysis.length > 0) && (
-                  <div className="text-[10px] text-amber-400 truncate">
-                    Oncelik: {formatTrackNames(
-                      evaluationProgressReport.seedsNeedingLabels.length > 0
-                        ? evaluationProgressReport.seedsNeedingLabels
-                        : evaluationProgressReport.seedsMissingAnalysis,
-                      libraryTrackMap
-                    )}
-                  </div>
-                )}
-              </div>
-              <div className="border border-white/10 bg-white/5 px-2 py-1 space-y-1">
-                <div className="text-[10px] text-[var(--color-text-secondary)]">
-                  Benchmark Set: {benchmarkSeedTrackIdsResolved.length}/{benchmarkSeedTargetCount}
-                  {' | '}
-                  Min {MIN_BENCHMARK_SEED_COUNT}
-                  {' | '}
-                  Hazir {benchmarkProgressReport.readySeedCount}/{benchmarkProgressReport.totalSeedCount}
-                  {' | '}
-                  Label Eksigi {benchmarkRelevantTargetGaps.length}
-                  {' | '}
-                  Uygun {benchmarkEligibleSeedTrackIds.length}
-                </div>
-                <div className="text-[10px] text-[var(--color-text-secondary)]">
-                  Runtime Kalibrasyon: {benchmarkRuntimeCalibration.summary}
-                </div>
-                {benchmarkRuntimeDriftReport && (
-                  <div className={`text-[10px] ${
-                    benchmarkRuntimeDriftReport.overallStatus === 'degrading'
-                      ? 'text-amber-400'
-                      : benchmarkRuntimeDriftReport.overallStatus === 'improving'
-                        ? 'text-emerald-300'
-                        : 'text-[var(--color-text-secondary)]'
-                  }`}>
-                    {benchmarkRuntimeDriftReport.summary}
-                  </div>
-                )}
-                {benchmarkRelevantTargetGaps.length > 0 && (
-                  <div className="text-[10px] text-amber-400 truncate">
-                    Benchmark oncelik: {benchmarkRelevantTargetGaps
-                      .map((gap) => {
-                        const trackName = libraryTrackMap.get(gap.trackId)?.name ?? gap.trackId;
-                        return `${trackName} (+${gap.missingTargetCount})`;
-                      })
-                      .join(', ')}
-                  </div>
-                )}
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleGenerateBenchmarkSeedSet}
-                    className="px-2 py-0.5 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                    title={`En az ${MIN_BENCHMARK_SEED_COUNT}, hedef ${benchmarkSeedTargetCount} hazir+labelli seed ile benchmark set olustur`}
-                  >
-                    Benchmark Olustur
-                  </button>
-                  <button
-                    onClick={handleClearBenchmarkSeedSet}
-                    disabled={benchmarkSeedTrackIdsResolved.length === 0}
-                    className="px-2 py-0.5 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
-                    title="Benchmark seed setini temizle"
-                  >
-                    Benchmark Temizle
-                  </button>
-                </div>
-              </div>
-              <div className="text-[10px] text-[var(--color-text-secondary)] border border-white/10 bg-white/5 px-2 py-1">
-                Analiz durumu: {formatAnalysisStatusLabel(analysisStates[seedTrackId ?? '']?.status ?? 'missing')}
-              </div>
-              <div className="border border-white/10 bg-white/5 px-2 py-1 space-y-1">
-                <div className="text-[10px] text-[var(--color-text-secondary)]">
-                  Source Moment: {pinnedSourceTimeMs === null ? 'Auto (coklu kaynak an)' : formatTime(pinnedSourceTimeMs)}
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={Math.max(selectedSeedTrack?.durationMs ?? 0, 0)}
-                  value={Math.min(sourceSliderTimeMs, Math.max(selectedSeedTrack?.durationMs ?? 0, 0))}
-                  onChange={(event) => setSourceSliderTimeMs(Number(event.target.value))}
-                  disabled={!seedTrackId}
-                  className="w-full accent-[var(--color-primary)] disabled:opacity-50"
-                />
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handlePinSourceFromSlider}
-                    disabled={!seedTrackId}
-                    className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
-                    title="Slider degerini source moment olarak pinle"
-                  >
-                    Pinle
-                  </button>
-                  <button
-                    onClick={handlePinSourceFromCurrentPosition}
-                    disabled={!seedTrackId}
-                    className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
-                    title="Oynaticidaki mevcut konumu source moment olarak al"
-                  >
-                    Simdiki Ani Al
-                  </button>
-                  <button
-                    onClick={handleClearPinnedSource}
-                    disabled={pinnedSourceTimeMs === null}
-                    className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
-                    title="Source moment pinini temizle"
-                  >
-                    Oto
-                  </button>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => void handleRunBaseline('selected')}
-                  disabled={isBaselineLoading || !seedTrackId || !selectedSeedLabelGatePassed}
-                  className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
-                >
-                  {isBaselineLoading && baselineScope === 'selected' ? 'Baseline...' : 'Kaynak Baseline'}
-                </button>
-                <button
-                  onClick={() => void handleRunBaseline('all')}
-                  disabled={isBaselineLoading || sortedLibrary.length === 0 || !allScopeLabelGatePassed}
-                  className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
-                >
-                  {isBaselineLoading && baselineScope === 'all' ? 'Baseline...' : 'Tum Baseline'}
-                </button>
-                <button
-                  onClick={() => void handleRunBaseline('benchmark')}
-                  disabled={
-                    isBaselineLoading
-                    || benchmarkSeedTrackIdsResolved.length < MIN_BENCHMARK_SEED_COUNT
-                    || !benchmarkLabelGatePassed
-                  }
-                  className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
-                >
-                  {isBaselineLoading && baselineScope === 'benchmark' ? 'Baseline...' : 'Benchmark Baseline'}
-                </button>
-              </div>
-
-              {baselineResult && (
-                <div className="text-[10px] text-[var(--color-text-secondary)] border border-white/10 bg-white/5 px-2 py-1">
-                  Baseline Ozeti: Scope {baselineScope === 'selected' ? 'Kaynak' : baselineScope === 'all' ? 'Tum' : 'Benchmark'}
-                  {' | '}
-                  Hit@3 {formatOptionalPercent(baselineResult.hitAt3)}
-                  {' | '}
-                  Hit@5 {formatOptionalPercent(baselineResult.hitAt5)}
-                  {' | '}
-                  Mean@{baselineResult.limit} {formatPercent(baselineResult.meanTopKScore)}
-                  {' | '}
-                  Coverage {formatPercent(baselineResult.coverageRate)}
-                  {' | '}
-                  Etiketli {baselineResult.labeledSeedCount}
-                </div>
-              )}
-              {baselineResult && baselineResult.transitionRuntimeSampleCount > 0 && (
-                <div className="text-[10px] text-[var(--color-text-secondary)] border border-white/10 bg-white/5 px-2 py-1">
-                  Runtime: p95 {formatOptionalMs(baselineResult.transitionLatencyP95Ms)}
-                  {' | '}
-                  Stall {formatOptionalPercent(baselineResult.transitionStallRate)}
-                  {' | '}
-                  Drop {formatOptionalPercent(baselineResult.transitionDropRate)}
-                  {' | '}
-                  Ornek {baselineResult.transitionRuntimeSampleCount}
-                </div>
-              )}
-              {baselineResult && (
-                <div className={`text-[10px] border px-2 py-1 ${
-                  baselineResult.runtimeGatePassed
-                    ? 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10'
-                    : 'text-amber-400 border-amber-400/30 bg-amber-500/10'
-                }`}>
-                  Runtime Gate {formatGateLabel(baselineResult.runtimeGatePassed)}
-                  {baselineResult.runtimeGateSummary
-                    ? ` | ${baselineResult.runtimeGateSummary}`
-                    : ` | p95<=${baselineResult.runtimeGateThresholds.maxTransitionLatencyP95Ms}ms stall<=${formatPercent(baselineResult.runtimeGateThresholds.maxTransitionStallRate)} drop<=${formatPercent(baselineResult.runtimeGateThresholds.maxTransitionDropRate)}`}
-                </div>
-              )}
-              {baselineResult && (
-                <div className={`text-[10px] border px-2 py-1 ${
-                  baselineResult.tuningValidationPassed
-                    ? 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10'
-                    : 'text-amber-400 border-amber-400/30 bg-amber-500/10'
-                }`}>
-                  Tuning Gate {formatGateLabel(baselineResult.tuningValidationPassed)}
-                  {baselineResult.tuningValidationSummary ? ` | ${baselineResult.tuningValidationSummary}` : ' | ilk benchmark karsilastirmasi'}
-                </div>
-              )}
-              {baselineHistory.length > 0 && (
-                <div className="text-[10px] text-[var(--color-text-secondary)] border border-white/10 bg-white/5 px-2 py-1">
-                  Son kosular: {baselineHistory.length}
-                  {' | '}
-                  Son Hit@3 {formatOptionalPercent(baselineHistory[0].hitAt3)}
-                  {' | '}
-                  Son Hit@5 {formatOptionalPercent(baselineHistory[0].hitAt5)}
-                  {' | '}
-                  Son p95 {formatOptionalMs(baselineHistory[0].transitionLatencyP95Ms)}
-                  {' | '}
-                  Son Stall {formatOptionalPercent(baselineHistory[0].transitionStallRate)}
-                  {' | '}
-                  Son Drop {formatOptionalPercent(baselineHistory[0].transitionDropRate)}
-                  {' | '}
-                  Son Tuning {formatGateLabel(baselineHistory[0].tuningValidationPassed)}
-                </div>
-              )}
-              {baselineResult?.regressionSummary && (
-                <div className="text-[10px] text-amber-400 border border-amber-400/30 bg-amber-500/10 px-2 py-1">
-                  Regresyon kapi: {baselineResult.regressionSummary}
-                </div>
-              )}
-              {baselineResult?.relevanceTargetGateSummary && (
-                <div className="text-[10px] text-amber-400 border border-amber-400/30 bg-amber-500/10 px-2 py-1">
-                  Label kapi: {baselineResult.relevanceTargetGateSummary}
-                </div>
-              )}
-              {baselineResult && baselineResult.bottomSeeds.length > 0 && (
-                <div className="text-[10px] text-[var(--color-text-secondary)] border border-white/10 bg-white/5 px-2 py-1">
-                  Bottom-{baselineResult.bottomSeeds.length} kaynak:{' '}
-                  {baselineResult.bottomSeeds
-                    .map((seed) => {
-                      const trackName = libraryTrackMap.get(seed.trackId)?.name ?? seed.trackId;
-                      return `${trackName} (${formatPercent(seed.meanTopKScore)} | Tempo ${formatPercent(seed.averageTempoRatioScore)} | Harm ${formatPercent(seed.averageHarmonicCompatibilityScore)})`;
-                    })
-                    .join(' | ')}
-                </div>
-              )}
-              {baselineResult && baselineResult.tuningActions.length > 0 && (
-                <div className="text-[10px] text-[var(--color-text-secondary)] border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 space-y-1">
-                  <div>
-                    Tuning Loop:{' '}
-                    {baselineResult.tuningActions
-                      .map((action) => {
-                        const trackName = libraryTrackMap.get(action.trackId)?.name ?? action.trackId;
-                        return `${trackName} -> ${formatTuningIssue(action.issue)} (${formatPercent(action.confidence)})`;
-                      })
-                      .join(' | ')}
-                  </div>
-                  <div className="text-emerald-300 truncate">
-                    Sonraki adim: {baselineResult.tuningActions[0].recommendation}
-                  </div>
-                </div>
-              )}
-
-              {isTransitionLoading ? (
-                <div className="text-xs text-[var(--color-text-secondary)]">Transition adaylari hesaplanıyor...</div>
-              ) : transitionError ? (
-                <div className="text-xs text-amber-400">{transitionError}</div>
-              ) : (
-                <div className="space-y-1 max-h-56 overflow-y-auto">
-                  {transitionCandidates.map((candidate, index) => {
-                    const sourceTrack = libraryTrackMap.get(candidate.sourceTrackId);
-                    const targetTrack = libraryTrackMap.get(candidate.targetTrackId);
-                    const sourceTimeMs = clampTimeToTrackDuration(
-                      candidate.sourceTimeMs,
-                      sourceTrack?.durationMs
-                    );
-                    const targetTimeMs = clampTimeToTrackDuration(
-                      candidate.targetTimeMs,
-                      targetTrack?.durationMs
-                    );
-                    return (
-                      <div key={`${candidate.targetTrackId}:${candidate.targetTimeMs}:${index}`} className="text-[10px] text-[var(--color-text-primary)] border border-white/10 bg-white/5 px-2 py-1">
-                        <div className="truncate">
-                          {formatTime(sourceTimeMs)} {'->'} {formatTime(targetTimeMs)} | {targetTrack?.name ?? candidate.targetTrackId}
-                        </div>
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="text-[var(--color-text-secondary)] truncate">
-                            Score {formatPercent(candidate.score.finalScore)}
-                            {' | '}
-                            Event {formatPercent(candidate.score.eventMatchScore)}
-                            {' | '}
-                            Tempo {formatPercent(candidate.score.tempoRatioScore)}
-                            {' | '}
-                            Harm {formatPercent(candidate.score.harmonicCompatibilityScore)}
-                            {' | '}
-                            LoudΔ {Math.round((candidate.targetLoudnessRms - candidate.sourceLoudnessRms) * 10) / 10}dB
-                            {' | '}
-                            Etken {candidate.diagnostic.primaryDriver}
-                          </div>
-                          <button
-                            onClick={() => void handlePlayTransitionCandidate(candidate)}
-                            className="px-2 py-0.5 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                            title="Bu adaya hemen gec"
-                          >
-                            Simdi Gec
-                          </button>
-                          <button
-                            onClick={() => void handlePreviewTransitionAB(candidate)}
-                            className="px-2 py-0.5 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                            title="A@t1 -> B@t2 seklinde kisa onizleme"
-                          >
-                            Onizle
-                          </button>
-                        </div>
-                        <div className="text-[var(--color-text-secondary)] truncate">
-                          {candidate.diagnostic.summary}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="border border-white/10 bg-[var(--color-background)] px-2 py-1 mb-2 text-[10px] text-[var(--color-text-secondary)]">
-              Transition paneli kapali. Gormek icin "Transition Ac" butonunu kullan.
-            </div>
-          )}
-
-          {sortedLibrary.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center text-sm text-[var(--color-text-secondary)]">
-              Henuz sarki eklenmedi.
-            </div>
-          ) : (
-            <div className="flex-1 min-h-0 overflow-y-auto space-y-1">
-              {sortedLibrary.map((track) => (
-                <div
-                  key={track.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => void handlePlayFromLibrary(track.id)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      void handlePlayFromLibrary(track.id);
-                    }
-                  }}
-                  className="flex items-center gap-2 p-2 bg-white/5 border border-transparent hover:border-white/10 cursor-pointer"
-                  title="Sarkiyi oynat"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm text-[var(--color-text-primary)] truncate">{track.name}</div>
-                    <div className="text-xs text-[var(--color-text-secondary)] truncate">
-                      {track.artist} • analiz: {analysisStates[track.id]?.status ?? 'yok'}
-                    </div>
-                  </div>
-                  <button
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void handleRemoveFromLibrary(track.id);
-                    }}
-                    className="px-2 py-1 text-xs text-[var(--color-text-secondary)] border border-white/10 hover:text-red-400 hover:border-red-500/50"
-                    title="Sarkiyi kaldir"
-                  >
-                    Kaldir
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      </div>
-
-      <div className="border-t border-white/10 bg-[var(--color-surface)] p-3 space-y-2">
-        {effectiveError && (
-          <div className="px-2 py-1 text-xs text-red-400 border border-red-500/30 bg-red-500/10">
-            {effectiveError}
-          </div>
         )}
-
-        <div className="flex items-center gap-3">
-          {currentTrack?.albumArt ? (
-            <img src={currentTrack.albumArt} alt={currentTrack.name} className="w-10 h-10 object-cover" />
-          ) : (
-            <div className="w-10 h-10 bg-white/10 flex items-center justify-center text-lg">🎵</div>
-          )}
-
-          <div className="min-w-0 flex-1">
-            <div className="text-sm text-[var(--color-text-primary)] truncate">
-              {currentTrack?.name ?? 'Sarki sec'}
-            </div>
-            <div className="text-xs text-[var(--color-text-secondary)] truncate">
-              {currentTrack?.artist ?? 'YouTube player hazir'}
-            </div>
-          </div>
-
-          <div className="flex items-center gap-1">
-            <button onClick={() => void previous()} className="px-2 py-1 border border-white/10 text-[var(--color-text-primary)] hover:bg-white/5">
-              ◀◀
-            </button>
-              <button
-                onClick={() => void handlePlayPause()}
-                className="px-3 py-1 bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-dark)]"
-              >
-                {playbackState?.isPlaying ? 'Duraklat' : 'Oynat'}
-              </button>
-            <button onClick={() => void skip()} className="px-2 py-1 border border-white/10 text-[var(--color-text-primary)] hover:bg-white/5">
-              ▶▶
-            </button>
-          </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void handleRunBaseline('selected')}
+            disabled={isBaselineLoading || !seedTrackId || !selectedSeedLabelGatePassed}
+            className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+          >
+            {isBaselineLoading && baselineScope === 'selected' ? 'Baseline...' : 'Kaynak Baseline'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleRunBaseline('all')}
+            disabled={isBaselineLoading || sortedLibrary.length === 0 || !allScopeLabelGatePassed}
+            className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+          >
+            {isBaselineLoading && baselineScope === 'all' ? 'Baseline...' : 'Tüm Baseline'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleRunBaseline('benchmark')}
+            disabled={
+              isBaselineLoading
+              || benchmarkSeedTrackIdsResolved.length < MIN_BENCHMARK_SEED_COUNT
+              || !benchmarkLabelGatePassed
+            }
+            className="px-2 py-1 text-[10px] border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+          >
+            {isBaselineLoading && baselineScope === 'benchmark' ? 'Baseline...' : 'Benchmark Baseline'}
+          </button>
         </div>
 
-        <div className="space-y-1">
-          <input
-            type="range"
-            min={0}
-            max={Math.max(durationMs, 0)}
-            value={Math.min(progressMs, Math.max(durationMs, 0))}
-            onChange={(e) => void seek(Number(e.target.value))}
-            className="w-full accent-[var(--color-primary)]"
-          />
-          <div className="flex justify-between text-[10px] text-[var(--color-text-secondary)]">
-            <span>{formatTime(progressMs)}</span>
-            <span>{formatTime(durationMs)}</span>
+        {baselineResult && (
+          <div className="text-[11px] text-[var(--color-text-secondary)] border border-white/10 bg-black/10 px-2 py-1">
+            Özet: Hit@3 {formatOptionalPercent(baselineResult.hitAt3)}
+            {' | '} Hit@5 {formatOptionalPercent(baselineResult.hitAt5)}
+            {' | '} Mean@{baselineResult.limit} {formatPercent(baselineResult.meanTopKScore)}
+            {' | '} Coverage {formatPercent(baselineResult.coverageRate)}
+            {' | '} Etiketli {baselineResult.labeledSeedCount}
           </div>
-        </div>
-
-        {isLoading && (
-          <div className="text-[10px] text-[var(--color-text-secondary)]">Player hazirlaniyor...</div>
+        )}
+        {baselineResult && baselineResult.transitionRuntimeSampleCount > 0 && (
+          <div className="text-[11px] text-[var(--color-text-secondary)] border border-white/10 bg-black/10 px-2 py-1">
+            Runtime: p95 {formatOptionalMs(baselineResult.transitionLatencyP95Ms)}
+            {' | '} Stall {formatOptionalPercent(baselineResult.transitionStallRate)}
+            {' | '} Drop {formatOptionalPercent(baselineResult.transitionDropRate)}
+            {' | '} Örnek {baselineResult.transitionRuntimeSampleCount}
+          </div>
+        )}
+        {baselineResult && (
+          <div className={`text-[11px] border px-2 py-1 ${
+            baselineResult.runtimeGatePassed
+              ? 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10'
+              : 'text-amber-400 border-amber-400/30 bg-amber-500/10'
+          }`}>
+            Runtime Gate {formatGateLabel(baselineResult.runtimeGatePassed)}
+            {baselineResult.runtimeGateSummary ? ` | ${baselineResult.runtimeGateSummary}` : ''}
+          </div>
+        )}
+        {baselineResult && (
+          <div className={`text-[11px] border px-2 py-1 ${
+            baselineResult.tuningValidationPassed
+              ? 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10'
+              : 'text-amber-400 border-amber-400/30 bg-amber-500/10'
+          }`}>
+            Tuning Gate {formatGateLabel(baselineResult.tuningValidationPassed)}
+            {baselineResult.tuningValidationSummary ? ` | ${baselineResult.tuningValidationSummary}` : ' | ilk benchmark karşılaştırması'}
+          </div>
+        )}
+        {baselineHistory.length > 0 && (
+          <div className="text-[11px] text-[var(--color-text-secondary)] border border-white/10 bg-black/10 px-2 py-1">
+            Son koşular: {baselineHistory.length}
+            {' | '} Son Hit@3 {formatOptionalPercent(baselineHistory[0].hitAt3)}
+            {' | '} Son Hit@5 {formatOptionalPercent(baselineHistory[0].hitAt5)}
+            {' | '} Son p95 {formatOptionalMs(baselineHistory[0].transitionLatencyP95Ms)}
+          </div>
+        )}
+        {baselineResult?.regressionSummary && (
+          <div className="text-[11px] text-amber-400 border border-amber-400/30 bg-amber-500/10 px-2 py-1">
+            Regresyon: {baselineResult.regressionSummary}
+          </div>
+        )}
+        {baselineResult?.relevanceTargetGateSummary && (
+          <div className="text-[11px] text-amber-400 border border-amber-400/30 bg-amber-500/10 px-2 py-1">
+            Etiket kapısı: {baselineResult.relevanceTargetGateSummary}
+          </div>
+        )}
+        {baselineResult && baselineResult.tuningActions.length > 0 && (
+          <div className="text-[11px] text-[var(--color-text-secondary)] border border-emerald-500/30 bg-emerald-500/10 px-2 py-1">
+            Tuning önerisi: {baselineResult.tuningActions
+              .map((action) => {
+                const trackName = libraryTrackMap.get(action.trackId)?.name ?? action.trackId;
+                return `${trackName} -> ${formatTuningIssue(action.issue)} (${formatPercent(action.confidence)})`;
+              })
+              .join(' | ')}
+          </div>
         )}
       </div>
-    </div>
+    </>
+  );
+
+  const pageContent =
+    activeTab === 'library' ? (
+      <LibraryPage
+        urlInput={urlInput}
+        isSubmittingUrl={isSubmittingUrl}
+        onUrlInputChange={setUrlInput}
+        onUrlSubmit={handleSubmitUrl}
+        tracks={sortedLibrary}
+        analysisStates={analysisStates}
+        onPlayTrack={(trackId) => {
+          void handlePlayFromLibrary(trackId);
+        }}
+        onRemoveTrack={(trackId) => {
+          void handleRemoveFromLibrary(trackId);
+        }}
+        onSelectSearchResult={(track) => {
+          void handleSelectSearchResult(track);
+        }}
+        onAddSearchResultToLibrary={(track) => {
+          void handleAddSearchResultToLibrary(track);
+        }}
+      />
+    ) : activeTab === 'transition' ? (
+      <TransitionPage
+        currentTrack={currentTrack}
+        transitionCandidates={transitionCandidates}
+        libraryTrackMap={libraryTrackMap}
+        isTransitionLoading={isTransitionLoading}
+        transitionError={transitionError}
+        isAutoTransitioning={isAutoTransitioning}
+        autoTransitionLeadMs={autoTransitionLeadMs}
+        lastAutoTransitionLatencyMs={lastAutoTransitionLatencyMs}
+        onRefreshCandidates={() => {
+          void refreshTransitionCandidates();
+        }}
+        onNowTransition={(candidate) => {
+          void handleNowTransition(candidate);
+        }}
+      />
+    ) : activeTab === 'history' ? (
+      <HistoryPage />
+    ) : (
+      <SettingsPage advancedContent={advancedToolsContent} />
+    );
+
+  return (
+    <AppFrame
+      title="Moodverter"
+      subtitle={`YouTube • ${library.length} şarkı`}
+      playerBar={(
+        <PlayerBar
+          currentTrack={currentTrack}
+          progressMs={progressMs}
+          durationMs={durationMs}
+          isLoading={isLoading}
+          errorMessage={effectiveError}
+          isPlaying={Boolean(playbackState?.isPlaying)}
+          onPrevious={() => { void previous(); }}
+          onPlayPause={() => { void handlePlayPause(); }}
+          onNext={() => { void skip(); }}
+          onSeek={(value) => { void seek(value); }}
+          formatTime={formatTime}
+        />
+      )}
+      tabBar={(
+        <BottomTabBar
+          activeTab={activeTab}
+          onSelectTab={(tab) => setActiveTab(tab)}
+        />
+      )}
+    >
+      {pageContent}
+    </AppFrame>
   );
 }
 
