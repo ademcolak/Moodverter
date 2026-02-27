@@ -9,6 +9,15 @@ export interface SearchResult {
   thumbnail: string | null;
 }
 
+export interface PlaylistFetchReport {
+  playlistTitle: string | null;
+  totalEntries: number;
+  validEntries: number;
+  skippedEntries: number;
+  unavailableEntries: number;
+  entries: SearchResult[];
+}
+
 export type YtDlpErrorCode =
   | 'YTDLP_BINARY_NOT_FOUND'
   | 'YTDLP_SPAWN_FAILED'
@@ -254,6 +263,7 @@ function toYtDlpError(error: unknown): YtDlpError {
   const message = error instanceof Error ? error.message : String(error);
   if (
     message.includes('search_youtube_v1')
+    || message.includes('fetch_youtube_playlist_v1')
     || message.includes('unknown command')
     || message.includes('invalid args')
   ) {
@@ -450,6 +460,42 @@ export async function searchYouTubeWeb(query: string, limit = 10): Promise<Searc
   const errorPayload = response.error;
   throw new YtDlpError(
     errorPayload?.message ?? 'youtube web search failed',
+    normalizeErrorCode(errorPayload?.code),
+    errorPayload?.details ?? null
+  );
+}
+
+export async function fetchYouTubePlaylist(url: string): Promise<PlaylistFetchReport> {
+  const response = await invokeWithTimeout<InvokeResponse<PlaylistFetchReport>>(
+    'fetch_youtube_playlist_v1',
+    { url },
+    240_000
+  );
+
+  if (typeof response !== 'object' || response === null || typeof response.ok !== 'boolean') {
+    throw new YtDlpError(
+      'Invalid response envelope from fetch_youtube_playlist_v1',
+      'YTDLP_CONTRACT_MISMATCH'
+    );
+  }
+  if (response.ok) {
+    const report = response.data;
+    if (!report) {
+      return {
+        playlistTitle: null,
+        totalEntries: 0,
+        validEntries: 0,
+        skippedEntries: 0,
+        unavailableEntries: 0,
+        entries: [],
+      };
+    }
+    return report;
+  }
+
+  const errorPayload = response.error;
+  throw new YtDlpError(
+    errorPayload?.message ?? 'playlist fetch failed',
     normalizeErrorCode(errorPayload?.code),
     errorPayload?.details ?? null
   );

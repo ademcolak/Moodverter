@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import type { UnifiedTrack } from '../../types/provider';
 
 function PreviousIcon() {
@@ -64,11 +65,42 @@ export function PlayerBar({
   onSeek,
   formatTime,
 }: PlayerBarProps) {
+  const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
+  const [isNoticeVisible, setIsNoticeVisible] = useState(false);
+
+  useEffect(() => {
+    if (!errorMessage) {
+      setIsNoticeVisible(false);
+      const clearTimer = setTimeout(() => {
+        setNoticeMessage(null);
+      }, 400);
+      return () => clearTimeout(clearTimer);
+    }
+
+    setNoticeMessage(errorMessage);
+    setIsNoticeVisible(true);
+    const hideTimer = setTimeout(() => {
+      setIsNoticeVisible(false);
+    }, 5000);
+    const clearTimer = setTimeout(() => {
+      setNoticeMessage(null);
+    }, 5500);
+
+    return () => {
+      clearTimeout(hideTimer);
+      clearTimeout(clearTimer);
+    };
+  }, [errorMessage]);
+
   return (
     <div className="border-t border-white/10 bg-[var(--color-surface)] p-3 space-y-2">
-      {errorMessage && (
-        <div className="px-2 py-1 text-xs text-red-400 border border-red-500/30 bg-red-500/10">
-          {errorMessage}
+      {noticeMessage && (
+        <div
+          className={`px-2 py-1 text-xs text-red-400 border border-red-500/30 bg-red-500/10 transition-opacity duration-500 ${
+            isNoticeVisible ? 'opacity-100' : 'opacity-0'
+          }`}
+        >
+          {noticeMessage}
         </div>
       )}
 

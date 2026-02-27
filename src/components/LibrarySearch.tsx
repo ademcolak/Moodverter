@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   addToSearchHistory,
   getSearchSuggestions,
+  removeFromSearchHistory,
   searchVideos,
   type YouTubeSearchResult,
 } from '../services/youtube/search';
@@ -121,14 +122,33 @@ export const LibrarySearch = ({ onTrackSelect, onAddToLibrary }: LibrarySearchPr
         {showSuggestions && suggestions.length > 0 && !query.trim() && (
           <div className="absolute top-full left-0 right-0 mt-1 z-10 bg-[var(--color-surface)] border border-white/10 max-h-36 overflow-y-auto">
             {suggestions.map((item, index) => (
-              <button
-                key={`${item}-${index}`}
-                type="button"
-                onClick={() => handleSuggestionClick(item)}
-                className="w-full px-3 py-2 text-left text-sm text-[var(--color-text-primary)] hover:bg-white/5"
-              >
-                {item}
-              </button>
+              <div key={`${item}-${index}`} className="flex items-center gap-2 border-b border-white/5 last:border-b-0">
+                <button
+                  type="button"
+                  onClick={() => handleSuggestionClick(item)}
+                  className="flex-1 px-3 py-2 text-left text-sm text-[var(--color-text-primary)] hover:bg-white/5"
+                >
+                  {item}
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={(event) => {
+                    // Keep focus on input so suggestion list does not close.
+                    event.preventDefault();
+                  }}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    removeFromSearchHistory(item);
+                    setSuggestions(getSearchSuggestions(5));
+                    setShowSuggestions(true);
+                  }}
+                  className="mr-2 h-6 w-6 shrink-0 inline-flex items-center justify-center border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/5"
+                  aria-label="Aramayi gecmisten kaldir"
+                  title="Aramayi gecmisten kaldir"
+                >
+                  ×
+                </button>
+              </div>
             ))}
           </div>
         )}
@@ -168,7 +188,7 @@ export const LibrarySearch = ({ onTrackSelect, onAddToLibrary }: LibrarySearchPr
                 event.stopPropagation();
                 onAddToLibrary?.(track);
               }}
-              className="px-2 py-1 text-xs border border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+              className="btn btn--sm btn--ghost"
             >
               Ekle
             </button>

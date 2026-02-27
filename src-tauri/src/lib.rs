@@ -13,7 +13,8 @@ pub fn run() {
             ytdlp::search_youtube,
             ytdlp::search_youtube_v1,
             ytdlp::search_youtube_public_v1,
-            ytdlp::search_youtube_web_v1
+            ytdlp::search_youtube_web_v1,
+            ytdlp::fetch_youtube_playlist_v1
         ])
         .setup(|app| {
             // Create tray menu items

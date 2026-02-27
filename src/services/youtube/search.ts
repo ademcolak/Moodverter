@@ -1,4 +1,5 @@
 import {
+  fetchYouTubePlaylist,
   getYtDlpUserMessage,
   isYtDlpError,
   searchYouTubePublic,
@@ -43,6 +44,15 @@ let ytdlpCircuitOpenUntil = 0;
 export interface PlaylistTrack extends YouTubeSearchResult {
   addedAt: number;
   duration?: number;
+}
+
+export interface YouTubePlaylistAnalysis {
+  playlistTitle: string | null;
+  totalEntries: number;
+  validEntries: number;
+  skippedEntries: number;
+  unavailableEntries: number;
+  tracks: YouTubeSearchResult[];
 }
 
 export async function getVideoInfo(videoId: string): Promise<YouTubeSearchResult | null> {
@@ -157,6 +167,22 @@ export function getSearchSuggestions(limit = 5): string[] {
   }
 }
 
+export function removeFromSearchHistory(query: string): void {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return;
+
+  let history: string[] = [];
+  try {
+    const stored = localStorage.getItem(SEARCH_HISTORY_KEY);
+    history = stored ? (JSON.parse(stored) as string[]) : [];
+  } catch {
+    history = [];
+  }
+
+  const filtered = history.filter((item) => item.trim().toLowerCase() !== normalized);
+  localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(filtered.slice(0, MAX_SEARCH_HISTORY)));
+}
+
 export function clearYouTubeLocalData(): void {
   localStorage.removeItem(PLAYLIST_KEY);
   localStorage.removeItem(RECENT_KEY);
@@ -178,6 +204,39 @@ export function clearYouTubeLocalData(): void {
 
   searchCache.clear();
   ytdlpCircuitOpenUntil = 0;
+}
+
+export async function analyzeYouTubePlaylist(
+  playlistInput: string
+): Promise<YouTubePlaylistAnalysis> {
+  const normalizedPlaylistUrl = normalizeYouTubePlaylistUrl(playlistInput);
+  if (!normalizedPlaylistUrl) {
+    throw new Error('Gecerli bir YouTube playlist linki gir.');
+  }
+
+  try {
+    const report = await fetchYouTubePlaylist(normalizedPlaylistUrl);
+    const tracks = report.entries.map((entry) => ytdlpResultToSearchResult(entry));
+    const inferredTotalEntries = Math.max(
+      report.totalEntries,
+      report.validEntries + report.skippedEntries
+    );
+
+    return {
+      playlistTitle: report.playlistTitle,
+      totalEntries: inferredTotalEntries,
+      validEntries: tracks.length,
+      skippedEntries: Math.max(0, inferredTotalEntries - tracks.length),
+      unavailableEntries: Math.max(0, report.unavailableEntries),
+      tracks,
+    };
+  } catch (error) {
+    if (isYtDlpError(error)) {
+      throw new Error(`${getYtDlpUserMessage(error)} (kod: ${error.code})`);
+    }
+    if (error instanceof Error) throw error;
+    throw new Error('Playlist analizi basarisiz oldu.');
+  }
 }
 
 export async function searchVideos(query: string, limit = 10): Promise<YouTubeSearchResult[]> {
@@ -316,6 +375,37 @@ function extractYouTubeVideoId(value: string): string | null {
   }
 
   return null;
+}
+
+function extractYouTubePlaylistId(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const directIdMatch = trimmed.match(/^[A-Za-z0-9_-]{10,}$/);
+  if (directIdMatch) return directIdMatch[0];
+
+  try {
+    const withProtocol = /^[a-z]+:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    const url = new URL(withProtocol);
+    const hostname = url.hostname.toLowerCase();
+    const isYouTubeHost = hostname.includes('youtube.com') || hostname.endsWith('.youtube.com') || hostname.endsWith('.youtu.be') || hostname === 'youtu.be';
+    if (!isYouTubeHost) return null;
+
+    const listId = url.searchParams.get('list');
+    if (listId && /^[A-Za-z0-9_-]{10,}$/.test(listId)) {
+      return listId;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function normalizeYouTubePlaylistUrl(value: string): string | null {
+  const listId = extractYouTubePlaylistId(value);
+  if (!listId) return null;
+  return `https://www.youtube.com/playlist?list=${listId}`;
 }
 
 function asFiniteNumber(value: unknown): number | null {

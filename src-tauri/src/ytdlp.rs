@@ -13,6 +13,17 @@ pub struct SearchResult {
     pub thumbnail: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistFetchReport {
+    pub playlist_title: Option<String>,
+    pub total_entries: usize,
+    pub valid_entries: usize,
+    pub skipped_entries: usize,
+    pub unavailable_entries: usize,
+    pub entries: Vec<SearchResult>,
+}
+
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct InvokeError {
@@ -393,6 +404,114 @@ fn extract_yt_initial_data(html: &str) -> Option<serde_json::Value> {
     None
 }
 
+fn is_unavailable_playlist_title(title: &str) -> bool {
+    let normalized = title.trim().to_lowercase();
+    normalized.contains("private video") || normalized.contains("deleted video")
+}
+
+fn parse_playlist_report(payload: serde_json::Value) -> PlaylistFetchReport {
+    let playlist_title = payload
+        .get("title")
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let entries = payload
+        .get("entries")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut parsed_entries: Vec<SearchResult> = Vec::new();
+    let mut seen_ids = HashSet::new();
+    let mut skipped_entries = 0usize;
+    let mut unavailable_entries = 0usize;
+
+    for entry in entries.iter() {
+        let row = match entry.as_object() {
+            Some(row) => row,
+            None => {
+                skipped_entries += 1;
+                unavailable_entries += 1;
+                continue;
+            }
+        };
+
+        let title = row
+            .get("title")
+            .and_then(|value| value.as_str())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        if title
+            .as_deref()
+            .map(is_unavailable_playlist_title)
+            .unwrap_or(false)
+        {
+            skipped_entries += 1;
+            unavailable_entries += 1;
+            continue;
+        }
+
+        let id = row
+            .get("id")
+            .and_then(|value| value.as_str())
+            .map(|value| value.trim().to_string())
+            .filter(|value| is_valid_video_id(value));
+
+        let id = match id {
+            Some(id) => id,
+            None => {
+                skipped_entries += 1;
+                unavailable_entries += 1;
+                continue;
+            }
+        };
+
+        if !seen_ids.insert(id.clone()) {
+            skipped_entries += 1;
+            continue;
+        }
+
+        let thumbnail = row
+            .get("thumbnail")
+            .and_then(|value| value.as_str())
+            .or_else(|| {
+                row.get("thumbnails")
+                    .and_then(|value| value.as_array())
+                    .and_then(|items| items.last())
+                    .and_then(|value| value.get("url"))
+                    .and_then(|value| value.as_str())
+            })
+            .map(|value| value.to_string())
+            .or_else(|| Some(format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", id)));
+
+        parsed_entries.push(SearchResult {
+            id: id.clone(),
+            title: title.unwrap_or_else(|| format!("YouTube {}", id)),
+            uploader: row
+                .get("uploader")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string()),
+            duration: row.get("duration").and_then(|value| value.as_u64()),
+            view_count: None,
+            thumbnail,
+        });
+    }
+
+    let total_entries = entries.len();
+    let valid_entries = parsed_entries.len();
+
+    PlaylistFetchReport {
+        playlist_title,
+        total_entries,
+        valid_entries,
+        skipped_entries,
+        unavailable_entries,
+        entries: parsed_entries,
+    }
+}
+
 fn parse_youtube_web_results(payload: serde_json::Value, limit: usize) -> Vec<SearchResult> {
     let mut renderers = Vec::new();
     collect_video_renderers(&payload, &mut renderers);
@@ -709,4 +828,76 @@ pub async fn search_youtube_web_v1(
     };
 
     ok_response(parse_youtube_web_results(initial_data, bounded_limit))
+}
+
+#[tauri::command]
+pub async fn fetch_youtube_playlist_v1(
+    app: tauri::AppHandle,
+    url: String,
+) -> InvokeResponse<PlaylistFetchReport> {
+    let normalized_url = url.trim();
+    if normalized_url.is_empty() {
+        return err_response(
+            "YTDLP_SEARCH_FAILED",
+            "Playlist URL bos olamaz".to_string(),
+            None,
+        );
+    }
+
+    let ytdlp_path = match get_ytdlp_path(&app) {
+        Ok(path) => path,
+        Err(message) => {
+            return err_response("YTDLP_BINARY_NOT_FOUND", message, None);
+        }
+    };
+
+    let output = match Command::new(&ytdlp_path)
+        .args([
+            "--flat-playlist",
+            "--no-warnings",
+            "--ignore-errors",
+            "-J",
+            "--",
+        ])
+        .arg(normalized_url)
+        .output()
+        .await
+    {
+        Ok(output) => output,
+        Err(error) => {
+            return err_response(
+                "YTDLP_SPAWN_FAILED",
+                format!("Failed to execute yt-dlp: {}", error),
+                None,
+            );
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if !output.status.success() && stdout.trim().is_empty() {
+        let (code, message) = classify_ytdlp_failure(&stderr);
+        return err_response(code, message, trim_details(&stderr));
+    }
+    if stdout.trim().is_empty() {
+        return err_response(
+            "YTDLP_PARSE_FAILED",
+            "Playlist verisi bos dondu".to_string(),
+            trim_details(&stderr),
+        );
+    }
+
+    let payload: serde_json::Value = match serde_json::from_str(&stdout) {
+        Ok(payload) => payload,
+        Err(_) => {
+            return err_response(
+                "YTDLP_PARSE_FAILED",
+                "Playlist verisi parse edilemedi".to_string(),
+                trim_details(&stdout),
+            );
+        }
+    };
+
+    ok_response(parse_playlist_report(payload))
 }

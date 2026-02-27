@@ -50,6 +50,10 @@ export interface TransitionHandoffProfile {
   holdMs: number;
 }
 
+interface AddTrackOptions {
+  skipAnalysis?: boolean;
+}
+
 interface TransitionEnvelopePlan {
   duckedVolume: number;
   compensatedVolume: number;
@@ -409,6 +413,16 @@ export class YouTubeProvider implements MusicProvider {
     const startSeconds = startMs / 1000;
 
     this.player.loadVideo(trackId, true, startSeconds);
+
+    if (startMs > 0) {
+      // Fallback seeks improve reliability while iframe transitions from buffering to playing.
+      await wait(180);
+      this.player.seek(startSeconds);
+      await wait(220);
+      this.player.seek(startSeconds);
+    }
+
+    await this.recoverPlaybackStart(trackId, startSeconds);
     addToRecentlyPlayed({
       videoId: trackId,
       title: track.name,
@@ -421,16 +435,6 @@ export class YouTubeProvider implements MusicProvider {
       track: this.currentTrack,
     });
 
-    if (startMs > 0) {
-      // Fallback seeks improve reliability while iframe transitions from buffering to playing.
-      await wait(180);
-      this.player.seek(startSeconds);
-      await wait(220);
-      this.player.seek(startSeconds);
-    }
-
-    await this.recoverPlaybackStart(trackId, startSeconds);
-
     return track;
   }
 
@@ -438,6 +442,7 @@ export class YouTubeProvider implements MusicProvider {
     if (!this.player) return;
 
     const normalizedStart = Math.max(0, Number.isFinite(startSeconds) ? startSeconds : 0);
+    const allowReachedTimeAsSuccess = normalizedStart > 0.1;
     let hasReloaded = false;
 
     for (let attempt = 0; attempt < PLAYBACK_START_RECOVERY_MAX_POLLS; attempt += 1) {
@@ -445,8 +450,11 @@ export class YouTubeProvider implements MusicProvider {
       const state = this.player.getState();
       const hasExpectedTrack = state.videoId === trackId;
       const reachedExpectedTime = state.currentTime >= Math.max(0, normalizedStart - 0.35);
+      if (hasExpectedTrack && state.error) {
+        throw new Error(`YouTube player error: ${state.error}`);
+      }
 
-      if (hasExpectedTrack && (state.isPlaying || reachedExpectedTime)) {
+      if (hasExpectedTrack && (state.isPlaying || (allowReachedTimeAsSuccess && reachedExpectedTime))) {
         return;
       }
 
@@ -467,6 +475,12 @@ export class YouTubeProvider implements MusicProvider {
         await wait(PLAYBACK_START_RECOVERY_POLL_MS);
       }
     }
+
+    const finalState = this.player?.getState();
+    if (finalState?.error) {
+      throw new Error(`YouTube player error: ${finalState.error}`);
+    }
+    throw new Error('Playback did not start in expected time');
   }
 
   isAuthenticated(): boolean {
@@ -692,7 +706,7 @@ export class YouTubeProvider implements MusicProvider {
     return { ...this.transitionHandoffProfile };
   }
 
-  addTrackToLibrary(track: UnifiedTrack): void {
+  addTrackToLibrary(track: UnifiedTrack, options: AddTrackOptions = {}): void {
     addToPlaylist({
       videoId: track.id,
       title: track.name,
@@ -701,7 +715,9 @@ export class YouTubeProvider implements MusicProvider {
       duration: track.durationMs,
     });
     this.reloadLibrary();
-    this.scheduleTransitionAnalysis(track);
+    if (!options.skipAnalysis) {
+      this.scheduleTransitionAnalysis(track);
+    }
   }
 
   removeTrackFromLibrary(trackId: string): void {

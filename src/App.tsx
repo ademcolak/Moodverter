@@ -7,8 +7,12 @@ import { SettingsPage } from './components/pages/SettingsPage';
 import { TransitionPage } from './components/pages/TransitionPage';
 import { PlayerBar } from './components/player/PlayerBar';
 import type { UnifiedTrack } from './types/provider';
-import type { YouTubeSearchResult } from './services/youtube/search';
-import { clearYouTubeLocalData, searchResultToUnifiedTrack } from './services/youtube/search';
+import type { YouTubePlaylistAnalysis, YouTubeSearchResult } from './services/youtube/search';
+import {
+  analyzeYouTubePlaylist,
+  clearYouTubeLocalData,
+  searchResultToUnifiedTrack,
+} from './services/youtube/search';
 import { getYouTubeProvider, type TransitionHandoffProfile } from './services/providers/youtube';
 import { useProvider } from './hooks/useProvider';
 import {
@@ -60,6 +64,7 @@ const AUTO_LABEL_RETRY_DELAY_MS = 45_000;
 const AUTO_LABEL_RETRY_DELAY_URGENT_MS = 10_000;
 const TRANSITION_STALL_THRESHOLD_MS = 1_800;
 const BENCHMARK_RUNTIME_CALIBRATION_MIN_SAMPLE_COUNT = 12;
+const PLAYLIST_IMPORT_BATCH_SIZE = 20;
 
 function formatTime(ms: number): string {
   if (!ms || ms < 0) return '0:00';
@@ -115,6 +120,16 @@ function clampTimeToTrackDuration(timeMs: number, trackDurationMs?: number): num
   if (!trackDurationMs || trackDurationMs <= 0) return Math.round(timeMs);
   const maxSafeTime = Math.max(0, trackDurationMs - 1000);
   return Math.min(Math.round(timeMs), maxSafeTime);
+}
+
+function isQuotaExceededError(error: unknown): boolean {
+  if (typeof DOMException !== 'undefined' && error instanceof DOMException) {
+    return error.name === 'QuotaExceededError' || error.code === 22 || error.code === 1014;
+  }
+  if (error instanceof Error) {
+    return /quota|exceeded|storage/i.test(error.message);
+  }
+  return false;
 }
 
 function formatTrackNames(trackIds: string[], trackMap: Map<string, UnifiedTrack>, limit = 6): string {
@@ -214,6 +229,13 @@ interface DatasetPlaylistTrackInput {
   addedAt?: unknown;
 }
 
+interface PlaylistImportProgress {
+  processed: number;
+  total: number;
+  added: number;
+  skipped: number;
+}
+
 function toOptionalFiniteNumber(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
   return value;
@@ -279,6 +301,13 @@ function App() {
 
   const [library, setLibrary] = useState<UnifiedTrack[]>([]);
   const [urlInput, setUrlInput] = useState('');
+  const [playlistUrlInput, setPlaylistUrlInput] = useState('');
+  const [isPlaylistAnalyzing, setIsPlaylistAnalyzing] = useState(false);
+  const [playlistAnalysis, setPlaylistAnalysis] = useState<YouTubePlaylistAnalysis | null>(null);
+  const [isPlaylistImporting, setIsPlaylistImporting] = useState(false);
+  const [playlistImportProgress, setPlaylistImportProgress] = useState<PlaylistImportProgress | null>(null);
+  const [playlistImportSummary, setPlaylistImportSummary] = useState<string | null>(null);
+  const [isClearingLibrary, setIsClearingLibrary] = useState(false);
   const [isSubmittingUrl, setIsSubmittingUrl] = useState(false);
   const [isDatasetImporting, setIsDatasetImporting] = useState(false);
   const [datasetImportSummary, setDatasetImportSummary] = useState<string | null>(null);
@@ -311,6 +340,7 @@ function App() {
   const lastAutoTransitionRef = useRef<AutoTransitionSnapshot | null>(null);
   const isPreviewingRef = useRef(false);
   const queuedManualTransitionRef = useRef<QueuedManualTransition | null>(null);
+  const playlistImportCancelRequestedRef = useRef(false);
   const datasetImportInputRef = useRef<HTMLInputElement | null>(null);
   const warmedTransitionCandidateKeyRef = useRef<string | null>(null);
   const handoffPrimedCandidateKeyRef = useRef<string | null>(null);
@@ -328,6 +358,14 @@ function App() {
     setBenchmarkSeedTrackIdsState([]);
     setDatasetImportSummary(null);
     setIsDatasetImporting(false);
+    setPlaylistUrlInput('');
+    setPlaylistAnalysis(null);
+    setIsPlaylistAnalyzing(false);
+    setIsPlaylistImporting(false);
+    setPlaylistImportProgress(null);
+    setPlaylistImportSummary(null);
+    setIsClearingLibrary(false);
+    playlistImportCancelRequestedRef.current = false;
     setBenchmarkAutoBootstrapPaused(false);
     setRuntimeEventVersion(0);
     setActiveTab('library');
@@ -525,6 +563,119 @@ function App() {
     }
   }, [play, refreshLibrary, urlInput]);
 
+  const handleAnalyzePlaylist = useCallback(async () => {
+    const trimmed = playlistUrlInput.trim();
+    if (!trimmed) return;
+
+    setUiError(null);
+    setPlaylistImportSummary(null);
+    setPlaylistImportProgress(null);
+    setPlaylistAnalysis(null);
+    setIsPlaylistAnalyzing(true);
+    try {
+      const report = await analyzeYouTubePlaylist(trimmed);
+      setPlaylistAnalysis(report);
+      if (report.validEntries === 0) {
+        setUiError('Playlistte eklenebilir video bulunamadi.');
+      }
+    } catch (error) {
+      console.error('Playlist analyze failed:', error);
+      const message = error instanceof Error ? error.message : 'Playlist analizi basarisiz oldu.';
+      setUiError(message);
+    } finally {
+      setIsPlaylistAnalyzing(false);
+    }
+  }, [playlistUrlInput]);
+
+  const handlePlaylistUrlInputChange = useCallback((value: string) => {
+    setPlaylistUrlInput(value);
+    setPlaylistAnalysis(null);
+    setPlaylistImportSummary(null);
+    setPlaylistImportProgress(null);
+  }, []);
+
+  const handleImportAnalyzedPlaylist = useCallback(async () => {
+    if (!playlistAnalysis || playlistAnalysis.tracks.length === 0) {
+      setUiError('Once playlist analiz et.');
+      return;
+    }
+
+    setUiError(null);
+    setPlaylistImportSummary(null);
+    setIsPlaylistImporting(true);
+    playlistImportCancelRequestedRef.current = false;
+
+    const total = playlistAnalysis.tracks.length;
+    let processed = 0;
+    let added = 0;
+    let skipped = 0;
+    let failed = 0;
+    let stoppedByQuota = false;
+    setPlaylistImportProgress({ processed, total, added, skipped });
+
+    try {
+      const youtubeProvider = getYouTubeProvider();
+      const existingTrackIds = new Set(library.map((track) => track.id));
+
+      for (const track of playlistAnalysis.tracks) {
+        if (playlistImportCancelRequestedRef.current) break;
+
+        processed += 1;
+        if (existingTrackIds.has(track.videoId)) {
+          skipped += 1;
+        } else {
+          try {
+            youtubeProvider.addTrackToLibrary(searchResultToUnifiedTrack(track), { skipAnalysis: true });
+            existingTrackIds.add(track.videoId);
+            added += 1;
+          } catch (error) {
+            if (isQuotaExceededError(error)) {
+              stoppedByQuota = true;
+              break;
+            }
+            failed += 1;
+          }
+        }
+
+        if (processed % PLAYLIST_IMPORT_BATCH_SIZE === 0 || processed === total) {
+          setPlaylistImportProgress({ processed, total, added, skipped });
+          await wait(0);
+        }
+      }
+
+      setPlaylistImportProgress({ processed, total, added, skipped });
+      await refreshLibrary();
+
+      if (stoppedByQuota) {
+        setPlaylistImportSummary(
+          `Aktarım kısmi tamamlandı: ${processed}/${total} işlendi, ${added} eklendi, ${skipped} atlandı, ${failed} hata. Depolama limiti dolduğu için durdu.`
+        );
+        setUiError('Depolama limiti doldu. Settings > Gelişmiş > Veriyi Temizle ile alan açıp tekrar deneyebilirsin.');
+      } else if (playlistImportCancelRequestedRef.current) {
+        setPlaylistImportSummary(
+          `Aktarım durduruldu: ${processed}/${total} işlendi, ${added} eklendi, ${skipped} atlandı, ${failed} hata.`
+        );
+      } else {
+        setPlaylistImportSummary(
+          `Playlist aktarımı tamamlandı: ${total} video işlendi, ${added} eklendi, ${skipped} atlandı, ${failed} hata.`
+        );
+        setPlaylistAnalysis(null);
+        setPlaylistImportProgress(null);
+      }
+    } catch (error) {
+      console.error('Playlist import failed:', error);
+      const message = error instanceof Error ? error.message : 'Playlist aktarımı basarisiz oldu.';
+      setUiError(message);
+    } finally {
+      playlistImportCancelRequestedRef.current = false;
+      setIsPlaylistImporting(false);
+    }
+  }, [library, playlistAnalysis, refreshLibrary]);
+
+  const handleCancelPlaylistImport = useCallback(() => {
+    playlistImportCancelRequestedRef.current = true;
+  }, []);
+
   const handleOpenDatasetImportPicker = useCallback(() => {
     datasetImportInputRef.current?.click();
   }, []);
@@ -559,7 +710,7 @@ function App() {
 
       for (const track of normalizedTracks) {
         if (existingTrackIds.has(track.id)) continue;
-        youtubeProvider.addTrackToLibrary(track);
+        youtubeProvider.addTrackToLibrary(track, { skipAnalysis: true });
         existingTrackIds.add(track.id);
         importedCount += 1;
       }
@@ -595,6 +746,43 @@ function App() {
       setUiError('Sarki kutuphaneden kaldirilamadi.');
     }
   }, [refreshLibrary]);
+
+  const handleClearAllFromLibrary = useCallback(async () => {
+    if (isClearingLibrary || library.length === 0) return;
+
+    setUiError(null);
+    setIsClearingLibrary(true);
+    try {
+      const youtubeProvider = getYouTubeProvider();
+      for (const track of library) {
+        youtubeProvider.removeTrackFromLibrary(track.id);
+      }
+      clearTransitionData();
+      clearBenchmarkSeedTrackIds();
+      setAnalysisStates({});
+      setSeedTrackId(null);
+      setTransitionCandidates([]);
+      setPinnedSourceTimeMs(null);
+      setTransitionError(null);
+      setBaselineResult(null);
+      setBaselineHistory([]);
+      setBenchmarkSeedTrackIdsState([]);
+      setRelevanceMap(setTransitionRelevanceMap({}));
+      setRuntimeEventVersion((current) => current + 1);
+      autoTransitionedSourceTrackIdRef.current = null;
+      autoTransitionCooldownUntilRef.current = 0;
+      lastAutoTransitionRef.current = null;
+      queuedManualTransitionRef.current = null;
+      warmedTransitionCandidateKeyRef.current = null;
+      handoffPrimedCandidateKeyRef.current = null;
+      await refreshLibrary();
+    } catch (error) {
+      console.error('Failed to clear library:', error);
+      setUiError('Kütüphane temizlenemedi.');
+    } finally {
+      setIsClearingLibrary(false);
+    }
+  }, [isClearingLibrary, library, refreshLibrary]);
 
   const noteRuntimeEvent = useCallback((input: RecordTransitionRuntimeEventInput) => {
     recordTransitionRuntimeEvent(input);
@@ -911,7 +1099,7 @@ function App() {
   const currentTrack = playbackState?.currentTrack ?? null;
   const progressMs = playbackState?.progressMs ?? 0;
   const durationMs = playbackState?.durationMs ?? currentTrack?.durationMs ?? 0;
-  const effectiveError = providerError ?? uiError;
+  const effectiveError = uiError ?? providerError;
 
   const sortedLibrary = useMemo(
     () => [...library].sort((a, b) => b.playCount - a.playCount),
@@ -1550,10 +1738,28 @@ function App() {
     activeTab === 'library' ? (
       <LibraryPage
         urlInput={urlInput}
+        playlistUrlInput={playlistUrlInput}
         isSubmittingUrl={isSubmittingUrl}
+        isPlaylistAnalyzing={isPlaylistAnalyzing}
+        isPlaylistImporting={isPlaylistImporting}
+        playlistAnalysis={playlistAnalysis}
+        playlistImportProgress={playlistImportProgress}
+        playlistImportSummary={playlistImportSummary}
         onUrlInputChange={setUrlInput}
+        onPlaylistUrlInputChange={handlePlaylistUrlInputChange}
         onUrlSubmit={handleSubmitUrl}
+        onAnalyzePlaylist={() => {
+          void handleAnalyzePlaylist();
+        }}
+        onImportPlaylist={() => {
+          void handleImportAnalyzedPlaylist();
+        }}
+        onCancelPlaylistImport={handleCancelPlaylistImport}
         tracks={sortedLibrary}
+        isClearingLibrary={isClearingLibrary}
+        onClearAllTracks={() => {
+          void handleClearAllFromLibrary();
+        }}
         analysisStates={analysisStates}
         onPlayTrack={(trackId) => {
           void handlePlayFromLibrary(trackId);
@@ -1594,7 +1800,6 @@ function App() {
   return (
     <AppFrame
       title="Moodverter"
-      subtitle={`YouTube • ${library.length} şarkı`}
       playerBar={(
         <PlayerBar
           currentTrack={currentTrack}
