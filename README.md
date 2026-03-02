@@ -1,75 +1,37 @@
 # Moodverter
 
-Moodverter, YouTube kütüphanesi üzerinde çalışan ve çalan şarkıdan bir sonraki şarkıya `A@t1 -> B@t2` otomatik geçiş deneyen masaüstü uygulamasıdır.
+Moodverter, YouTube kütüphanesi üzerinde çalışan bir masaüstü uygulamasıdır.
+Temel fikir, şarkıları sadece track bazında değil moment bazında eşleştirmek:
+`A@t1 -> B@t2`.
 
-## Mevcut Durum (20 Şubat 2026)
+## Projenin Mantığı
 
-- YouTube linki ile şarkı ekleme
-- YouTube araması ile şarkı bulma/ekleme
-- Kütüphanede satıra tıklayarak direkt oynatma
-- Çalan şarkıyı otomatik kaynak (seed) kabul etme
-- Source moment pinleme (`Pinle`, `Simdiki Ani Al`, `Oto`)
-- Geçiş anında otomatik hedefe atlama (autopilot transition)
-- Geçiş hedefi için warmup/prefetch metadata hazırlığı
-- Start-time cue ile hedef zamana direkt yükleme
-- Geçiş anında loudness envelope + otomatik volume compensation
-- Geçiş öncesi pre-duck handoff (pseudo-crossfade hissi)
-- Geçişte dinamik envelope (loudness-farkina gore attack/settle/release)
-- Geçişten hemen önce kisa pre-switch duck lead (daha yumuşak handoff)
-- Adaptif auto-transition lead (son geçiş gecikmesine göre)
-- Transition panelinde sürükleyerek yükseklik ayarlama (`resize-y`)
-- Player init için timeout + hata fallback (sonsuz "Player hazirlaniyor..." beklemesini azaltma)
-- Baseline/benchmark metrik akışı (`Hit@3`, `Hit@5`, regression gate)
-- Benchmark runtime metrikleri (`Latency p95`, `Stall`, `Drop`)
-- Benchmark runtime gate (`p95`, `Stall`, `Drop`, minimum ornek)
-- Runtime gate esiklerini son auto-transition verisine gore kalibre etme
-- Benchmark panelinde runtime threshold drift ozeti (son kosulara gore trend)
-- Kısa baseline özeti + `Bottom-3` için tuning action önerileri
-- Benchmark run’larında tuning validation özeti/gate
-- Benchmark seed setini otomatik bootstrap + koruma (`ready + label gate`, min 10)
-- Scoring v2 (tempo-ratio + harmonic compatibility)
-- Event taxonomy genişletmesi (`build-up`, `bass-hit`) + gelişmiş hard-negative rerank çeşitliliği
-- Retrieval katmanında ANN prototipi (hnswlib-node opsiyonel, brute-force fallback)
+1. Kullanıcı kütüphaneden bir şarkı çalar.
+2. Çalan şarkı otomatik olarak kaynak (seed) kabul edilir.
+3. Sistem geçiş için aday hedefleri bulur ve skorlar.
+4. Hard gate + decision policy ile güvenilir aday seçilir (veya skip edilir).
+5. Geçiş sırasında warmup/prefetch + envelope/handoff ile daha yumuşak aktarım yapılır.
+6. Sonuçlar benchmark metrikleriyle ölçülür (`Hit@3`, `Hit@5`, `Latency p95`, `Stall`, `Drop`).
 
-## Yapıldı
+## Ne Yapmak İstiyoruz
 
-- [x] Analysis queue + state persistence
-- [x] Heuristic node extraction v1
-- [x] Candidate scoring ve diagnostic çıktısı
-- [x] Baseline history + regression gate
-- [x] Relevance map local persistence
-- [x] Seed seçimi yerine çalan şarkıdan otomatik seed akışı
-- [x] Kütüphane UI sadeleştirme (tek tıkla oynatma)
-- [x] Checklist/ID gürültüsünü azaltan durum görünümü
+- Otomatik geçişleri daha güvenilir hale getirmek (yanlış geçiş oranını azaltmak).
+- Geçiş anını daha doğal hissettirmek (ambience/handoff kalitesi).
+- Tuning kararlarını ölçülebilir gate’lerle vermek (regression/runtime gate).
+- Düşük performanslı seed’leri (`Bottom-3`) sistematik iyileştirmek.
 
-## Aktif Backlog
+## Kısa Durum
 
-Kaynak: `docs/PLAN.md` altındaki `Next` bölümü.
+- Çekirdek akış çalışıyor: link/arama ile ekleme, satıra tıklayıp oynatma, otomatik seed, aday geçişler.
+- v3 kalite katmanı aktif: hard gate, auto decision policy, skip reason görünürlüğü, effect profiles.
+- Benchmark ve tuning akışı aktif: baseline history, tuning validation, runtime gate/drift, before/after raporu.
 
-- [ ] Labelled seed sayısını en az 10 seviyesinde sürekli korumak
-- [ ] Seed başına minimum 2 relevant target etiketini korumak
-- [ ] Düşük performanslı (`Bottom-3`) seed’lerde score breakdown odaklı tuning döngüsünü sürdürmek
-- [ ] Her scoring/penalty değişikliğinden sonra benchmark baseline + regression gate çalıştırmak
+## Çalışma Prensibi (Özet Kurallar)
 
-## Operasyon Kuralları
-
-- Benchmark baseline koşusu regression gate ile çalışmalıdır.
-- `Hit@3` veya `Hit@5` düşerse tuning değişikliği kabul edilmez.
-- Benchmark değerlendirmesi aynı seed seti ve aynı `scopeId` ile karşılaştırılmalıdır.
-- Benchmark set en az `10` seed olmalı; seed başına en az `2` relevant target etiketi olmalı.
-- Benchmark set aktifken `ready + label gate` sağlanmadan karar koşusu yapılmamalıdır.
-- Label coverage yetersizse benchmark koşusu karar amacıyla kullanılmamalıdır.
-- Benchmark seed havuzu, otomatik korumanın `>=10` eligible seed seviyesini sürdürecek kadar geniş tutulmalıdır.
-- Her tuning turunda `Bottom-3` seed’ler score breakdown ile incelenmelidir.
-- Tuning action önerileri benchmark geçmişi ile doğrulanmadan ağırlık/penalty güncellemesi kalıcılaştırılmamalıdır.
-- Her scoring/penalty değişikliğinden sonra benchmark baseline + regression gate tekrar çalıştırılmalıdır.
-- Runtime gate (`Latency p95`, `Stall`, `Drop`) bozulursa tuning reddedilmelidir.
-- Scoring/formül değişikliğinde smoke testler zorunludur; pratik varsayılan komut `pnpm run pipeline:quality` olmalıdır.
-- Baseline metrik davranışını etkileyen değişikliklerde test eklenmeli/güncellenmelidir.
-- Subjektif ses kalitesi dışındaki kontroller önce otomasyonla doğrulanmalıdır.
-- Manual checklist UI’da olmasa da geçiş kalitesi subjektif QA adımında dinleme ile doğrulanmalıdır.
-- `.smoke-dist` derleme artefaktı olarak git takibi dışında tutulmalıdır.
-- Dış kaynak kod/model referansı eklendiğinde `docs/oss/source-registry.json` güncellenmeli ve `pnpm run oss:guard` geçmelidir.
+- Benchmark karşılaştırmaları aynı seed seti + aynı `scopeId` ile yapılır.
+- `Hit@3`/`Hit@5` düşerse regresyon kabul edilir.
+- Runtime gate (`Latency p95`, `Stall`, `Drop`) bozulursa tuning reddedilir.
+- Karar için benchmark set kalitesi korunur (min 10 seed, seed başına min 2 relevant target).
 
 ## Hızlı Başlangıç
 
