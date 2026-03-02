@@ -1,0 +1,111 @@
+{
+  "generatedAt": "2026-03-02T13:45:26.950Z",
+  "scopeId": "benchmark-before-after-v1",
+  "seedTrackIds": [
+    "report-seed-1",
+    "report-seed-2",
+    "report-seed-3",
+    "report-seed-4",
+    "report-seed-5",
+    "report-seed-6",
+    "report-seed-7",
+    "report-seed-8",
+    "report-seed-9",
+    "report-seed-10"
+  ],
+  "comparison": {
+    "sameSeedSet": true,
+    "sameScopeId": true,
+    "hitAt3Delta": -1,
+    "hitAt5Delta": -1,
+    "meanTopKScoreDelta": 0
+  },
+  "before": {
+    "runAt": "2026-03-02T13:45:26.945Z",
+    "seedCount": 10,
+    "hitAt3": 1,
+    "hitAt5": 1,
+    "meanTopKScore": 0.6787889651878156,
+    "coverageRate": 1,
+    "regressionDetected": false,
+    "regressionSummary": null,
+    "runtimeGatePassed": false,
+    "runtimeGateSummary": "Ornek yetersiz 0/5 | Latency p95 yok | Stall metriği yok | Drop metriği yok",
+    "tuningValidationPassed": true,
+    "tuningValidationSummary": null,
+    "autoTransitionSkipRate": null,
+    "topAutoTransitionSkipReasons": [],
+    "bottomSeeds": [
+      "report-seed-2",
+      "report-seed-9",
+      "report-seed-4"
+    ],
+    "tuningActions": [
+      {
+        "trackId": "report-seed-2",
+        "issue": "embedding",
+        "confidence": 0.3922304525020943,
+        "gateFailSampleCount": 0,
+        "gateFailDistribution": []
+      },
+      {
+        "trackId": "report-seed-9",
+        "issue": "embedding",
+        "confidence": 0.4427923764485021,
+        "gateFailSampleCount": 0,
+        "gateFailDistribution": []
+      },
+      {
+        "trackId": "report-seed-4",
+        "issue": "embedding",
+        "confidence": 0.4383890962844157,
+        "gateFailSampleCount": 0,
+        "gateFailDistribution": []
+      }
+    ]
+  },
+  "after": {
+    "runAt": "2026-03-02T13:45:26.950Z",
+    "seedCount": 10,
+    "hitAt3": 0,
+    "hitAt5": 0,
+    "meanTopKScore": 0.6787889651878156,
+    "coverageRate": 1,
+    "regressionDetected": true,
+    "regressionSummary": "Hit@3 100% -> 0% | Hit@5 100% -> 0%",
+    "runtimeGatePassed": false,
+    "runtimeGateSummary": "Ornek yetersiz 0/5 | Latency p95 yok | Stall metriği yok | Drop metriği yok",
+    "tuningValidationPassed": false,
+    "tuningValidationSummary": "Top issue stabil: report-seed-2/embedding (39%) | quality improved without gate degradation: FAIL (quality did not improve, regression detected, runtime gate degraded)",
+    "autoTransitionSkipRate": null,
+    "topAutoTransitionSkipReasons": [],
+    "bottomSeeds": [
+      "report-seed-2",
+      "report-seed-9",
+      "report-seed-4"
+    ],
+    "tuningActions": [
+      {
+        "trackId": "report-seed-2",
+        "issue": "embedding",
+        "confidence": 0.3922304525020943,
+        "gateFailSampleCount": 0,
+        "gateFailDistribution": []
+      },
+      {
+        "trackId": "report-seed-9",
+        "issue": "embedding",
+        "confidence": 0.4427923764485021,
+        "gateFailSampleCount": 0,
+        "gateFailDistribution": []
+      },
+      {
+        "trackId": "report-seed-4",
+        "issue": "embedding",
+        "confidence": 0.4383890962844157,
+        "gateFailSampleCount": 0,
+        "gateFailDistribution": []
+      }
+    ]
+  }
+}

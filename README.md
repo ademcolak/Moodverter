@@ -106,3 +106,4 @@ Dataset kullanim notu:
 - [`docs/phases/phase-01-youtube-core.md`](docs/phases/phase-01-youtube-core.md)
 - [`docs/phases/phase-02-transition-graph.md`](docs/phases/phase-02-transition-graph.md)
 - [`docs/phases/phase-03-scoring-minispec.md`](docs/phases/phase-03-scoring-minispec.md)
+- [`docs/phases/phase-04-transition-quality-v3.md`](docs/phases/phase-04-transition-quality-v3.md)

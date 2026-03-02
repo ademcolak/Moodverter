@@ -31,6 +31,7 @@ export interface TransitionPageProps {
   isAutoTransitioning: boolean;
   autoTransitionLeadMs: number;
   lastAutoTransitionLatencyMs: number | null;
+  autoDecisionSummary: string | null;
   onRefreshCandidates: () => void;
   onNowTransition: (candidate: TransitionCandidate) => void;
 }
@@ -44,6 +45,7 @@ export function TransitionPage({
   isAutoTransitioning,
   autoTransitionLeadMs,
   lastAutoTransitionLatencyMs,
+  autoDecisionSummary,
   onRefreshCandidates,
   onNowTransition,
 }: TransitionPageProps) {
@@ -78,6 +80,11 @@ export function TransitionPage({
           Hazırlık payı: {Math.round(autoTransitionLeadMs / 10) / 100} sn
           {lastAutoTransitionLatencyMs !== null ? ` | Son geçiş ${lastAutoTransitionLatencyMs}ms` : ''}
         </div>
+        {autoDecisionSummary && (
+          <div className="mt-1 text-[11px] text-amber-300">
+            {autoDecisionSummary}
+          </div>
+        )}
       </section>
 
       <section className="bg-[var(--color-surface)] border border-white/10 p-3 flex-1 min-h-0 overflow-hidden flex flex-col">

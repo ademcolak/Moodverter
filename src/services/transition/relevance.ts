@@ -1,4 +1,6 @@
 const RELEVANCE_STORAGE_KEY = 'moodverter_transition_relevance_labels';
+let isRelevanceStorageWriteDisabled = false;
+let hasWarnedRelevanceStorageQuota = false;
 
 export type TransitionRelevanceMap = Record<string, string[]>;
 
@@ -37,7 +39,16 @@ function readMapFromStorage(): TransitionRelevanceMap {
 
 function writeMapToStorage(map: TransitionRelevanceMap): void {
   if (typeof window === 'undefined') return;
-  window.localStorage.setItem(RELEVANCE_STORAGE_KEY, JSON.stringify(map));
+  if (isRelevanceStorageWriteDisabled) return;
+  try {
+    window.localStorage.setItem(RELEVANCE_STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    isRelevanceStorageWriteDisabled = true;
+    if (!hasWarnedRelevanceStorageQuota) {
+      hasWarnedRelevanceStorageQuota = true;
+      console.warn('Relevance storage write disabled due to quota.');
+    }
+  }
 }
 
 export function getTransitionRelevanceMap(): TransitionRelevanceMap {
@@ -103,5 +114,7 @@ export function removeRelevantTarget(seedTrackId: string, targetTrackId: string)
 
 export function clearTransitionRelevanceMap(): void {
   if (typeof window === 'undefined') return;
+  isRelevanceStorageWriteDisabled = false;
+  hasWarnedRelevanceStorageQuota = false;
   window.localStorage.removeItem(RELEVANCE_STORAGE_KEY);
 }

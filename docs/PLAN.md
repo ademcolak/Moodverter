@@ -80,6 +80,14 @@ Kabul kriterleri:
 - [x] Player initialize için timeout + hata fallback + provider init lock.
 - [x] Eval progress satırlarında ID gürültüsünü azaltma (track adı + kısa özet).
 
+### Phase 04 - Transition Quality v3 + Ambience Effect
+- [x] Hard gate + confidence policy ile alakasiz auto gecisleri filtreleme.
+- [x] Auto decision policy (`minScore`, `minMargin`, `maxArtifactPenalty`) ile skip davranisi.
+- [x] Ambience effect profilleri (`clean`, `ambient`, `punchy`) ve provider tarafinda uygulanmasi.
+- [x] Benchmark ozetine auto-skip metrikleri (`skipRate`, `top reasons`) ekleme.
+- [x] V3 policy smoke testleri (`transition-gating`, `transition-decision`, evaluation v3).
+- [x] Faz dokumani: `docs/phases/phase-04-transition-quality-v3.md`.
+
 ## Son Degisiklik Ozeti (19 Subat 2026)
 ### Yapildi
 - Kütüphanede satıra tıklama ile direkt oynatma aktif edildi.

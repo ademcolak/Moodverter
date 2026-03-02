@@ -32,6 +32,7 @@ const DEFAULT_TRANSITION_HANDOFF_RAMP_MS = 220;
 const DEFAULT_TRANSITION_HANDOFF_HOLD_MS = 360;
 const PLAYBACK_START_RECOVERY_MAX_POLLS = 8;
 const PLAYBACK_START_RECOVERY_POLL_MS = 160;
+const TRANSITION_WARMUP_MAX_CONCURRENCY = 1;
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -39,15 +40,37 @@ function wait(ms: number): Promise<void> {
   });
 }
 
+function isQuotaExceededError(error: unknown): boolean {
+  if (typeof DOMException !== 'undefined' && error instanceof DOMException) {
+    return error.name === 'QuotaExceededError' || error.code === 22 || error.code === 1014;
+  }
+  if (error instanceof Error) {
+    return /quota|exceeded|storage/i.test(error.message);
+  }
+  return false;
+}
+
 export interface TransitionPlaybackOptions {
   sourceLoudnessRms?: number;
   targetLoudnessRms?: number;
+  effectStyle?: TransitionEffectStyle;
 }
 
 export interface TransitionHandoffProfile {
   duckPercent: number;
   rampMs: number;
   holdMs: number;
+}
+
+export type TransitionEffectStyle = 'clean' | 'ambient' | 'punchy';
+
+export interface TransitionEffectProfile {
+  style: TransitionEffectStyle;
+  preDuckMs: number;
+  crossfadeMs: number;
+  releaseMs: number;
+  sourceDuckPercent: number;
+  targetRisePercent: number;
 }
 
 interface AddTrackOptions {
@@ -60,7 +83,35 @@ interface TransitionEnvelopePlan {
   attackMs: number;
   settleMs: number;
   releaseMs: number;
+  preDuckMs: number;
 }
+
+const TRANSITION_EFFECT_PROFILES: Record<TransitionEffectStyle, TransitionEffectProfile> = {
+  clean: {
+    style: 'clean',
+    preDuckMs: TRANSITION_PRE_SWITCH_DUCK_LEAD_MS,
+    crossfadeMs: 460,
+    releaseMs: 960,
+    sourceDuckPercent: TRANSITION_VOLUME_DUCK_PERCENT,
+    targetRisePercent: 0,
+  },
+  ambient: {
+    style: 'ambient',
+    preDuckMs: 130,
+    crossfadeMs: 760,
+    releaseMs: 1650,
+    sourceDuckPercent: 21,
+    targetRisePercent: 8,
+  },
+  punchy: {
+    style: 'punchy',
+    preDuckMs: 70,
+    crossfadeMs: 280,
+    releaseMs: 760,
+    sourceDuckPercent: 13,
+    targetRisePercent: 3,
+  },
+};
 
 export class YouTubeProvider implements MusicProvider {
   readonly name = 'youtube' as const;
@@ -75,6 +126,8 @@ export class YouTubeProvider implements MusicProvider {
   private previousSnapshot: { isPlaying: boolean; currentTime: number; duration: number } | null = null;
   private lastEndedSignature: string | null = null;
   private warmupPromises = new Map<string, Promise<void>>();
+  private warmupQueue: Array<() => void> = [];
+  private activeWarmupCount = 0;
   private transitionVolumeAutomationToken = 0;
   private transitionHandoffToken = 0;
   private transitionHandoffProfile: TransitionHandoffProfile = {
@@ -82,6 +135,8 @@ export class YouTubeProvider implements MusicProvider {
     rampMs: DEFAULT_TRANSITION_HANDOFF_RAMP_MS,
     holdMs: DEFAULT_TRANSITION_HANDOFF_HOLD_MS,
   };
+  private transitionEffectProfile: TransitionEffectProfile = { ...TRANSITION_EFFECT_PROFILES.clean };
+  private hasWarnedRecentQuota = false;
 
   constructor() {
     this.reloadLibrary();
@@ -256,10 +311,14 @@ export class YouTubeProvider implements MusicProvider {
 
   private buildTransitionEnvelopePlan(
     sourceLoudnessRms: number | undefined,
-    targetLoudnessRms: number | undefined
+    targetLoudnessRms: number | undefined,
+    effectProfile: TransitionEffectProfile
   ): TransitionEnvelopePlan {
     const baseVolume = this.clampVolume(this.volume);
-    const compensatedVolume = this.computeCompensatedVolume(sourceLoudnessRms, targetLoudnessRms);
+    const compensatedVolume = this.clampVolume(
+      this.computeCompensatedVolume(sourceLoudnessRms, targetLoudnessRms)
+      + Math.round(effectProfile.targetRisePercent * 0.5)
+    );
     const loudnessDelta = (
       typeof targetLoudnessRms === 'number'
       && Number.isFinite(targetLoudnessRms)
@@ -272,7 +331,7 @@ export class YouTubeProvider implements MusicProvider {
     const handoffInfluenceDuck = Math.round(this.transitionHandoffProfile.duckPercent * 0.45);
     const dynamicDuckPercent = this.clampVolume(
       Math.max(
-        TRANSITION_VOLUME_DUCK_PERCENT,
+        effectProfile.sourceDuckPercent,
         handoffInfluenceDuck + louderTargetExtraDuck
       )
     );
@@ -284,7 +343,11 @@ export class YouTubeProvider implements MusicProvider {
       320,
       Math.min(
         1400,
-        Math.round(460 + compensationDistance * 16 + this.transitionHandoffProfile.rampMs * 0.35)
+        Math.round(
+          effectProfile.crossfadeMs
+          + compensationDistance * 16
+          + this.transitionHandoffProfile.rampMs * 0.35
+        )
       )
     );
     const settleMs = Math.max(
@@ -292,15 +355,21 @@ export class YouTubeProvider implements MusicProvider {
       Math.min(
         1700,
         Math.round(
-          560 + Math.max(0, loudnessDelta) * 60 + this.transitionHandoffProfile.holdMs * 0.4
+          effectProfile.crossfadeMs * 1.15
+          + Math.max(0, loudnessDelta) * 60
+          + this.transitionHandoffProfile.holdMs * 0.4
         )
       )
     );
     const releaseMs = Math.max(
-      760,
+      Math.max(520, Math.round(effectProfile.releaseMs * 0.7)),
       Math.min(
-        2300,
-        Math.round(960 + compensationDistance * 20 + this.transitionHandoffProfile.rampMs * 0.7)
+        Math.max(2600, effectProfile.releaseMs + 700),
+        Math.round(
+          effectProfile.releaseMs
+          + compensationDistance * 20
+          + this.transitionHandoffProfile.rampMs * 0.7
+        )
       )
     );
 
@@ -310,16 +379,22 @@ export class YouTubeProvider implements MusicProvider {
       attackMs,
       settleMs,
       releaseMs,
+      preDuckMs: Math.max(40, Math.min(260, Math.round(effectProfile.preDuckMs))),
     };
   }
 
   private startTransitionVolumeEnvelope(
     sourceLoudnessRms: number | undefined,
-    targetLoudnessRms: number | undefined
-  ): void {
-    if (!this.player) return;
+    targetLoudnessRms: number | undefined,
+    effectProfile: TransitionEffectProfile
+  ): TransitionEnvelopePlan | null {
+    if (!this.player) return null;
     const baseVolume = this.clampVolume(this.volume);
-    const envelopePlan = this.buildTransitionEnvelopePlan(sourceLoudnessRms, targetLoudnessRms);
+    const envelopePlan = this.buildTransitionEnvelopePlan(
+      sourceLoudnessRms,
+      targetLoudnessRms,
+      effectProfile
+    );
     const token = this.transitionVolumeAutomationToken + 1;
     this.transitionVolumeAutomationToken = token;
 
@@ -340,6 +415,7 @@ export class YouTubeProvider implements MusicProvider {
         token
       );
     })();
+    return envelopePlan;
   }
 
   private startTransitionHandoffEnvelope(): void {
@@ -423,12 +499,24 @@ export class YouTubeProvider implements MusicProvider {
     }
 
     await this.recoverPlaybackStart(trackId, startSeconds);
-    addToRecentlyPlayed({
-      videoId: trackId,
-      title: track.name,
-      artist: track.artist,
-      thumbnail: track.albumArt ?? '',
-    });
+    try {
+      addToRecentlyPlayed({
+        videoId: trackId,
+        title: track.name,
+        artist: track.artist,
+        thumbnail: track.albumArt ?? '',
+      });
+    } catch (error) {
+      if (isQuotaExceededError(error)) {
+        // Recent history is non-critical; don't fail playback when local storage is full.
+        if (!this.hasWarnedRecentQuota) {
+          this.hasWarnedRecentQuota = true;
+          console.warn('Skipping recent history writes due to storage quota.');
+        }
+      } else {
+        throw error;
+      }
+    }
     this.emit({
       type: 'track_started',
       reason: 'manual',
@@ -619,6 +707,56 @@ export class YouTubeProvider implements MusicProvider {
     return () => this.listeners.delete(listener);
   }
 
+  private runWarmupWithBudget(task: () => Promise<void>): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const start = () => {
+        this.activeWarmupCount += 1;
+        void task()
+          .then(resolve)
+          .catch(reject)
+          .finally(() => {
+            this.activeWarmupCount = Math.max(0, this.activeWarmupCount - 1);
+            const next = this.warmupQueue.shift();
+            if (next) next();
+          });
+      };
+
+      if (this.activeWarmupCount < TRANSITION_WARMUP_MAX_CONCURRENCY) {
+        start();
+        return;
+      }
+      this.warmupQueue.push(start);
+    });
+  }
+
+  private async performTransitionWarmup(normalizedTrackId: string): Promise<void> {
+    const info = await getVideoInfo(normalizedTrackId);
+    if (!info) return;
+
+    const existingTrack = this.library.find((track) => track.id === normalizedTrackId);
+    if (!existingTrack) return;
+
+    const needsRefresh = existingTrack.name.startsWith('YouTube ')
+      || existingTrack.artist === 'Unknown Artist'
+      || existingTrack.albumArt !== info.thumbnail;
+    if (!needsRefresh) return;
+
+    updatePlaylistTrack(normalizedTrackId, {
+      title: info.title,
+      artist: info.artist,
+      thumbnail: info.thumbnail,
+    });
+    this.reloadLibrary();
+    if (this.currentTrack?.id === normalizedTrackId) {
+      this.currentTrack = {
+        ...this.currentTrack,
+        name: info.title,
+        artist: info.artist,
+        albumArt: info.thumbnail,
+      };
+    }
+  }
+
   async warmupTransitionTarget(trackId: string): Promise<void> {
     const normalizedTrackId = trackId.trim();
     if (!normalizedTrackId) return;
@@ -628,37 +766,13 @@ export class YouTubeProvider implements MusicProvider {
       return;
     }
 
-    const warmupPromise = (async () => {
+    const warmupPromise = this.runWarmupWithBudget(async () => {
       try {
-        const info = await getVideoInfo(normalizedTrackId);
-        if (!info) return;
-
-        const existingTrack = this.library.find((track) => track.id === normalizedTrackId);
-        if (!existingTrack) return;
-
-        const needsRefresh = existingTrack.name.startsWith('YouTube ')
-          || existingTrack.artist === 'Unknown Artist'
-          || existingTrack.albumArt !== info.thumbnail;
-        if (!needsRefresh) return;
-
-        updatePlaylistTrack(normalizedTrackId, {
-          title: info.title,
-          artist: info.artist,
-          thumbnail: info.thumbnail,
-        });
-        this.reloadLibrary();
-        if (this.currentTrack?.id === normalizedTrackId) {
-          this.currentTrack = {
-            ...this.currentTrack,
-            name: info.title,
-            artist: info.artist,
-            albumArt: info.thumbnail,
-          };
-        }
+        await this.performTransitionWarmup(normalizedTrackId);
       } catch (error) {
         console.warn('Transition warmup failed:', error);
       }
-    })().finally(() => {
+    }).finally(() => {
       this.warmupPromises.delete(normalizedTrackId);
     });
 
@@ -673,8 +787,13 @@ export class YouTubeProvider implements MusicProvider {
   ): Promise<void> {
     this.transitionHandoffToken += 1;
     await this.warmupTransitionTarget(trackId);
-    this.startTransitionVolumeEnvelope(options.sourceLoudnessRms, options.targetLoudnessRms);
-    await wait(TRANSITION_PRE_SWITCH_DUCK_LEAD_MS);
+    const effectProfile = this.resolveTransitionEffectProfile(options.effectStyle);
+    const envelopePlan = this.startTransitionVolumeEnvelope(
+      options.sourceLoudnessRms,
+      options.targetLoudnessRms,
+      effectProfile
+    );
+    await wait(envelopePlan?.preDuckMs ?? effectProfile.preDuckMs);
     await this.loadTrackAtTime(trackId, targetTimeMs);
   }
 
@@ -704,6 +823,32 @@ export class YouTubeProvider implements MusicProvider {
 
   getTransitionHandoffProfile(): TransitionHandoffProfile {
     return { ...this.transitionHandoffProfile };
+  }
+
+  private resolveTransitionEffectProfile(style?: TransitionEffectStyle): TransitionEffectProfile {
+    if (!style) return { ...this.transitionEffectProfile };
+    return { ...TRANSITION_EFFECT_PROFILES[style] };
+  }
+
+  configureTransitionEffectProfile(
+    profile: Partial<TransitionEffectProfile> & { style?: TransitionEffectStyle }
+  ): TransitionEffectProfile {
+    const nextStyle = profile.style ?? this.transitionEffectProfile.style;
+    const base = TRANSITION_EFFECT_PROFILES[nextStyle];
+    const next: TransitionEffectProfile = {
+      style: nextStyle,
+      preDuckMs: Math.max(40, Math.min(260, Math.round(profile.preDuckMs ?? base.preDuckMs))),
+      crossfadeMs: Math.max(180, Math.min(1300, Math.round(profile.crossfadeMs ?? base.crossfadeMs))),
+      releaseMs: Math.max(480, Math.min(2400, Math.round(profile.releaseMs ?? base.releaseMs))),
+      sourceDuckPercent: this.clampVolume(profile.sourceDuckPercent ?? base.sourceDuckPercent),
+      targetRisePercent: this.clampVolume(profile.targetRisePercent ?? base.targetRisePercent),
+    };
+    this.transitionEffectProfile = next;
+    return { ...next };
+  }
+
+  getTransitionEffectProfile(): TransitionEffectProfile {
+    return { ...this.transitionEffectProfile };
   }
 
   addTrackToLibrary(track: UnifiedTrack, options: AddTrackOptions = {}): void {

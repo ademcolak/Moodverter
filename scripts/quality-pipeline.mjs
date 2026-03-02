@@ -6,7 +6,10 @@ const stepDefinitions = [
   { name: 'QA Auto', command: 'pnpm', args: ['run', 'qa:auto'] },
   { name: 'OSS Guard', command: 'pnpm', args: ['run', 'oss:guard'] },
   { name: 'Retrieval Gate', command: 'pnpm', args: ['run', 'smoke:retrieval-gate'] },
+  { name: 'Transition Gating', command: 'pnpm', args: ['run', 'smoke:transition-gating'] },
+  { name: 'Transition Decision', command: 'pnpm', args: ['run', 'smoke:transition-decision'] },
   { name: 'Tuning Dry Run', command: 'pnpm', args: ['run', 'smoke:tuning-loop-dry-run'] },
+  { name: 'Before/After Report', command: 'pnpm', args: ['run', 'smoke:benchmark-before-after-report'] },
 ];
 
 function runStep(step) {

@@ -31,6 +31,43 @@ export interface TransitionEdgeScore {
   finalScore: number;
 }
 
+export type TransitionMatchPolicyVersion = 'v2' | 'v3';
+
+export type TransitionGateReason =
+  | 'EVENT_MISMATCH'
+  | 'LOW_EVENT_CONFIDENCE'
+  | 'TEMPO_OUT_OF_RANGE'
+  | 'KEY_DISTANCE_HIGH'
+  | 'LOUDNESS_JUMP_HIGH'
+  | 'LOW_SCORE'
+  | 'LOW_MARGIN';
+
+export interface TransitionGateResult {
+  passed: boolean;
+  reasons: TransitionGateReason[];
+}
+
+export interface AutoTransitionDecisionConfig {
+  minTop1Score: number;
+  minTop1Top2Margin: number;
+  maxArtifactPenalty: number;
+}
+
+export interface HardGateConfig {
+  minEventConfidence: number;
+  maxTempoRatioDistance: number;
+  maxKeyDistanceClass: number;
+  maxLoudnessJumpDb: number;
+}
+
+export interface TransitionDecision {
+  selectedCandidate: TransitionCandidate | null;
+  decision: 'selected' | 'skipped';
+  gate: TransitionGateResult;
+  top1Score: number | null;
+  top1Top2Margin: number | null;
+}
+
 export type AnalysisStatus = 'pending' | 'ready' | 'failed';
 
 export interface AnalysisState {
@@ -68,6 +105,10 @@ export interface TransitionCandidate {
   targetLoudnessRms: number;
   score: TransitionEdgeScore;
   diagnostic: TransitionScoreDiagnostic;
+  gatePreview?: {
+    wouldPassV3: boolean;
+    reasons: TransitionGateReason[];
+  };
 }
 
 export type TransitionRuntimeMode = 'auto' | 'manual';
@@ -80,6 +121,8 @@ export interface TransitionRuntimeEvent {
   stalled: boolean;
   dropped: boolean;
   mode: TransitionRuntimeMode;
+  skippedAutoTransition?: boolean;
+  skipReasons?: TransitionGateReason[];
 }
 
 export interface RecordTransitionRuntimeEventInput {
@@ -89,6 +132,8 @@ export interface RecordTransitionRuntimeEventInput {
   stalled?: boolean;
   dropped?: boolean;
   mode?: TransitionRuntimeMode;
+  skippedAutoTransition?: boolean;
+  skipReasons?: TransitionGateReason[];
 }
 
 export interface RuntimeGateThresholds {
@@ -194,12 +239,32 @@ export interface BaselineTuningAction {
   issue: TransitionScoreDriver;
   recommendation: string;
   confidence: number;
+  gateFailSampleCount: number;
+  gateFailDistribution: Array<{
+    reason: TransitionGateReason;
+    count: number;
+    rate: number;
+  }>;
 }
 
 export interface SeedRelevantTargetGap {
   trackId: string;
   relevantTargetCount: number;
   missingTargetCount: number;
+}
+
+export interface TransitionSkipReasonBreakdown {
+  reason: TransitionGateReason;
+  count: number;
+  rate: number;
+}
+
+export interface AutoTransitionSeedSkipSummary {
+  trackId: string;
+  decisionSampleCount: number;
+  skippedCount: number;
+  skipRate: number | null;
+  topSkipReasons: TransitionSkipReasonBreakdown[];
 }
 
 export interface BaselineEvaluationResult {
@@ -238,6 +303,11 @@ export interface BaselineEvaluationResult {
   transitionLatencyP95Ms: number | null;
   transitionStallRate: number | null;
   transitionDropRate: number | null;
+  autoTransitionDecisionSampleCount: number;
+  autoTransitionSkippedCount: number;
+  autoTransitionSkipRate: number | null;
+  topAutoTransitionSkipReasons: TransitionGateReason[];
+  autoTransitionSkipBySeed: AutoTransitionSeedSkipSummary[];
   runtimeGateEnforced: boolean;
   runtimeGatePassed: boolean;
   runtimeGateSummary: string | null;

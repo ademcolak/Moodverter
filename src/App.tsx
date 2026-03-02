@@ -13,7 +13,11 @@ import {
   clearYouTubeLocalData,
   searchResultToUnifiedTrack,
 } from './services/youtube/search';
-import { getYouTubeProvider, type TransitionHandoffProfile } from './services/providers/youtube';
+import {
+  getYouTubeProvider,
+  type TransitionEffectStyle,
+  type TransitionHandoffProfile,
+} from './services/providers/youtube';
 import { useProvider } from './hooks/useProvider';
 import {
   analyzeTrackWithHeuristicV1,
@@ -23,6 +27,8 @@ import {
   buildRuntimeThresholdDriftReport,
   clearBenchmarkSeedTrackIds,
   clearTransitionData,
+  decideAutoTransition,
+  DEFAULT_AUTO_TRANSITION_DECISION_CONFIG,
   findTransitionCandidates,
   getAnalysisState,
   getBaselineRunHistory,
@@ -39,6 +45,7 @@ import {
   type BaselineTuningAction,
   type EvaluationProgressReport,
   type RecordTransitionRuntimeEventInput,
+  type TransitionDecision,
   type TransitionRelevanceMap,
   type RuntimeGateThresholds,
   runBaselineEvaluation,
@@ -87,6 +94,26 @@ function formatOptionalPercent(value: number | null | undefined): string {
 function formatOptionalMs(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return 'N/A';
   return `${Math.round(value)}ms`;
+}
+
+function formatAutoDecisionReasonLabel(reason: string): string {
+  switch (reason) {
+    case 'EVENT_MISMATCH':
+      return 'Event uyumsuz';
+    case 'LOW_EVENT_CONFIDENCE':
+      return 'Event guveni dusuk';
+    case 'TEMPO_OUT_OF_RANGE':
+      return 'Tempo araligi disi';
+    case 'KEY_DISTANCE_HIGH':
+      return 'Harmoni uzak';
+    case 'LOUDNESS_JUMP_HIGH':
+      return 'Ses atlamasi yuksek';
+    case 'LOW_MARGIN':
+      return 'Aday farki dusuk';
+    case 'LOW_SCORE':
+    default:
+      return 'Skor dusuk';
+  }
 }
 
 function wait(ms: number): Promise<void> {
@@ -330,6 +357,8 @@ function App() {
   const [relevanceMap, setRelevanceMap] = useState<TransitionRelevanceMap>({});
   const [autoTransitionLeadMs, setAutoTransitionLeadMs] = useState<number>(AUTO_TRANSITION_BASE_LEAD_MS);
   const [lastAutoTransitionLatencyMs, setLastAutoTransitionLatencyMs] = useState<number | null>(null);
+  const [lastAutoTransitionDecision, setLastAutoTransitionDecision] = useState<TransitionDecision | null>(null);
+  const [transitionEffectStyle, setTransitionEffectStyle] = useState<TransitionEffectStyle>('clean');
   const [runtimeEventVersion, setRuntimeEventVersion] = useState(0);
   const [handoffProfile, setHandoffProfile] = useState<TransitionHandoffProfile>(() =>
     getYouTubeProvider().getTransitionHandoffProfile()
@@ -345,6 +374,8 @@ function App() {
   const warmedTransitionCandidateKeyRef = useRef<string | null>(null);
   const handoffPrimedCandidateKeyRef = useRef<string | null>(null);
   const autoTransitionLeadMsRef = useRef<number>(AUTO_TRANSITION_BASE_LEAD_MS);
+  const autoSkipDecisionLoggedAtRef = useRef<Map<string, number>>(new Map());
+  const libraryScrollTopRef = useRef(0);
   const resetRuntimeState = useCallback((options?: { clearInput?: boolean }) => {
     setLibrary([]);
     setAnalysisStates({});
@@ -367,8 +398,12 @@ function App() {
     setIsClearingLibrary(false);
     playlistImportCancelRequestedRef.current = false;
     setBenchmarkAutoBootstrapPaused(false);
+    setLastAutoTransitionDecision(null);
+    setTransitionEffectStyle('clean');
     setRuntimeEventVersion(0);
     setActiveTab('library');
+    autoSkipDecisionLoggedAtRef.current.clear();
+    libraryScrollTopRef.current = 0;
     if (options?.clearInput) {
       setUiError(null);
       setUrlInput('');
@@ -400,7 +435,13 @@ function App() {
   useEffect(() => {
     const activeProvider = provider ?? getYouTubeProvider();
     setHandoffProfile(activeProvider.getTransitionHandoffProfile());
+    setTransitionEffectStyle(activeProvider.getTransitionEffectProfile().style);
   }, [provider]);
+
+  useEffect(() => {
+    const activeProvider = provider ?? getYouTubeProvider();
+    activeProvider.configureTransitionEffectProfile({ style: transitionEffectStyle });
+  }, [provider, transitionEffectStyle]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -409,7 +450,11 @@ function App() {
     clearYouTubeLocalData();
     clearTransitionData();
     clearBenchmarkSeedTrackIds();
-    window.localStorage.setItem(ONE_TIME_DATA_RESET_KEY, '1');
+    try {
+      window.localStorage.setItem(ONE_TIME_DATA_RESET_KEY, '1');
+    } catch (error) {
+      console.warn('Skipping one-time reset marker write due to storage limits:', error);
+    }
 
     resetRuntimeState();
     void refreshLibrary();
@@ -775,6 +820,8 @@ function App() {
       queuedManualTransitionRef.current = null;
       warmedTransitionCandidateKeyRef.current = null;
       handoffPrimedCandidateKeyRef.current = null;
+      autoSkipDecisionLoggedAtRef.current.clear();
+      libraryScrollTopRef.current = 0;
       await refreshLibrary();
     } catch (error) {
       console.error('Failed to clear library:', error);
@@ -804,6 +851,7 @@ function App() {
         await activeProvider.playTransitionTarget(candidate.targetTrackId, targetTimeMs, {
           sourceLoudnessRms: candidate.sourceLoudnessRms,
           targetLoudnessRms: candidate.targetLoudnessRms,
+          effectStyle: transitionEffectStyle,
         });
       } catch (transitionError) {
         console.warn('playTransitionTarget failed, fallback to play+seek:', transitionError);
@@ -873,7 +921,7 @@ function App() {
       queuedManualTransitionRef.current = null;
       setUiError('Transition adayi calinamadi.');
     }
-  }, [library, noteRuntimeEvent, play, provider, seek]);
+  }, [library, noteRuntimeEvent, play, provider, seek, transitionEffectStyle]);
 
   const handleNowTransition = useCallback(async (candidate: TransitionCandidate) => {
     const currentTrackId = playbackState?.currentTrack?.id ?? null;
@@ -925,14 +973,16 @@ function App() {
     seek,
   ]);
 
-  const pickAutoTransitionCandidate = useCallback((
+  const pickAutoTransitionDecision = useCallback((
     currentTrackId: string,
     nowMs: number
-  ): TransitionCandidate | null => {
+  ): TransitionDecision => {
     const candidatesForSource = transitionCandidates.filter(
       (item) => item.sourceTrackId === currentTrackId
     );
-    if (candidatesForSource.length === 0) return null;
+    if (candidatesForSource.length === 0) {
+      return decideAutoTransition([], DEFAULT_AUTO_TRANSITION_DECISION_CONFIG);
+    }
 
     const queuedCandidate = queuedManualTransitionRef.current?.candidate;
     if (queuedCandidate && queuedCandidate.sourceTrackId === currentTrackId) {
@@ -942,7 +992,16 @@ function App() {
         && candidate.targetTimeMs === queuedCandidate.targetTimeMs
       ));
       if (matchedQueuedCandidate) {
-        return matchedQueuedCandidate;
+        return {
+          selectedCandidate: matchedQueuedCandidate,
+          decision: 'selected',
+          gate: {
+            passed: true,
+            reasons: [],
+          },
+          top1Score: matchedQueuedCandidate.score.finalScore,
+          top1Top2Margin: null,
+        };
       }
       queuedManualTransitionRef.current = null;
     } else if (queuedCandidate && queuedCandidate.sourceTrackId !== currentTrackId) {
@@ -953,16 +1012,48 @@ function App() {
     const reverseGuardActive = Boolean(
       lastAutoTransition && nowMs - lastAutoTransition.atMs < AUTO_TRANSITION_REVERSE_PAIR_GUARD_MS
     );
-    if (!reverseGuardActive || !lastAutoTransition) {
-      return candidatesForSource[0] ?? null;
-    }
+    const decisionPool = !reverseGuardActive || !lastAutoTransition
+      ? candidatesForSource
+      : [
+          ...candidatesForSource.filter((candidate) => !(
+            lastAutoTransition.sourceTrackId === candidate.targetTrackId
+            && lastAutoTransition.targetTrackId === currentTrackId
+          )),
+          ...candidatesForSource.filter((candidate) => (
+            lastAutoTransition.sourceTrackId === candidate.targetTrackId
+            && lastAutoTransition.targetTrackId === currentTrackId
+          )),
+        ];
 
-    const nextCandidate = candidatesForSource.find((candidate) => !(
-      lastAutoTransition.sourceTrackId === candidate.targetTrackId
-      && lastAutoTransition.targetTrackId === currentTrackId
-    ));
-    return nextCandidate ?? candidatesForSource[0] ?? null;
+    return decideAutoTransition(decisionPool, DEFAULT_AUTO_TRANSITION_DECISION_CONFIG);
   }, [transitionCandidates]);
+
+  const maybeNoteAutoTransitionSkip = useCallback((
+    sourceTrackId: string,
+    decision: TransitionDecision
+  ): void => {
+    if (decision.decision !== 'skipped') return;
+    const firstCandidate = transitionCandidates.find((candidate) => candidate.sourceTrackId === sourceTrackId);
+    const targetTrackId = firstCandidate?.targetTrackId ?? sourceTrackId;
+    const reasonKey = decision.gate.reasons.length > 0
+      ? decision.gate.reasons.join('+')
+      : 'LOW_SCORE';
+    const dedupeKey = `${sourceTrackId}:${targetTrackId}:${reasonKey}`;
+    const nowMs = Date.now();
+    const prevLoggedAt = autoSkipDecisionLoggedAtRef.current.get(dedupeKey) ?? 0;
+    if (nowMs - prevLoggedAt < 10_000) return;
+    autoSkipDecisionLoggedAtRef.current.set(dedupeKey, nowMs);
+    noteRuntimeEvent({
+      sourceTrackId,
+      targetTrackId,
+      latencyMs: 0,
+      stalled: false,
+      dropped: false,
+      mode: 'auto',
+      skippedAutoTransition: true,
+      skipReasons: decision.gate.reasons,
+    });
+  }, [noteRuntimeEvent, transitionCandidates]);
 
   useEffect(() => {
     warmedTransitionCandidateKeyRef.current = null;
@@ -981,8 +1072,10 @@ function App() {
     const nowMs = Date.now();
     if (nowMs < autoTransitionCooldownUntilRef.current) return;
 
-    const candidate = pickAutoTransitionCandidate(currentTrackId, nowMs);
-    if (!candidate) return;
+    const decision = pickAutoTransitionDecision(currentTrackId, nowMs);
+    setLastAutoTransitionDecision(decision);
+    if (decision.decision !== 'selected' || !decision.selectedCandidate) return;
+    const candidate = decision.selectedCandidate;
 
     const triggerAtMs = clampTimeToTrackDuration(
       pinnedSourceTimeMs ?? candidate.sourceTimeMs,
@@ -1007,7 +1100,7 @@ function App() {
     playbackState?.durationMs,
     playbackState?.isPlaying,
     playbackState?.progressMs,
-    pickAutoTransitionCandidate,
+    pickAutoTransitionDecision,
     provider,
   ]);
 
@@ -1019,8 +1112,10 @@ function App() {
     const nowMs = Date.now();
     if (nowMs < autoTransitionCooldownUntilRef.current) return;
 
-    const candidate = pickAutoTransitionCandidate(currentTrackId, nowMs);
-    if (!candidate) return;
+    const decision = pickAutoTransitionDecision(currentTrackId, nowMs);
+    setLastAutoTransitionDecision(decision);
+    if (decision.decision !== 'selected' || !decision.selectedCandidate) return;
+    const candidate = decision.selectedCandidate;
 
     const triggerAtMs = clampTimeToTrackDuration(
       pinnedSourceTimeMs ?? candidate.sourceTimeMs,
@@ -1043,7 +1138,7 @@ function App() {
     playbackState?.durationMs,
     playbackState?.isPlaying,
     playbackState?.progressMs,
-    pickAutoTransitionCandidate,
+    pickAutoTransitionDecision,
     provider,
   ]);
 
@@ -1055,8 +1150,13 @@ function App() {
     const nowMs = Date.now();
     if (nowMs < autoTransitionCooldownUntilRef.current) return;
 
-    const candidate = pickAutoTransitionCandidate(currentTrackId, nowMs);
-    if (!candidate) return;
+    const decision = pickAutoTransitionDecision(currentTrackId, nowMs);
+    setLastAutoTransitionDecision(decision);
+    if (decision.decision !== 'selected' || !decision.selectedCandidate) {
+      maybeNoteAutoTransitionSkip(currentTrackId, decision);
+      return;
+    }
+    const candidate = decision.selectedCandidate;
 
     const triggerAtMs = clampTimeToTrackDuration(
       pinnedSourceTimeMs ?? candidate.sourceTimeMs,
@@ -1087,22 +1187,34 @@ function App() {
     })();
   }, [
     handlePlayTransitionCandidate,
+    maybeNoteAutoTransitionSkip,
     noteRuntimeEvent,
     pinnedSourceTimeMs,
     playbackState?.currentTrack?.id,
     playbackState?.durationMs,
     playbackState?.isPlaying,
     playbackState?.progressMs,
-    pickAutoTransitionCandidate,
+    pickAutoTransitionDecision,
   ]);
 
   const currentTrack = playbackState?.currentTrack ?? null;
   const progressMs = playbackState?.progressMs ?? 0;
   const durationMs = playbackState?.durationMs ?? currentTrack?.durationMs ?? 0;
   const effectiveError = uiError ?? providerError;
+  const autoDecisionSummary = useMemo(() => {
+    if (!lastAutoTransitionDecision || lastAutoTransitionDecision.decision !== 'skipped') return null;
+    const reasons = lastAutoTransitionDecision.gate.reasons.length > 0
+      ? lastAutoTransitionDecision.gate.reasons.map(formatAutoDecisionReasonLabel).join(' + ')
+      : 'Skor dusuk';
+    return `Auto gecis atlandi: ${reasons}`;
+  }, [lastAutoTransitionDecision]);
 
   const sortedLibrary = useMemo(
-    () => [...library].sort((a, b) => b.playCount - a.playCount),
+    () => [...library].sort((a, b) => {
+      const nameCompare = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+      if (nameCompare !== 0) return nameCompare;
+      return a.id.localeCompare(b.id);
+    }),
     [library]
   );
   const sortedLibraryIdSignature = useMemo(
@@ -1401,6 +1513,8 @@ function App() {
       return retryAfterMs <= nowMs;
     });
     if (candidateSeedIds.length === 0) return;
+    const maxSeedsPerPass = benchmarkSeedShortfallCount > 0 ? 2 : 1;
+    const seedIdsForPass = candidateSeedIds.slice(0, maxSeedsPerPass);
 
     const run = async () => {
       setIsAutoLabeling(true);
@@ -1408,7 +1522,7 @@ function App() {
         let nextMap = getTransitionRelevanceMap();
         let hasChanges = false;
 
-        for (const seedId of candidateSeedIds) {
+        for (const seedId of seedIdsForPass) {
           await ensureTrackAnalyzed(seedId);
           const autoTargets = await extractAutoRelevantTargetIds(seedId, minAutoTargets);
           if (autoTargets.length === 0) {
@@ -1559,6 +1673,31 @@ function App() {
 
       <div className="border border-white/10 bg-white/5 p-3 space-y-2">
         <div className="text-xs uppercase tracking-wide text-[var(--color-text-secondary)]">
+          Transition Efekti
+        </div>
+        <div className="text-[11px] text-[var(--color-text-secondary)]">
+          Geçiş karakteri: {transitionEffectStyle}
+        </div>
+        <div className="flex items-center gap-2">
+          {(['clean', 'ambient', 'punchy'] as const).map((style) => (
+            <button
+              key={style}
+              type="button"
+              onClick={() => setTransitionEffectStyle(style)}
+              className={`px-2 py-1 text-[10px] border ${
+                transitionEffectStyle === style
+                  ? 'border-emerald-300 text-emerald-300'
+                  : 'border-white/10 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+              }`}
+            >
+              {style}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="border border-white/10 bg-white/5 p-3 space-y-2">
+        <div className="text-xs uppercase tracking-wide text-[var(--color-text-secondary)]">
           Benchmark Durumu
         </div>
         <div className="text-[11px] text-[var(--color-text-secondary)]">
@@ -1571,6 +1710,36 @@ function App() {
         <div className="text-[11px] text-[var(--color-text-secondary)]">
           Runtime kalibrasyon: {benchmarkRuntimeCalibration.summary}
         </div>
+        <div className="text-[11px] text-[var(--color-text-secondary)]">
+          Auto-skip: {formatOptionalPercent(baselineResult?.autoTransitionSkipRate)}
+          {' | '} Karar örneği {baselineResult?.autoTransitionDecisionSampleCount ?? 0}
+          {' | '} Skip {baselineResult?.autoTransitionSkippedCount ?? 0}
+        </div>
+        {baselineResult && baselineResult.topAutoTransitionSkipReasons.length > 0 && (
+          <div className="text-[11px] text-amber-400">
+            Top skip reasons: {baselineResult.topAutoTransitionSkipReasons.join(', ')}
+          </div>
+        )}
+        {baselineResult && baselineResult.autoTransitionSkipBySeed.length > 0 && (
+          <div className="text-[11px] text-[var(--color-text-secondary)] border border-white/10 bg-black/10 px-2 py-1 space-y-1">
+            <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-secondary)]">
+              Skip Drilldown (Seed)
+            </div>
+            {baselineResult.autoTransitionSkipBySeed.map((seed) => {
+              const trackName = libraryTrackMap.get(seed.trackId)?.name ?? seed.trackId;
+              const reasonSummary = seed.topSkipReasons.length > 0
+                ? seed.topSkipReasons
+                    .map((reason) => `${reason.reason} ${formatPercent(reason.rate)} (${reason.count})`)
+                    .join(', ')
+                : 'neden yok';
+              return (
+                <div key={seed.trackId} className="truncate">
+                  {trackName}: skip {formatOptionalPercent(seed.skipRate)} ({seed.skippedCount}/{seed.decisionSampleCount}) • {reasonSummary}
+                </div>
+              );
+            })}
+          </div>
+        )}
         <div className="text-[11px] text-[var(--color-text-secondary)]">
           Handoff profili: duck {handoffProfile.duckPercent}% • ramp {handoffProfile.rampMs}ms • hold {handoffProfile.holdMs}ms
         </div>
@@ -1725,7 +1894,12 @@ function App() {
             Tuning önerisi: {baselineResult.tuningActions
               .map((action) => {
                 const trackName = libraryTrackMap.get(action.trackId)?.name ?? action.trackId;
-                return `${trackName} -> ${formatTuningIssue(action.issue)} (${formatPercent(action.confidence)})`;
+                const gateHint = action.gateFailDistribution.length > 0
+                  ? ` | gate: ${action.gateFailDistribution
+                    .map((item) => `${item.reason} ${formatPercent(item.rate)}`)
+                    .join(', ')}`
+                  : '';
+                return `${trackName} -> ${formatTuningIssue(action.issue)} (${formatPercent(action.confidence)})${gateHint}`;
               })
               .join(' | ')}
           </div>
@@ -1773,6 +1947,10 @@ function App() {
         onAddSearchResultToLibrary={(track) => {
           void handleAddSearchResultToLibrary(track);
         }}
+        initialScrollTop={libraryScrollTopRef.current}
+        onLibraryScrollTopChange={(scrollTop) => {
+          libraryScrollTopRef.current = scrollTop;
+        }}
       />
     ) : activeTab === 'transition' ? (
       <TransitionPage
@@ -1784,6 +1962,7 @@ function App() {
         isAutoTransitioning={isAutoTransitioning}
         autoTransitionLeadMs={autoTransitionLeadMs}
         lastAutoTransitionLatencyMs={lastAutoTransitionLatencyMs}
+        autoDecisionSummary={autoDecisionSummary}
         onRefreshCandidates={() => {
           void refreshTransitionCandidates();
         }}

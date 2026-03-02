@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { LibrarySearch } from '../LibrarySearch';
 import type { AnalysisState } from '../../services/transition';
 import type { YouTubePlaylistAnalysis, YouTubeSearchResult } from '../../services/youtube/search';
@@ -34,6 +34,8 @@ export interface LibraryPageProps {
   onRemoveTrack: (trackId: string) => void;
   onSelectSearchResult: (track: YouTubeSearchResult) => void;
   onAddSearchResultToLibrary: (track: YouTubeSearchResult) => void;
+  initialScrollTop: number;
+  onLibraryScrollTopChange: (scrollTop: number) => void;
 }
 
 export function LibraryPage({
@@ -59,9 +61,12 @@ export function LibraryPage({
   onRemoveTrack,
   onSelectSearchResult,
   onAddSearchResultToLibrary,
+  initialScrollTop,
+  onLibraryScrollTopChange,
 }: LibraryPageProps) {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
+  const listRef = useRef<HTMLDivElement | null>(null);
   const handleCloseModal = () => {
     if (isPlaylistImporting) return;
     setIsAddModalOpen(false);
@@ -69,6 +74,13 @@ export function LibraryPage({
   const playlistProgressPercent = playlistImportProgress && playlistImportProgress.total > 0
     ? Math.round((playlistImportProgress.processed / playlistImportProgress.total) * 100)
     : 0;
+
+  useEffect(() => {
+    const listEl = listRef.current;
+    if (!listEl) return;
+    const maxScrollTop = Math.max(0, listEl.scrollHeight - listEl.clientHeight);
+    listEl.scrollTop = Math.min(Math.max(0, initialScrollTop), maxScrollTop);
+  }, [initialScrollTop]);
 
   return (
     <div className="h-full min-h-0 overflow-hidden flex flex-col">
@@ -102,41 +114,73 @@ export function LibraryPage({
             Henüz şarkı eklenmedi.
           </div>
         ) : (
-          <div className="flex-1 min-h-0 overflow-y-auto space-y-1">
-            {tracks.map((track) => (
-              <div
-                key={track.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => onPlayTrack(track.id)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    onPlayTrack(track.id);
-                  }
-                }}
-                className="flex items-center gap-2 p-2 bg-white/5 border border-transparent hover:border-white/10 cursor-pointer"
-                title="Şarkıyı oynat"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm text-[var(--color-text-primary)] truncate">{track.name}</div>
-                  <div className="text-xs text-[var(--color-text-secondary)] truncate">
-                    {track.artist} • analiz: {analysisStates[track.id]?.status ?? 'yok'}
-                  </div>
-                </div>
+          <div className="flex flex-1 min-h-0 gap-2">
+            <div className="w-8 shrink-0 h-full flex items-center justify-center">
+              <div className="flex flex-col items-center justify-center gap-1.5">
                 <button
                   type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onRemoveTrack(track.id);
+                  onClick={() => {
+                    listRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
                   }}
-                  className="btn btn--xs btn--ghost btn--muted btn--danger-hover"
-                  title="Şarkıyı kaldır"
+                  aria-label="Kütüphane en üste git"
+                  className="w-7 h-7 rounded-full border border-white/20 bg-black/45 text-[var(--color-text-primary)] text-[12px] hover:bg-black/65 transition-colors"
                 >
-                  Kaldır
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const listEl = listRef.current;
+                  if (!listEl) return;
+                  listEl.scrollTo({ top: listEl.scrollHeight, behavior: 'smooth' });
+                }}
+                  aria-label="Kütüphane en alta git"
+                  className="w-7 h-7 rounded-full border border-white/20 bg-black/45 text-[var(--color-text-primary)] text-[12px] hover:bg-black/65 transition-colors"
+                >
+                  ↓
                 </button>
               </div>
-            ))}
+            </div>
+            <div
+              ref={listRef}
+              onScroll={(event) => onLibraryScrollTopChange(event.currentTarget.scrollTop)}
+              className="flex-1 h-full overflow-y-auto space-y-1 pr-1"
+            >
+              {tracks.map((track) => (
+                <div
+                  key={track.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onPlayTrack(track.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      onPlayTrack(track.id);
+                    }
+                  }}
+                  className="flex items-center gap-2 p-2 bg-white/5 border border-transparent hover:border-white/10 cursor-pointer"
+                  title="Şarkıyı oynat"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm text-[var(--color-text-primary)] truncate">{track.name}</div>
+                    <div className="text-xs text-[var(--color-text-secondary)] truncate">
+                      {track.artist} • analiz: {analysisStates[track.id]?.status ?? 'yok'}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onRemoveTrack(track.id);
+                    }}
+                    className="btn btn--xs btn--ghost btn--muted btn--danger-hover"
+                    title="Şarkıyı kaldır"
+                  >
+                    Kaldır
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </section>

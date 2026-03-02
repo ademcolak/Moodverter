@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { TransitionNode } from '../src/services/transition';
 import {
+  decideAutoTransition,
   TRANSITION_SCORING_VERSION,
   TRANSITION_SCORE_WEIGHTS,
   explainTransitionPair,
@@ -171,6 +172,76 @@ test('scoring fixture D: extended event taxonomy supports build-up and bass-hit 
   nearlyEqual(score.artifactPenalty, 0);
   nearlyEqual(score.finalScore, 0.93);
   assert.equal(diagnostic.primaryDriver, 'embedding');
+});
+
+test('scoring fixture E: v3 decision selects top candidate with sufficient margin', () => {
+  const source = makeNode({
+    id: 'e-source',
+    trackId: 'e1',
+    eventType: 'vocal-hit',
+    eventConfidence: 1,
+    embedding: [1, ...Array.from({ length: 15 }, () => 0)],
+    bpmLocal: 124,
+    chroma: [1, ...Array.from({ length: 11 }, () => 0)],
+    loudnessRms: -11,
+  });
+
+  const targetA = makeNode({
+    id: 'e-target-a',
+    trackId: 'e2',
+    eventType: 'vocal-hit',
+    eventConfidence: 1,
+    embedding: [1, ...Array.from({ length: 15 }, () => 0)],
+    bpmLocal: 124,
+    chroma: [1, ...Array.from({ length: 11 }, () => 0)],
+    loudnessRms: -11,
+  });
+  const targetB = makeNode({
+    id: 'e-target-b',
+    trackId: 'e3',
+    eventType: 'build-up',
+    eventConfidence: 0.8,
+    embedding: [0.5, ...Array.from({ length: 15 }, () => 0)],
+    bpmLocal: 138,
+    chroma: [0, 1, ...Array.from({ length: 10 }, () => 0)],
+    loudnessRms: -8,
+  });
+
+  const scoreA = scoreTransitionPair(source, targetA);
+  const scoreB = scoreTransitionPair(source, targetB);
+  const decision = decideAutoTransition([
+    {
+      sourceTrackId: source.trackId,
+      sourceTimeMs: source.timeMs,
+      sourceLoudnessRms: source.loudnessRms,
+      targetTrackId: targetA.trackId,
+      targetTimeMs: targetA.timeMs,
+      targetLoudnessRms: targetA.loudnessRms,
+      score: scoreA,
+      diagnostic: explainTransitionPair(source, targetA),
+      gatePreview: {
+        wouldPassV3: true,
+        reasons: [],
+      },
+    },
+    {
+      sourceTrackId: source.trackId,
+      sourceTimeMs: source.timeMs,
+      sourceLoudnessRms: source.loudnessRms,
+      targetTrackId: targetB.trackId,
+      targetTimeMs: targetB.timeMs,
+      targetLoudnessRms: targetB.loudnessRms,
+      score: scoreB,
+      diagnostic: explainTransitionPair(source, targetB),
+      gatePreview: {
+        wouldPassV3: true,
+        reasons: [],
+      },
+    },
+  ]);
+
+  assert.equal(decision.decision, 'selected');
+  assert.equal(decision.selectedCandidate?.targetTrackId, targetA.trackId);
 });
 
 test('scoring version and weights are fixed for v2 minispec fixtures', () => {

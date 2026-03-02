@@ -22,11 +22,20 @@ export function useProvider(): UseProviderReturn {
   const [playbackState, setPlaybackState] = useState<PlaybackState | null>(null);
   const isMountedRef = useRef(true);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hasWarnedRefreshErrorRef = useRef(false);
 
   const refreshPlaybackState = useCallback(async (currentProvider: YouTubeProvider) => {
-    const state = await currentProvider.getPlaybackState();
-    if (isMountedRef.current) {
-      setPlaybackState(state);
+    try {
+      const state = await currentProvider.getPlaybackState();
+      if (isMountedRef.current) {
+        setPlaybackState(state);
+      }
+      hasWarnedRefreshErrorRef.current = false;
+    } catch (error) {
+      if (!hasWarnedRefreshErrorRef.current) {
+        hasWarnedRefreshErrorRef.current = true;
+        console.warn('Failed to refresh playback state:', error);
+      }
     }
   }, []);
 

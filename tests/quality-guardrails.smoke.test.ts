@@ -24,7 +24,15 @@ test('qa:auto keeps regression gate in the QA sequence', async () => {
 test('pipeline:quality keeps required quality guard steps', async () => {
   const source = await readWorkspaceFile('scripts/quality-pipeline.mjs');
 
-  const stepNames = ['QA Auto', 'OSS Guard', 'Retrieval Gate', 'Tuning Dry Run'];
+  const stepNames = [
+    'QA Auto',
+    'OSS Guard',
+    'Retrieval Gate',
+    'Transition Gating',
+    'Transition Decision',
+    'Tuning Dry Run',
+    'Before/After Report',
+  ];
   const stepIndexes = stepNames.map((stepName) => source.indexOf(`name: '${stepName}'`));
 
   stepIndexes.forEach((index, i) => {
@@ -37,7 +45,10 @@ test('pipeline:quality keeps required quality guard steps', async () => {
 
   assert.match(source, /args:\s*\['run', 'oss:guard'\]/);
   assert.match(source, /args:\s*\['run', 'smoke:retrieval-gate'\]/);
+  assert.match(source, /args:\s*\['run', 'smoke:transition-gating'\]/);
+  assert.match(source, /args:\s*\['run', 'smoke:transition-decision'\]/);
   assert.match(source, /args:\s*\['run', 'smoke:tuning-loop-dry-run'\]/);
+  assert.match(source, /args:\s*\['run', 'smoke:benchmark-before-after-report'\]/);
 });
 
 test('repo config keeps smoke artifact ignored and quality scripts published', async () => {
@@ -57,4 +68,7 @@ test('repo config keeps smoke artifact ignored and quality scripts published', a
   assert.equal(typeof scripts['qa:auto'], 'string');
   assert.equal(typeof scripts['oss:guard'], 'string');
   assert.equal(typeof scripts['smoke:regression-gate'], 'string');
+  assert.equal(typeof scripts['smoke:transition-gating'], 'string');
+  assert.equal(typeof scripts['smoke:transition-decision'], 'string');
+  assert.equal(typeof scripts['smoke:benchmark-before-after-report'], 'string');
 });

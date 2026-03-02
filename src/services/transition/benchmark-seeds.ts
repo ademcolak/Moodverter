@@ -1,4 +1,6 @@
 const BENCHMARK_SEED_STORAGE_KEY = 'moodverter_transition_benchmark_seed_ids';
+let isBenchmarkSeedStorageWriteDisabled = false;
+let hasWarnedBenchmarkSeedQuota = false;
 
 function normalizeSeedTrackIds(seedTrackIds: string[]): string[] {
   const unique = new Set<string>();
@@ -25,10 +27,19 @@ function readSeedTrackIds(): string[] {
 
 function writeSeedTrackIds(seedTrackIds: string[]): void {
   if (typeof window === 'undefined') return;
-  window.localStorage.setItem(
-    BENCHMARK_SEED_STORAGE_KEY,
-    JSON.stringify(normalizeSeedTrackIds(seedTrackIds))
-  );
+  if (isBenchmarkSeedStorageWriteDisabled) return;
+  try {
+    window.localStorage.setItem(
+      BENCHMARK_SEED_STORAGE_KEY,
+      JSON.stringify(normalizeSeedTrackIds(seedTrackIds))
+    );
+  } catch {
+    isBenchmarkSeedStorageWriteDisabled = true;
+    if (!hasWarnedBenchmarkSeedQuota) {
+      hasWarnedBenchmarkSeedQuota = true;
+      console.warn('Benchmark seed storage write disabled due to quota.');
+    }
+  }
 }
 
 export function getBenchmarkSeedTrackIds(): string[] {
@@ -59,5 +70,7 @@ export function removeBenchmarkSeedTrackId(seedTrackId: string): string[] {
 
 export function clearBenchmarkSeedTrackIds(): void {
   if (typeof window === 'undefined') return;
+  isBenchmarkSeedStorageWriteDisabled = false;
+  hasWarnedBenchmarkSeedQuota = false;
   window.localStorage.removeItem(BENCHMARK_SEED_STORAGE_KEY);
 }

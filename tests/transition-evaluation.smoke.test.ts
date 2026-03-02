@@ -150,6 +150,53 @@ test('runBaselineEvaluation reports runtime p95/stall/drop metrics for benchmark
   assert.equal(result.transitionDropRate, 0.5);
 });
 
+test('runBaselineEvaluation reports auto-skip metrics when decision policy skips auto transition', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-skip',
+    name: 'Seed Track Skip',
+    artist: 'Seed Artist Skip',
+    durationMs: 175_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-skip',
+    name: 'Target Track Skip',
+    artist: 'Target Artist Skip',
+    durationMs: 176_000,
+  });
+
+  recordTransitionRuntimeEvent({
+    sourceTrackId: 'seed-track-skip',
+    targetTrackId: 'target-track-skip',
+    latencyMs: 920,
+    stalled: false,
+    dropped: false,
+    mode: 'auto',
+  });
+  recordTransitionRuntimeEvent({
+    sourceTrackId: 'seed-track-skip',
+    targetTrackId: 'target-track-skip',
+    latencyMs: 0,
+    stalled: false,
+    dropped: false,
+    mode: 'auto',
+    skippedAutoTransition: true,
+    skipReasons: ['LOW_SCORE', 'LOW_MARGIN'],
+  });
+
+  const result = await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-skip'],
+    scopeLabel: 'custom',
+    scopeId: 'benchmark-v1',
+    limit: 5,
+  });
+
+  assert.equal(result.autoTransitionDecisionSampleCount, 2);
+  assert.equal(result.autoTransitionSkippedCount, 1);
+  assert.equal(result.autoTransitionSkipRate, 0.5);
+  assert.deepEqual(result.topAutoTransitionSkipReasons, ['LOW_MARGIN', 'LOW_SCORE']);
+  assert.equal(result.transitionRuntimeSampleCount, 1);
+});
+
 test('runtime gate rejects benchmark baseline when runtime slo is degraded', async () => {
   await analyzeTrackWithHeuristicV1({
     id: 'seed-track-runtime-gate',
@@ -366,6 +413,8 @@ test('baseline evaluation reports bottom seeds and detects Hit@K regression per 
   assert.ok(firstResult.bottomSeeds[0].dominantDriver !== null);
   assert.equal(firstResult.tuningActions.length, 1);
   assert.equal(firstResult.tuningActions[0].trackId, 'seed-track-regression');
+  assert.equal(firstResult.tuningActions[0].gateFailSampleCount, 0);
+  assert.deepEqual(firstResult.tuningActions[0].gateFailDistribution, []);
   assert.equal(firstResult.tuningValidationSummary, null);
   assert.equal(firstResult.tuningValidationPassed, true);
 
@@ -381,7 +430,8 @@ test('baseline evaluation reports bottom seeds and detects Hit@K regression per 
   assert.ok(secondResult.regressionSummary?.includes('Hit@3'));
   assert.equal(secondResult.tuningActions.length, 1);
   assert.ok(secondResult.tuningValidationSummary?.includes('Top issue'));
-  assert.equal(secondResult.tuningValidationPassed, true);
+  assert.ok(secondResult.tuningValidationSummary?.includes('quality improved without gate degradation'));
+  assert.equal(secondResult.tuningValidationPassed, false);
 });
 
 test('custom scope regression comparison respects scopeId', async () => {

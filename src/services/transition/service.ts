@@ -1,4 +1,6 @@
 import type {
+  AutoTransitionSeedSkipSummary,
+  AutoTransitionDecisionConfig,
   AnalysisState,
   AnalysisStatus,
   BaselineEvaluationInput,
@@ -8,6 +10,7 @@ import type {
   BaselineSeedReport,
   BaselineTuningAction,
   FindTransitionCandidatesInput,
+  HardGateConfig,
   RecordTransitionRuntimeEventInput,
   RuntimeDriftStatus,
   RuntimeGateCalibration,
@@ -17,12 +20,16 @@ import type {
   RuntimeThresholdDriftReport,
   SeedRelevantTargetGap,
   TransitionCandidate,
+  TransitionDecision,
   TransitionEdgeScore,
+  TransitionGateReason,
+  TransitionGateResult,
   TransitionScoreDiagnostic,
   TransitionScoreDriver,
   TransitionEventType,
   TransitionNode,
   TransitionRuntimeEvent,
+  TransitionSkipReasonBreakdown,
 } from './types';
 import { extractTransitionNodesV1 } from './analyzer';
 import { computeHitAtK } from './metrics';
@@ -58,6 +65,19 @@ export const DEFAULT_RUNTIME_GATE_THRESHOLDS = {
   maxTransitionStallRate: 0.2,
   maxTransitionDropRate: 0.1,
 } as const;
+
+export const DEFAULT_HARD_GATE_CONFIG: HardGateConfig = {
+  minEventConfidence: 0.45,
+  maxTempoRatioDistance: 0.35,
+  maxKeyDistanceClass: 4,
+  maxLoudnessJumpDb: 9,
+};
+
+export const DEFAULT_AUTO_TRANSITION_DECISION_CONFIG: AutoTransitionDecisionConfig = {
+  minTop1Score: 0.62,
+  minTop1Top2Margin: 0.06,
+  maxArtifactPenalty: 0.58,
+};
 
 const EVENT_COMPATIBILITY: Record<string, Partial<Record<string, number>>> = {
   'scream-hit': {
@@ -148,6 +168,8 @@ let analysisStates: Record<string, AnalysisState> = {};
 let nodesByTrack: Record<string, TransitionNode[]> = {};
 let baselineRunHistory: BaselineRunArtifact[] = [];
 let transitionRuntimeEvents: TransitionRuntimeEvent[] = [];
+let isStorageWriteDisabled = false;
+const warnedStorageKeys = new Set<string>();
 
 function normalizeTrackId(trackId: string): string {
   const normalized = trackId.trim();
@@ -239,6 +261,52 @@ function parseTransitionScoreDriver(value: unknown): TransitionScoreDriver | nul
   return null;
 }
 
+function isTransitionGateReason(value: unknown): value is TransitionGateReason {
+  return value === 'EVENT_MISMATCH'
+    || value === 'LOW_EVENT_CONFIDENCE'
+    || value === 'TEMPO_OUT_OF_RANGE'
+    || value === 'KEY_DISTANCE_HIGH'
+    || value === 'LOUDNESS_JUMP_HIGH'
+    || value === 'LOW_SCORE'
+    || value === 'LOW_MARGIN';
+}
+
+function parseTransitionGateReasons(value: unknown): TransitionGateReason[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.filter(isTransitionGateReason)));
+}
+
+function sanitizeTransitionSkipReasonBreakdowns(value: unknown): TransitionSkipReasonBreakdown[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const typed = item as Record<string, unknown>;
+      const reason = parseTransitionGateReasons([typed.reason])[0];
+      if (!reason) return null;
+      return {
+        reason,
+        count: Math.max(0, Math.floor(toFiniteNumber(typed.count, 0))),
+        rate: clamp(toFiniteNumber(typed.rate, 0), 0, 1),
+      } as TransitionSkipReasonBreakdown;
+    })
+    .filter((item): item is TransitionSkipReasonBreakdown => item !== null);
+}
+
+function sanitizeAutoTransitionSeedSkipSummary(value: unknown): AutoTransitionSeedSkipSummary | null {
+  if (!value || typeof value !== 'object') return null;
+  const entry = value as Record<string, unknown>;
+  const trackId = typeof entry.trackId === 'string' ? entry.trackId.trim() : '';
+  if (!trackId) return null;
+  return {
+    trackId,
+    decisionSampleCount: Math.max(0, Math.floor(toFiniteNumber(entry.decisionSampleCount, 0))),
+    skippedCount: Math.max(0, Math.floor(toFiniteNumber(entry.skippedCount, 0))),
+    skipRate: toOptionalFiniteRate(entry.skipRate),
+    topSkipReasons: sanitizeTransitionSkipReasonBreakdowns(entry.topSkipReasons),
+  };
+}
+
 function sanitizeBaselineSeedReport(value: unknown): BaselineSeedReport | null {
   if (!value || typeof value !== 'object') return null;
   const entry = value as Record<string, unknown>;
@@ -275,12 +343,31 @@ function sanitizeBaselineTuningAction(value: unknown): BaselineTuningAction | nu
     ? entry.recommendation.trim()
     : '';
   if (recommendation.length === 0) return null;
+  const gateFailSampleCount = Math.max(0, Math.floor(toFiniteNumber(entry.gateFailSampleCount, 0)));
+  const gateFailDistribution = Array.isArray(entry.gateFailDistribution)
+    ? entry.gateFailDistribution
+        .map((item) => {
+          if (!item || typeof item !== 'object') return null;
+          const typed = item as Record<string, unknown>;
+          const reasons = parseTransitionGateReasons([typed.reason]);
+          const reason = reasons[0];
+          if (!reason) return null;
+          return {
+            reason,
+            count: Math.max(0, Math.floor(toFiniteNumber(typed.count, 0))),
+            rate: clamp(toFiniteNumber(typed.rate, 0), 0, 1),
+          };
+        })
+        .filter((item): item is NonNullable<typeof item> => item !== null)
+    : [];
 
   return {
     trackId,
     issue,
     recommendation,
     confidence: clamp(toFiniteNumber(entry.confidence, 0.5), 0, 1),
+    gateFailSampleCount,
+    gateFailDistribution,
   };
 }
 
@@ -305,6 +392,8 @@ function sanitizeTransitionRuntimeEvent(value: unknown): TransitionRuntimeEvent 
     stalled: Boolean(entry.stalled),
     dropped: Boolean(entry.dropped),
     mode,
+    skippedAutoTransition: Boolean(entry.skippedAutoTransition),
+    skipReasons: parseTransitionGateReasons(entry.skipReasons),
   };
 }
 
@@ -324,7 +413,16 @@ function readStorage<T>(key: string, fallback: T): T {
 
 function writeStorage<T>(key: string, value: T): void {
   if (typeof window === 'undefined') return;
-  window.localStorage.setItem(key, JSON.stringify(value));
+  if (isStorageWriteDisabled) return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    isStorageWriteDisabled = true;
+    if (!warnedStorageKeys.has(key)) {
+      warnedStorageKeys.add(key);
+      console.warn(`Transition storage write disabled (quota) for ${key}.`);
+    }
+  }
 }
 
 function removeStorage(key: string): void {
@@ -471,6 +569,21 @@ function hydrateFromStorage(): void {
           : null,
         transitionStallRate: toOptionalFiniteRate(run.transitionStallRate),
         transitionDropRate: toOptionalFiniteRate(run.transitionDropRate),
+        autoTransitionDecisionSampleCount: Math.max(
+          0,
+          Math.floor(Number(run.autoTransitionDecisionSampleCount ?? 0))
+        ),
+        autoTransitionSkippedCount: Math.max(
+          0,
+          Math.floor(Number(run.autoTransitionSkippedCount ?? 0))
+        ),
+        autoTransitionSkipRate: toOptionalFiniteRate(run.autoTransitionSkipRate),
+        topAutoTransitionSkipReasons: parseTransitionGateReasons(run.topAutoTransitionSkipReasons),
+        autoTransitionSkipBySeed: Array.isArray(run.autoTransitionSkipBySeed)
+          ? run.autoTransitionSkipBySeed
+              .map((item) => sanitizeAutoTransitionSeedSkipSummary(item))
+              .filter((item): item is AutoTransitionSeedSkipSummary => item !== null)
+          : [],
         runtimeGateEnforced: Boolean(run.runtimeGateEnforced),
         runtimeGatePassed: typeof run.runtimeGatePassed === 'boolean'
           ? run.runtimeGatePassed
@@ -707,6 +820,170 @@ function computeArtifactPenalty(source: TransitionNode, target: TransitionNode):
   return clamp(0.5 * bpmDiffPenalty + 0.5 * loudnessPenalty, 0, 1);
 }
 
+function getEventFamily(eventType: TransitionEventType): string {
+  if (eventType === 'vocal-hit' || eventType === 'scream-hit') return 'vocal';
+  if (eventType === 'drop' || eventType === 'build-up' || eventType === 'bass-hit') return 'energy';
+  if (eventType === 'percussive-hit') return 'rhythm';
+  if (eventType === 'silence-break') return 'break';
+  return 'other';
+}
+
+function resolveHardGateConfig(config: Partial<HardGateConfig> = {}): HardGateConfig {
+  return {
+    minEventConfidence: clamp(
+      config.minEventConfidence ?? DEFAULT_HARD_GATE_CONFIG.minEventConfidence,
+      0,
+      1
+    ),
+    maxTempoRatioDistance: clamp(
+      config.maxTempoRatioDistance ?? DEFAULT_HARD_GATE_CONFIG.maxTempoRatioDistance,
+      0.05,
+      1
+    ),
+    maxKeyDistanceClass: clampInteger(
+      config.maxKeyDistanceClass ?? DEFAULT_HARD_GATE_CONFIG.maxKeyDistanceClass,
+      0,
+      6
+    ),
+    maxLoudnessJumpDb: clamp(
+      config.maxLoudnessJumpDb ?? DEFAULT_HARD_GATE_CONFIG.maxLoudnessJumpDb,
+      2,
+      24
+    ),
+  };
+}
+
+function normalizeGateResult(reasons: TransitionGateReason[]): TransitionGateResult {
+  const uniqueReasons = Array.from(new Set(reasons));
+  return {
+    passed: uniqueReasons.length === 0,
+    reasons: uniqueReasons,
+  };
+}
+
+export function applyHardGate(
+  source: TransitionNode,
+  target: TransitionNode,
+  config: Partial<HardGateConfig> = {}
+): TransitionGateResult {
+  const gateConfig = resolveHardGateConfig(config);
+  const reasons: TransitionGateReason[] = [];
+
+  const sourceEventFamily = getEventFamily(source.eventType);
+  const targetEventFamily = getEventFamily(target.eventType);
+  const eventCompatibility = EVENT_COMPATIBILITY[source.eventType]?.[target.eventType] ?? 0.2;
+  if (eventCompatibility < 0.35 || sourceEventFamily !== targetEventFamily) {
+    reasons.push('EVENT_MISMATCH');
+  }
+
+  const eventConfidence = clamp(
+    Math.min(
+      toFiniteNumber(source.eventConfidence, 0.6),
+      toFiniteNumber(target.eventConfidence, 0.6)
+    ),
+    0,
+    1
+  );
+  if (eventConfidence < gateConfig.minEventConfidence) {
+    reasons.push('LOW_EVENT_CONFIDENCE');
+  }
+
+  const tempoRatioScore = computeTempoRatioScore(source, target);
+  const tempoRatioDistance = 1 - tempoRatioScore;
+  if (tempoRatioDistance > gateConfig.maxTempoRatioDistance) {
+    reasons.push('TEMPO_OUT_OF_RANGE');
+  }
+
+  const sourcePitchClass = argmaxIndex(source.chroma);
+  const targetPitchClass = argmaxIndex(target.chroma);
+  const keyDistanceClass = circularPitchClassDistance(sourcePitchClass, targetPitchClass);
+  if (keyDistanceClass > gateConfig.maxKeyDistanceClass) {
+    reasons.push('KEY_DISTANCE_HIGH');
+  }
+
+  const loudnessJumpDb = Math.abs(source.loudnessRms - target.loudnessRms);
+  if (loudnessJumpDb > gateConfig.maxLoudnessJumpDb) {
+    reasons.push('LOUDNESS_JUMP_HIGH');
+  }
+
+  return normalizeGateResult(reasons);
+}
+
+function resolveAutoTransitionDecisionConfig(
+  config: Partial<AutoTransitionDecisionConfig> = {}
+): AutoTransitionDecisionConfig {
+  return {
+    minTop1Score: clamp(
+      config.minTop1Score ?? DEFAULT_AUTO_TRANSITION_DECISION_CONFIG.minTop1Score,
+      0,
+      1
+    ),
+    minTop1Top2Margin: clamp(
+      config.minTop1Top2Margin ?? DEFAULT_AUTO_TRANSITION_DECISION_CONFIG.minTop1Top2Margin,
+      0,
+      0.5
+    ),
+    maxArtifactPenalty: clamp(
+      config.maxArtifactPenalty ?? DEFAULT_AUTO_TRANSITION_DECISION_CONFIG.maxArtifactPenalty,
+      0,
+      1
+    ),
+  };
+}
+
+export function decideAutoTransition(
+  candidates: TransitionCandidate[],
+  config: Partial<AutoTransitionDecisionConfig> = {}
+): TransitionDecision {
+  const decisionConfig = resolveAutoTransitionDecisionConfig(config);
+  const topCandidate = candidates[0] ?? null;
+  const secondCandidate = candidates[1] ?? null;
+  const top1Score = topCandidate ? topCandidate.score.finalScore : null;
+  const top1Top2Margin = topCandidate && secondCandidate
+    ? topCandidate.score.finalScore - secondCandidate.score.finalScore
+    : null;
+
+  if (!topCandidate) {
+    return {
+      selectedCandidate: null,
+      decision: 'skipped',
+      gate: {
+        passed: false,
+        reasons: ['LOW_SCORE'],
+      },
+      top1Score: null,
+      top1Top2Margin: null,
+    };
+  }
+
+  const reasons: TransitionGateReason[] = [];
+  const gatePreview = topCandidate.gatePreview;
+  if (gatePreview && !gatePreview.wouldPassV3) {
+    reasons.push(...gatePreview.reasons);
+  }
+  if (topCandidate.score.finalScore < decisionConfig.minTop1Score) {
+    reasons.push('LOW_SCORE');
+  }
+  if (topCandidate.score.artifactPenalty > decisionConfig.maxArtifactPenalty) {
+    reasons.push('LOW_SCORE');
+  }
+  if (
+    top1Top2Margin !== null
+    && top1Top2Margin < decisionConfig.minTop1Top2Margin
+  ) {
+    reasons.push('LOW_MARGIN');
+  }
+
+  const gate = normalizeGateResult(reasons);
+  return {
+    selectedCandidate: gate.passed ? topCandidate : null,
+    decision: gate.passed ? 'selected' : 'skipped',
+    gate,
+    top1Score,
+    top1Top2Margin,
+  };
+}
+
 function scoreTransition(source: TransitionNode, target: TransitionNode): TransitionEdgeScore {
   const eventCompatibility = EVENT_COMPATIBILITY[source.eventType]?.[target.eventType] ?? 0.2;
   const eventConfidence = clamp(
@@ -876,7 +1153,17 @@ function buildTuningRecommendation(issue: TransitionScoreDriver, seed: BaselineS
   return 'Loudness surekliligi dusuk; loudness continuity agirligini ve transition volume envelope ayarlarini incele.';
 }
 
-function buildSeedTuningAction(seed: BaselineSeedReport): BaselineTuningAction {
+function buildSeedTuningAction(
+  seed: BaselineSeedReport,
+  gateFailContext: {
+    sampleCount: number;
+    distribution: Array<{
+      reason: TransitionGateReason;
+      count: number;
+      rate: number;
+    }>;
+  }
+): BaselineTuningAction {
   const issue = pickSeedIssue(seed);
   const confidenceBase = issue === 'penalty'
     ? seed.averageArtifactPenalty
@@ -889,18 +1176,32 @@ function buildSeedTuningAction(seed: BaselineSeedReport): BaselineTuningAction {
             ? seed.averageRhythmAlignmentScore
             : seed.averageLoudnessContinuityScore
     );
+  const gateFailSummary = gateFailContext.distribution.length === 0
+    ? 'Gate-fail dagilimi: veri yok.'
+    : `Gate-fail dagilimi: ${gateFailContext.distribution
+      .map((item) => `${item.reason} ${formatPercentLabel(item.rate)} (${item.count})`)
+      .join(', ')}.`;
 
   return {
     trackId: seed.trackId,
     issue,
-    recommendation: buildTuningRecommendation(issue, seed),
+    recommendation: `${buildTuningRecommendation(issue, seed)} ${gateFailSummary}`,
     confidence: clamp(confidenceBase, 0, 1),
+    gateFailSampleCount: gateFailContext.sampleCount,
+    gateFailDistribution: gateFailContext.distribution,
   };
 }
 
 function validateTuningActions(
   previousRun: BaselineRunArtifact | undefined,
-  nextTuningActions: BaselineTuningAction[]
+  nextTuningActions: BaselineTuningAction[],
+  nextMetrics: {
+    meanTopKScore: number;
+    hitAt3: number | null;
+    hitAt5: number | null;
+    regressionDetected: boolean;
+    runtimeGatePassed: boolean;
+  }
 ): {
   summary: string | null;
   passed: boolean;
@@ -914,34 +1215,55 @@ function validateTuningActions(
 
   const previousTopAction = previousRun.tuningActions[0];
   const nextTopAction = nextTuningActions[0];
+  const qualityImproved =
+    nextMetrics.meanTopKScore > previousRun.meanTopKScore + 0.005
+    || (
+      previousRun.hitAt3 !== null
+      && nextMetrics.hitAt3 !== null
+      && nextMetrics.hitAt3 > previousRun.hitAt3
+    )
+    || (
+      previousRun.hitAt5 !== null
+      && nextMetrics.hitAt5 !== null
+      && nextMetrics.hitAt5 > previousRun.hitAt5
+    );
+  const gateDegraded = nextMetrics.regressionDetected || !nextMetrics.runtimeGatePassed;
+  const qualityGatePassed = qualityImproved && !gateDegraded;
+  const qualityGateSummary = qualityGatePassed
+    ? 'quality improved without gate degradation: PASS'
+    : `quality improved without gate degradation: FAIL (${[
+      qualityImproved ? null : 'quality did not improve',
+      nextMetrics.regressionDetected ? 'regression detected' : null,
+      !nextMetrics.runtimeGatePassed ? 'runtime gate degraded' : null,
+    ].filter((item): item is string => item !== null).join(', ')})`;
 
   if (
     previousTopAction.trackId !== nextTopAction.trackId
     || previousTopAction.issue !== nextTopAction.issue
   ) {
     return {
-      summary: `Top issue degisti: ${previousTopAction.trackId}/${previousTopAction.issue} -> ${nextTopAction.trackId}/${nextTopAction.issue}`,
-      passed: true,
+      summary: `Top issue degisti: ${previousTopAction.trackId}/${previousTopAction.issue} -> ${nextTopAction.trackId}/${nextTopAction.issue} | ${qualityGateSummary}`,
+      passed: qualityGatePassed,
     };
   }
 
   const confidenceDelta = nextTopAction.confidence - previousTopAction.confidence;
   if (confidenceDelta <= -0.05) {
     return {
-      summary: `Top issue iyilesti: ${nextTopAction.trackId}/${nextTopAction.issue} ${formatPercentLabel(previousTopAction.confidence)} -> ${formatPercentLabel(nextTopAction.confidence)}`,
-      passed: true,
+      summary: `Top issue iyilesti: ${nextTopAction.trackId}/${nextTopAction.issue} ${formatPercentLabel(previousTopAction.confidence)} -> ${formatPercentLabel(nextTopAction.confidence)} | ${qualityGateSummary}`,
+      passed: qualityGatePassed,
     };
   }
   if (confidenceDelta > 0.02) {
     return {
-      summary: `Top issue kotulesti: ${nextTopAction.trackId}/${nextTopAction.issue} ${formatPercentLabel(previousTopAction.confidence)} -> ${formatPercentLabel(nextTopAction.confidence)}`,
+      summary: `Top issue kotulesti: ${nextTopAction.trackId}/${nextTopAction.issue} ${formatPercentLabel(previousTopAction.confidence)} -> ${formatPercentLabel(nextTopAction.confidence)} | ${qualityGateSummary}`,
       passed: false,
     };
   }
 
   return {
-    summary: `Top issue stabil: ${nextTopAction.trackId}/${nextTopAction.issue} (${formatPercentLabel(nextTopAction.confidence)})`,
-    passed: true,
+    summary: `Top issue stabil: ${nextTopAction.trackId}/${nextTopAction.issue} (${formatPercentLabel(nextTopAction.confidence)}) | ${qualityGateSummary}`,
+    passed: qualityGatePassed,
   };
 }
 
@@ -1142,6 +1464,7 @@ export async function findTransitionCandidates(
 
     retrievalPool.forEach((targetEntry) => {
       const score = scoreTransition(sourceNode, targetEntry.node);
+      const gatePreview = applyHardGate(sourceNode, targetEntry.node);
       candidates.push({
         sourceTrackId,
         sourceTimeMs: sourceNode.timeMs,
@@ -1151,13 +1474,24 @@ export async function findTransitionCandidates(
         targetLoudnessRms: targetEntry.node.loudnessRms,
         score,
         diagnostic: buildScoreDiagnostic(score),
+        gatePreview: {
+          wouldPassV3: gatePreview.passed,
+          reasons: gatePreview.reasons,
+        },
         sourceEventType: sourceNode.eventType,
         targetEventType: targetEntry.node.eventType,
       });
     });
   });
 
-  const sorted = candidates.sort((a, b) => b.score.finalScore - a.score.finalScore);
+  const sorted = candidates.sort((a, b) => {
+    const aGate = a.gatePreview?.wouldPassV3 !== false;
+    const bGate = b.gatePreview?.wouldPassV3 !== false;
+    if (aGate !== bGate) {
+      return aGate ? -1 : 1;
+    }
+    return b.score.finalScore - a.score.finalScore;
+  });
 
   const reranked: CandidateWithTags[] = [];
   const includedKeys = new Set<string>();
@@ -1170,13 +1504,6 @@ export async function findTransitionCandidates(
 
   const getCandidateKey = (candidate: CandidateWithTags): string =>
     `${candidate.targetTrackId}:${candidate.targetTimeMs}:${candidate.sourceTimeMs}`;
-  const getEventFamily = (eventType: TransitionEventType): string => {
-    if (eventType === 'vocal-hit' || eventType === 'scream-hit') return 'vocal';
-    if (eventType === 'drop' || eventType === 'build-up' || eventType === 'bass-hit') return 'energy';
-    if (eventType === 'percussive-hit') return 'rhythm';
-    if (eventType === 'silence-break') return 'break';
-    return 'other';
-  };
   const getEventPairKey = (candidate: CandidateWithTags): string =>
     `${candidate.sourceEventType}->${candidate.targetEventType}`;
   const getEventFamilyPairKey = (candidate: CandidateWithTags): string =>
@@ -1430,13 +1757,103 @@ export async function runBaselineEvaluation(
 
   const safeDiv = (numerator: number, denominator: number): number =>
     denominator === 0 ? 0 : numerator / denominator;
+  const scopedRuntimeEvents = getScopedRuntimeEvents(seedTrackIds);
+  const buildSeedGateFailContext = (seedTrackId: string): {
+    sampleCount: number;
+    distribution: Array<{
+      reason: TransitionGateReason;
+      count: number;
+      rate: number;
+    }>;
+  } => {
+    const skipEvents = scopedRuntimeEvents.filter((event) =>
+      event.sourceTrackId === seedTrackId && event.skippedAutoTransition
+    );
+    const sampleCount = skipEvents.length;
+    const reasonCounts = skipEvents.reduce<Map<TransitionGateReason, number>>((counts, event) => {
+      const reasons = event.skipReasons ?? [];
+      reasons.forEach((reason) => {
+        counts.set(reason, (counts.get(reason) ?? 0) + 1);
+      });
+      return counts;
+    }, new Map());
+    const distribution = [...reasonCounts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 3)
+      .map(([reason, count]) => ({
+        reason,
+        count,
+        rate: sampleCount === 0 ? 0 : count / sampleCount,
+      }));
+    return {
+      sampleCount,
+      distribution,
+    };
+  };
   const bottomSeeds = seedReports
     .filter((seed) => seed.candidateCount > 0)
     .sort((a, b) => a.meanTopKScore - b.meanTopKScore || a.top1Score - b.top1Score)
     .slice(0, 3);
-  const tuningActions = bottomSeeds.map((seed) => buildSeedTuningAction(seed));
+  const tuningActions = bottomSeeds.map((seed) => {
+    const gateFailContext = buildSeedGateFailContext(seed.trackId);
+    return buildSeedTuningAction(seed, gateFailContext);
+  });
 
-  const runtimeStats = computeRuntimeStats(getScopedRuntimeEvents(seedTrackIds));
+  const runtimeStats = computeRuntimeStats(scopedRuntimeEvents);
+  const autoTransitionDecisionSampleCount = scopedRuntimeEvents.length;
+  const autoTransitionSkippedCount = scopedRuntimeEvents
+    .filter((event) => event.skippedAutoTransition)
+    .length;
+  const autoTransitionSkipRate = autoTransitionDecisionSampleCount === 0
+    ? null
+    : autoTransitionSkippedCount / autoTransitionDecisionSampleCount;
+  const skipReasonCounts = scopedRuntimeEvents.reduce<Map<TransitionGateReason, number>>((counts, event) => {
+    if (!event.skippedAutoTransition) return counts;
+    const reasons = event.skipReasons ?? [];
+    reasons.forEach((reason) => {
+      counts.set(reason, (counts.get(reason) ?? 0) + 1);
+    });
+    return counts;
+  }, new Map());
+  const topAutoTransitionSkipReasons = [...skipReasonCounts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 3)
+    .map(([reason]) => reason);
+  const autoTransitionSkipBySeed = seedTrackIds
+    .map((trackId) => {
+      const seedEvents = scopedRuntimeEvents.filter((event) => event.sourceTrackId === trackId);
+      const decisionSampleCount = seedEvents.length;
+      const skippedEvents = seedEvents.filter((event) => event.skippedAutoTransition);
+      const skippedCount = skippedEvents.length;
+      const reasonCounts = skippedEvents.reduce<Map<TransitionGateReason, number>>((counts, event) => {
+        (event.skipReasons ?? []).forEach((reason) => {
+          counts.set(reason, (counts.get(reason) ?? 0) + 1);
+        });
+        return counts;
+      }, new Map());
+      const topSkipReasons = [...reasonCounts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 3)
+        .map(([reason, count]) => ({
+          reason,
+          count,
+          rate: skippedCount === 0 ? 0 : count / skippedCount,
+        }));
+      return {
+        trackId,
+        decisionSampleCount,
+        skippedCount,
+        skipRate: decisionSampleCount === 0 ? null : skippedCount / decisionSampleCount,
+        topSkipReasons,
+      } as AutoTransitionSeedSkipSummary;
+    })
+    .filter((item) => item.decisionSampleCount > 0)
+    .sort((a, b) => {
+      if (b.skippedCount !== a.skippedCount) return b.skippedCount - a.skippedCount;
+      if ((b.skipRate ?? 0) !== (a.skipRate ?? 0)) return (b.skipRate ?? 0) - (a.skipRate ?? 0);
+      return a.trackId.localeCompare(b.trackId);
+    })
+    .slice(0, 5);
   const transitionRuntimeSampleCount = runtimeStats.sampleCount;
   const transitionLatencyP95Ms = runtimeStats.latencyP95Ms;
   const transitionStallRate = runtimeStats.stallRate;
@@ -1471,10 +1888,11 @@ export async function runBaselineEvaluation(
   const runtimeGatePassed = runtimeGateReasons.length === 0;
   const runtimeGateSummary = runtimeGatePassed ? null : runtimeGateReasons.join(' | ');
 
+  const nextHitAt3 = labeledSeedCount === 0 ? null : safeDiv(hitAt3Total, labeledSeedCount);
+  const nextHitAt5 = labeledSeedCount === 0 ? null : safeDiv(hitAt5Total, labeledSeedCount);
   const previousComparableRun = [...baselineRunHistory]
     .reverse()
     .find((run) => run.scopeLabel === scopeLabel && run.scopeId === scopeId);
-  const tuningValidation = validateTuningActions(previousComparableRun, tuningActions);
 
   const regressionReasons: string[] = [];
   if (
@@ -1482,9 +1900,6 @@ export async function runBaselineEvaluation(
     && previousComparableRun.hitAt3 !== null
     && previousComparableRun.hitAt5 !== null
   ) {
-    const nextHitAt3 = labeledSeedCount === 0 ? null : safeDiv(hitAt3Total, labeledSeedCount);
-    const nextHitAt5 = labeledSeedCount === 0 ? null : safeDiv(hitAt5Total, labeledSeedCount);
-
     if (nextHitAt3 !== null && nextHitAt3 < previousComparableRun.hitAt3) {
       regressionReasons.push(`Hit@3 ${formatPercentLabel(previousComparableRun.hitAt3)} -> ${formatPercentLabel(nextHitAt3)}`);
     }
@@ -1492,6 +1907,13 @@ export async function runBaselineEvaluation(
       regressionReasons.push(`Hit@5 ${formatPercentLabel(previousComparableRun.hitAt5)} -> ${formatPercentLabel(nextHitAt5)}`);
     }
   }
+  const tuningValidation = validateTuningActions(previousComparableRun, tuningActions, {
+    meanTopKScore: safeDiv(topKMeanTotal, seedWithCandidates),
+    hitAt3: nextHitAt3,
+    hitAt5: nextHitAt5,
+    regressionDetected: regressionReasons.length > 0,
+    runtimeGatePassed,
+  });
   const relevanceTargetGatePassed = seedsBelowRelevantTargetMinimum.length === 0;
   const relevanceTargetGateSummary = relevanceTargetGatePassed
     ? null
@@ -1535,6 +1957,11 @@ export async function runBaselineEvaluation(
     transitionLatencyP95Ms,
     transitionStallRate,
     transitionDropRate,
+    autoTransitionDecisionSampleCount,
+    autoTransitionSkippedCount,
+    autoTransitionSkipRate,
+    topAutoTransitionSkipReasons,
+    autoTransitionSkipBySeed,
     runtimeGateEnforced,
     runtimeGatePassed,
     runtimeGateSummary,
@@ -1591,7 +2018,8 @@ function computeRuntimeStats(events: TransitionRuntimeEvent[]): {
   stallRate: number | null;
   dropRate: number | null;
 } {
-  const latencies = events
+  const executionEvents = events.filter((event) => !event.skippedAutoTransition);
+  const latencies = executionEvents
     .map((event) => event.latencyMs)
     .filter((latency) => Number.isFinite(latency));
   const sampleCount = latencies.length;
@@ -1600,10 +2028,10 @@ function computeRuntimeStats(events: TransitionRuntimeEvent[]): {
 
   const stallRate = sampleCount === 0
     ? null
-    : events.filter((event) => event.stalled).length / sampleCount;
+    : executionEvents.filter((event) => event.stalled).length / sampleCount;
   const dropRate = sampleCount === 0
     ? null
-    : events.filter((event) => event.dropped).length / sampleCount;
+    : executionEvents.filter((event) => event.dropped).length / sampleCount;
 
   return {
     sampleCount,
@@ -1860,6 +2288,8 @@ export function recordTransitionRuntimeEvent(
     stalled: Boolean(input.stalled),
     dropped: Boolean(input.dropped),
     mode: input.mode === 'manual' ? 'manual' : 'auto',
+    skippedAutoTransition: Boolean(input.skippedAutoTransition),
+    skipReasons: parseTransitionGateReasons(input.skipReasons),
   };
   transitionRuntimeEvents = [...transitionRuntimeEvents, event].slice(-500);
   persistStorage();
@@ -1883,6 +2313,8 @@ export function clearTransitionData(): void {
   nodesByTrack = {};
   baselineRunHistory = [];
   transitionRuntimeEvents = [];
+  isStorageWriteDisabled = false;
+  warnedStorageKeys.clear();
   isHydrated = false;
 
   removeStorage(STORAGE_KEYS.queue);
