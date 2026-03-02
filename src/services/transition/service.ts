@@ -416,7 +416,7 @@ function writeStorage<T>(key: string, value: T): void {
   if (isStorageWriteDisabled) return;
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
-  } catch (error) {
+  } catch {
     isStorageWriteDisabled = true;
     if (!warnedStorageKeys.has(key)) {
       warnedStorageKeys.add(key);
