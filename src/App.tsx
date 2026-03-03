@@ -15,6 +15,7 @@ import {
 } from './services/youtube/search';
 import {
   getYouTubeProvider,
+  type TransitionContentHint,
   type TransitionEffectStyle,
   type TransitionHandoffProfile,
 } from './services/providers/youtube';
@@ -34,17 +35,23 @@ import {
   getBaselineRunHistory,
   getBenchmarkSeedTrackIds,
   getRuntimeGateCalibration,
+  getTransitionFeedbackModel,
   getTransitionRuntimeEvents,
   getTransitionRelevanceMap,
+  LEARNING_BIAS_ENABLED,
+  recordTransitionFeedback,
   recordTransitionRuntimeEvent,
   resolveBenchmarkSeedTargetCount,
+  SILENCE_AWARE_ENVELOPE_ENABLED,
   setTransitionRelevanceMap,
   setBenchmarkSeedTrackIds,
+  TRANSITION_VNEXT_ENABLED,
   type AnalysisState,
   type BaselineEvaluationResult,
   type BaselineRunArtifact,
   type BaselineTuningAction,
   type EvaluationProgressReport,
+  type TransitionFeedbackModel,
   type RecordTransitionRuntimeEventInput,
   type TransitionDecision,
   type TransitionRelevanceMap,
@@ -56,6 +63,7 @@ import {
 
 const ONE_TIME_DATA_RESET_KEY = 'moodverter_data_reset_20260209';
 const TRANSITION_FEEDBACK_STORAGE_KEY = 'moodverter_transition_feedback_v1';
+const AUTO_PAIR_LEAD_STORAGE_KEY = 'moodverter_auto_pair_lead_v1';
 type AppTab = 'library' | 'transition' | 'history' | 'settings';
 type BaselineScope = 'selected' | 'all' | 'benchmark';
 const REQUIRED_RELEVANT_TARGETS_PER_SEED = 2;
@@ -66,7 +74,7 @@ const AUTO_TRANSITION_BASE_LEAD_MS = 900;
 const AUTO_TRANSITION_MIN_LEAD_MS = 900;
 const AUTO_TRANSITION_MAX_LEAD_MS = 2200;
 const AUTO_TRANSITION_WARMUP_WINDOW_MS = 2600;
-const AUTO_TRANSITION_HANDOFF_PRIME_MS = 360;
+const AUTO_TRANSITION_HANDOFF_PRIME_MS = 980;
 const AUTO_TRANSITION_POST_SWITCH_COOLDOWN_MS = 12_000;
 const AUTO_TRANSITION_REVERSE_PAIR_GUARD_MS = 90_000;
 const AUTO_TRANSITION_MISS_WINDOW_MS = 15_000;
@@ -75,6 +83,7 @@ const AUTO_LABEL_RETRY_DELAY_URGENT_MS = 10_000;
 const TRANSITION_STALL_THRESHOLD_MS = 1_800;
 const BENCHMARK_RUNTIME_CALIBRATION_MIN_SAMPLE_COUNT = 12;
 const PLAYLIST_IMPORT_BATCH_SIZE = 20;
+const AUTO_PAIR_LEAD_MAX_ENTRIES = 400;
 
 function formatTime(ms: number): string {
   if (!ms || ms < 0) return '0:00';
@@ -101,6 +110,16 @@ function formatOptionalMs(value: number | null | undefined): string {
 
 function formatAutoDecisionReasonLabel(reason: string): string {
   switch (reason) {
+    case 'DUPLICATE_CLUSTER':
+      return 'Adaylar cok benzer';
+    case 'NO_CANDIDATE':
+      return 'Aday yok';
+    case 'LOW_CONFIDENCE_FALLBACK':
+      return 'Dusuk guven fallback';
+    case 'MANUAL_QUEUE_SUGGESTED':
+      return 'Manuel gecis onerildi';
+    case 'HIGH_ARTIFACT_RISK':
+      return 'Artifact riski yuksek';
     case 'EVENT_MISMATCH':
       return 'Event uyumsuz';
     case 'LOW_EVENT_CONFIDENCE':
@@ -145,6 +164,51 @@ function computeAdaptiveTransitionLeadMs(previousLeadMs: number, transitionLaten
   return Math.round(boundedPrevious * 0.65 + targetLead * 0.35);
 }
 
+function buildAutoPairLeadKey(sourceTrackId: string, targetTrackId: string): string {
+  return `${sourceTrackId}->${targetTrackId}`;
+}
+
+function readAutoPairLeadMap(): Record<string, AutoPairLeadEntry> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(AUTO_PAIR_LEAD_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') return {};
+    const entries = Object.entries(parsed as Record<string, unknown>)
+      .map(([pairKey, value]) => {
+        if (!value || typeof value !== 'object') return null;
+        const typed = value as Partial<AutoPairLeadEntry>;
+        const leadMs = typeof typed.leadMs === 'number' ? typed.leadMs : NaN;
+        const sampleCount = typeof typed.sampleCount === 'number' ? typed.sampleCount : NaN;
+        if (!pairKey || !Number.isFinite(leadMs) || !Number.isFinite(sampleCount)) return null;
+        return [pairKey, {
+          leadMs: clampNumber(Math.round(leadMs), AUTO_TRANSITION_MIN_LEAD_MS, AUTO_TRANSITION_MAX_LEAD_MS),
+          sampleCount: Math.max(1, Math.floor(sampleCount)),
+          updatedAt: typeof typed.updatedAt === 'string' ? typed.updatedAt : new Date(0).toISOString(),
+        }] as const;
+      })
+      .filter((item): item is readonly [string, AutoPairLeadEntry] => item !== null)
+      .sort((a, b) => Date.parse(b[1].updatedAt) - Date.parse(a[1].updatedAt))
+      .slice(0, AUTO_PAIR_LEAD_MAX_ENTRIES);
+    return Object.fromEntries(entries);
+  } catch {
+    return {};
+  }
+}
+
+function writeAutoPairLeadMap(pairLeadMap: Record<string, AutoPairLeadEntry>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const entries = Object.entries(pairLeadMap)
+      .sort((a, b) => Date.parse(b[1].updatedAt) - Date.parse(a[1].updatedAt))
+      .slice(0, AUTO_PAIR_LEAD_MAX_ENTRIES);
+    window.localStorage.setItem(AUTO_PAIR_LEAD_STORAGE_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch (error) {
+    console.warn('Failed to persist auto pair lead map:', error);
+  }
+}
+
 function clampTimeToTrackDuration(timeMs: number, trackDurationMs?: number): number {
   if (!Number.isFinite(timeMs) || timeMs < 0) return 0;
   if (!trackDurationMs || trackDurationMs <= 0) return Math.round(timeMs);
@@ -172,6 +236,14 @@ function formatTrackNames(trackIds: string[], trackMap: Map<string, UnifiedTrack
   return hiddenCount > 0
     ? `${visibleNames.join(', ')} (+${hiddenCount})`
     : visibleNames.join(', ');
+}
+
+function deriveTransitionContentHint(candidate: TransitionCandidate): TransitionContentHint {
+  const events = [candidate.sourceEventType, candidate.targetEventType];
+  if (events.includes('build-up')) return 'build-up';
+  if (events.includes('bass-hit') || events.includes('drop')) return 'bass-heavy';
+  if (events.includes('vocal-hit') || events.includes('scream-hit')) return 'vocal-heavy';
+  return 'neutral';
 }
 
 function formatTuningIssue(issue: BaselineTuningAction['issue']): string {
@@ -286,7 +358,14 @@ interface AutoTransitionSnapshot {
 
 interface QueuedManualTransition {
   candidate: TransitionCandidate;
+  manualAccepted: boolean;
   queuedAtMs: number;
+}
+
+interface AutoPairLeadEntry {
+  leadMs: number;
+  sampleCount: number;
+  updatedAt: string;
 }
 
 interface DatasetPlaylistTrackInput {
@@ -408,6 +487,10 @@ function App() {
   const [runtimeEventVersion, setRuntimeEventVersion] = useState(0);
   const [runtimeEvents, setRuntimeEvents] = useState<TransitionRuntimeEvent[]>([]);
   const [transitionFeedbackEvents, setTransitionFeedbackEvents] = useState<TransitionFeedbackEntry[]>([]);
+  const [transitionFeedbackModel, setTransitionFeedbackModel] = useState<TransitionFeedbackModel>(() =>
+    getTransitionFeedbackModel()
+  );
+  const [suggestedManualCandidate, setSuggestedManualCandidate] = useState<TransitionCandidate | null>(null);
   const [feedbackTargetEventKey, setFeedbackTargetEventKey] = useState<string | null>(null);
   const [lastFeedbackLabel, setLastFeedbackLabel] = useState<string | null>(null);
   const [handoffProfile, setHandoffProfile] = useState<TransitionHandoffProfile>(() =>
@@ -424,6 +507,7 @@ function App() {
   const warmedTransitionCandidateKeyRef = useRef<string | null>(null);
   const handoffPrimedCandidateKeyRef = useRef<string | null>(null);
   const autoTransitionLeadMsRef = useRef<number>(AUTO_TRANSITION_BASE_LEAD_MS);
+  const autoPairLeadMapRef = useRef<Record<string, AutoPairLeadEntry>>(readAutoPairLeadMap());
   const autoSkipDecisionLoggedAtRef = useRef<Map<string, number>>(new Map());
   const libraryScrollTopRef = useRef(0);
   const resetRuntimeState = useCallback((options?: { clearInput?: boolean }) => {
@@ -453,9 +537,13 @@ function App() {
     setRuntimeEventVersion(0);
     setRuntimeEvents([]);
     setTransitionFeedbackEvents([]);
+    setTransitionFeedbackModel(getTransitionFeedbackModel());
+    setSuggestedManualCandidate(null);
     setFeedbackTargetEventKey(null);
     setLastFeedbackLabel(null);
     setActiveTab('library');
+    autoPairLeadMapRef.current = {};
+    writeAutoPairLeadMap(autoPairLeadMapRef.current);
     autoSkipDecisionLoggedAtRef.current.clear();
     libraryScrollTopRef.current = 0;
     if (options?.clearInput) {
@@ -486,6 +574,7 @@ function App() {
     setBenchmarkSeedTrackIdsState(getBenchmarkSeedTrackIds());
     setRuntimeEvents(getTransitionRuntimeEvents(50));
     setTransitionFeedbackEvents(readTransitionFeedbackEvents());
+    setTransitionFeedbackModel(getTransitionFeedbackModel());
   }, []);
 
   useEffect(() => {
@@ -567,7 +656,10 @@ function App() {
         sourceTimeMs: pinnedSourceTimeMs ?? undefined,
         limit: 5,
       });
-      setTransitionCandidates(candidates);
+      const normalizedCandidates = LEARNING_BIAS_ENABLED
+        ? candidates
+        : candidates.map((candidate) => ({ ...candidate, learningBias: 0 }));
+      setTransitionCandidates(normalizedCandidates);
       if (candidates.length === 0) {
         setTransitionError('Bu seed icin aday bulunamadi. Once daha fazla sarki ekleyip analiz et.');
       }
@@ -876,6 +968,7 @@ function App() {
       setBenchmarkSeedTrackIdsState([]);
       setRelevanceMap(setTransitionRelevanceMap({}));
       setRuntimeEventVersion((current) => current + 1);
+      setTransitionFeedbackModel(getTransitionFeedbackModel());
       autoTransitionedSourceTrackIdRef.current = null;
       autoTransitionCooldownUntilRef.current = 0;
       lastAutoTransitionRef.current = null;
@@ -892,6 +985,28 @@ function App() {
       setIsClearingLibrary(false);
     }
   }, [isClearingLibrary, library, refreshLibrary]);
+
+  const autoTransitionDecisionConfig = useMemo(() => ({
+    ...DEFAULT_AUTO_TRANSITION_DECISION_CONFIG,
+    fallbackOnLowConfidence: TRANSITION_VNEXT_ENABLED
+      ? DEFAULT_AUTO_TRANSITION_DECISION_CONFIG.fallbackOnLowConfidence
+      : false,
+    manualQueueOnLowConfidence: TRANSITION_VNEXT_ENABLED
+      ? DEFAULT_AUTO_TRANSITION_DECISION_CONFIG.manualQueueOnLowConfidence
+      : false,
+  }), []);
+
+  const resolveCandidateLeadMs = useCallback((candidate: TransitionCandidate): number => {
+    const pairKey = buildAutoPairLeadKey(candidate.sourceTrackId, candidate.targetTrackId);
+    const pairLeadEntry = autoPairLeadMapRef.current[pairKey];
+    if (!pairLeadEntry) {
+      return autoTransitionLeadMsRef.current;
+    }
+    const blendedLeadMs = Math.round(
+      autoTransitionLeadMsRef.current * 0.55 + pairLeadEntry.leadMs * 0.45
+    );
+    return clampNumber(blendedLeadMs, AUTO_TRANSITION_MIN_LEAD_MS, AUTO_TRANSITION_MAX_LEAD_MS);
+  }, []);
 
   const noteRuntimeEvent = useCallback((input: RecordTransitionRuntimeEventInput): TransitionRuntimeEvent => {
     const event = recordTransitionRuntimeEvent(input);
@@ -912,12 +1027,27 @@ function App() {
       writeTransitionFeedbackEvents(next);
       return next;
     });
+    const runtimeEvent = runtimeEvents.find(
+      (item) => buildRuntimeEventKey(item) === feedbackTargetEventKey
+    );
+    if (runtimeEvent) {
+      recordTransitionFeedback({
+        sourceTrackId: runtimeEvent.sourceTrackId,
+        targetTrackId: runtimeEvent.targetTrackId,
+        rating,
+      });
+      setTransitionFeedbackModel(getTransitionFeedbackModel());
+    }
     setLastFeedbackLabel(rating === 'good' ? 'iyi' : rating === 'ok' ? 'idare eder' : 'kotu');
-  }, [feedbackTargetEventKey]);
+  }, [feedbackTargetEventKey, runtimeEvents]);
 
   const handlePlayTransitionCandidate = useCallback(async (
     candidate: TransitionCandidate,
-    options: { reason?: 'auto' | 'manual' } = {}
+    options: {
+      reason?: 'auto' | 'manual';
+      decision?: TransitionDecision | null;
+      manualAccepted?: boolean;
+    } = {}
   ) => {
     const startedAtMs =
       typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -931,6 +1061,8 @@ function App() {
           sourceLoudnessRms: candidate.sourceLoudnessRms,
           targetLoudnessRms: candidate.targetLoudnessRms,
           effectStyle: transitionEffectStyle,
+          contentHint: deriveTransitionContentHint(candidate),
+          silenceAwarePreDuck: SILENCE_AWARE_ENVELOPE_ENABLED,
         });
       } catch (transitionError) {
         console.warn('playTransitionTarget failed, fallback to play+seek:', transitionError);
@@ -951,17 +1083,36 @@ function App() {
         stalled: observedLatencyMs >= TRANSITION_STALL_THRESHOLD_MS,
         dropped: false,
         mode: options.reason === 'auto' ? 'auto' : 'manual',
+        confidenceScore: options.decision?.confidenceScore ?? candidate.confidenceScore,
+        decisionReasonPrimary: options.decision?.gate.reasons[0],
+        fallbackTriggered: Boolean(options.decision?.gate.reasons.includes('LOW_CONFIDENCE_FALLBACK')),
+        manualQueueSuggested: Boolean(options.decision?.manualQueueCandidate),
+        manualAccepted: Boolean(options.manualAccepted),
       });
       setFeedbackTargetEventKey(buildRuntimeEventKey(runtimeEvent));
       setLastFeedbackLabel(null);
       setLastAutoTransitionLatencyMs(observedLatencyMs);
+      const previousGlobalLeadMs = autoTransitionLeadMsRef.current;
       const nextLead = computeAdaptiveTransitionLeadMs(
-        autoTransitionLeadMsRef.current,
+        previousGlobalLeadMs,
         observedLatencyMs
       );
       autoTransitionLeadMsRef.current = nextLead;
       setAutoTransitionLeadMs(nextLead);
       if (options.reason === 'auto') {
+        const pairKey = buildAutoPairLeadKey(candidate.sourceTrackId, candidate.targetTrackId);
+        const previousPairLead = autoPairLeadMapRef.current[pairKey];
+        const pairLeadBaseline = previousPairLead?.leadMs ?? previousGlobalLeadMs;
+        const pairNextLead = computeAdaptiveTransitionLeadMs(pairLeadBaseline, observedLatencyMs);
+        autoPairLeadMapRef.current = {
+          ...autoPairLeadMapRef.current,
+          [pairKey]: {
+            leadMs: pairNextLead,
+            sampleCount: (previousPairLead?.sampleCount ?? 0) + 1,
+            updatedAt: new Date().toISOString(),
+          },
+        };
+        writeAutoPairLeadMap(autoPairLeadMapRef.current);
         const nowMs = Date.now();
         autoTransitionCooldownUntilRef.current = nowMs + AUTO_TRANSITION_POST_SWITCH_COOLDOWN_MS;
         lastAutoTransitionRef.current = {
@@ -971,6 +1122,9 @@ function App() {
         };
       } else {
         autoTransitionCooldownUntilRef.current = Date.now() + 5_000;
+      }
+      if (options.manualAccepted) {
+        setSuggestedManualCandidate(null);
       }
       const queuedCandidate = queuedManualTransitionRef.current?.candidate;
       if (
@@ -997,6 +1151,11 @@ function App() {
         stalled: true,
         dropped: true,
         mode: options.reason === 'auto' ? 'auto' : 'manual',
+        confidenceScore: options.decision?.confidenceScore ?? candidate.confidenceScore,
+        decisionReasonPrimary: options.decision?.gate.reasons[0],
+        fallbackTriggered: Boolean(options.decision?.gate.reasons.includes('LOW_CONFIDENCE_FALLBACK')),
+        manualQueueSuggested: Boolean(options.decision?.manualQueueCandidate),
+        manualAccepted: Boolean(options.manualAccepted),
       });
       setFeedbackTargetEventKey(buildRuntimeEventKey(runtimeEvent));
       console.error('Failed to play transition candidate:', error);
@@ -1005,21 +1164,32 @@ function App() {
     }
   }, [library, noteRuntimeEvent, play, provider, seek, transitionEffectStyle]);
 
-  const handleNowTransition = useCallback(async (candidate: TransitionCandidate) => {
+  const handleNowTransition = useCallback(async (
+    candidate: TransitionCandidate,
+    options: { manualAccepted?: boolean; decision?: TransitionDecision | null } = {}
+  ) => {
     const currentTrackId = playbackState?.currentTrack?.id ?? null;
     const currentProgressMs = playbackState?.progressMs ?? 0;
     const isCurrentlyPlaying = Boolean(playbackState?.isPlaying);
 
     if (!isCurrentlyPlaying || currentTrackId !== candidate.sourceTrackId) {
       queuedManualTransitionRef.current = null;
-      await handlePlayTransitionCandidate(candidate, { reason: 'manual' });
+      await handlePlayTransitionCandidate(candidate, {
+        reason: 'manual',
+        decision: options.decision,
+        manualAccepted: options.manualAccepted,
+      });
       return;
     }
 
     const latestUsefulSeekStartMs = Math.max(0, candidate.sourceTimeMs - 1000);
     if (currentProgressMs >= latestUsefulSeekStartMs) {
       queuedManualTransitionRef.current = null;
-      await handlePlayTransitionCandidate(candidate, { reason: 'manual' });
+      await handlePlayTransitionCandidate(candidate, {
+        reason: 'manual',
+        decision: options.decision,
+        manualAccepted: options.manualAccepted,
+      });
       return;
     }
 
@@ -1031,6 +1201,7 @@ function App() {
 
     queuedManualTransitionRef.current = {
       candidate,
+      manualAccepted: Boolean(options.manualAccepted),
       queuedAtMs: Date.now(),
     };
     autoTransitionedSourceTrackIdRef.current = null;
@@ -1044,7 +1215,11 @@ function App() {
     } catch (error) {
       console.warn('Manual transition seek preparation failed, falling back to direct transition:', error);
       queuedManualTransitionRef.current = null;
-      await handlePlayTransitionCandidate(candidate, { reason: 'manual' });
+      await handlePlayTransitionCandidate(candidate, {
+        reason: 'manual',
+        decision: options.decision,
+        manualAccepted: options.manualAccepted,
+      });
     }
   }, [
     handlePlayTransitionCandidate,
@@ -1063,7 +1238,7 @@ function App() {
       (item) => item.sourceTrackId === currentTrackId
     );
     if (candidatesForSource.length === 0) {
-      return decideAutoTransition([], DEFAULT_AUTO_TRANSITION_DECISION_CONFIG);
+      return decideAutoTransition([], autoTransitionDecisionConfig);
     }
 
     const queuedCandidate = queuedManualTransitionRef.current?.candidate;
@@ -1076,6 +1251,7 @@ function App() {
       if (matchedQueuedCandidate) {
         return {
           selectedCandidate: matchedQueuedCandidate,
+          manualQueueCandidate: null,
           decision: 'selected',
           gate: {
             passed: true,
@@ -1083,6 +1259,7 @@ function App() {
           },
           top1Score: matchedQueuedCandidate.score.finalScore,
           top1Top2Margin: null,
+          confidenceScore: matchedQueuedCandidate.confidenceScore,
         };
       }
       queuedManualTransitionRef.current = null;
@@ -1107,8 +1284,8 @@ function App() {
           )),
         ];
 
-    return decideAutoTransition(decisionPool, DEFAULT_AUTO_TRANSITION_DECISION_CONFIG);
-  }, [transitionCandidates]);
+    return decideAutoTransition(decisionPool, autoTransitionDecisionConfig);
+  }, [autoTransitionDecisionConfig, transitionCandidates]);
 
   const maybeNoteAutoTransitionSkip = useCallback((
     sourceTrackId: string,
@@ -1134,6 +1311,10 @@ function App() {
       mode: 'auto',
       skippedAutoTransition: true,
       skipReasons: decision.gate.reasons,
+      confidenceScore: decision.confidenceScore ?? undefined,
+      decisionReasonPrimary: decision.gate.reasons[0],
+      fallbackTriggered: decision.gate.reasons.includes('LOW_CONFIDENCE_FALLBACK'),
+      manualQueueSuggested: Boolean(decision.manualQueueCandidate),
     });
   }, [noteRuntimeEvent, transitionCandidates]);
 
@@ -1156,6 +1337,7 @@ function App() {
 
     const decision = pickAutoTransitionDecision(currentTrackId, nowMs);
     setLastAutoTransitionDecision(decision);
+    setSuggestedManualCandidate(TRANSITION_VNEXT_ENABLED ? decision.manualQueueCandidate : null);
     if (decision.decision !== 'selected' || !decision.selectedCandidate) return;
     const candidate = decision.selectedCandidate;
 
@@ -1163,9 +1345,10 @@ function App() {
       pinnedSourceTimeMs ?? candidate.sourceTimeMs,
       playbackState.durationMs ?? undefined
     );
+    const candidateLeadMs = resolveCandidateLeadMs(candidate);
     const warmupStartMs = Math.max(
       0,
-      triggerAtMs - (autoTransitionLeadMsRef.current + AUTO_TRANSITION_WARMUP_WINDOW_MS)
+      triggerAtMs - (candidateLeadMs + AUTO_TRANSITION_WARMUP_WINDOW_MS)
     );
     const progressNowMs = playbackState.progressMs ?? 0;
     if (progressNowMs < warmupStartMs) return;
@@ -1184,6 +1367,7 @@ function App() {
     playbackState?.progressMs,
     pickAutoTransitionDecision,
     provider,
+    resolveCandidateLeadMs,
   ]);
 
   useEffect(() => {
@@ -1196,6 +1380,7 @@ function App() {
 
     const decision = pickAutoTransitionDecision(currentTrackId, nowMs);
     setLastAutoTransitionDecision(decision);
+    setSuggestedManualCandidate(TRANSITION_VNEXT_ENABLED ? decision.manualQueueCandidate : null);
     if (decision.decision !== 'selected' || !decision.selectedCandidate) return;
     const candidate = decision.selectedCandidate;
 
@@ -1203,7 +1388,8 @@ function App() {
       pinnedSourceTimeMs ?? candidate.sourceTimeMs,
       playbackState.durationMs ?? undefined
     );
-    const transitionStartMs = Math.max(0, triggerAtMs - autoTransitionLeadMsRef.current);
+    const candidateLeadMs = resolveCandidateLeadMs(candidate);
+    const transitionStartMs = Math.max(0, triggerAtMs - candidateLeadMs);
     const handoffPrimeAtMs = Math.max(0, transitionStartMs - AUTO_TRANSITION_HANDOFF_PRIME_MS);
     const progressNowMs = playbackState.progressMs ?? 0;
     if (progressNowMs < handoffPrimeAtMs || progressNowMs > triggerAtMs + 1200) return;
@@ -1214,7 +1400,16 @@ function App() {
 
     const activeProvider = provider ?? getYouTubeProvider();
     activeProvider.primeTransitionHandoff();
+    const targetTrack = library.find((track) => track.id === candidate.targetTrackId);
+    const safeTargetTimeMs = clampTimeToTrackDuration(candidate.targetTimeMs, targetTrack?.durationMs);
+    const expectedSwapLeadMs = Math.max(420, Math.round(transitionStartMs - progressNowMs + 180));
+    void activeProvider.primeTransitionTargetPlayback(
+      candidate.targetTrackId,
+      safeTargetTimeMs,
+      expectedSwapLeadMs
+    );
   }, [
+    library,
     pinnedSourceTimeMs,
     playbackState?.currentTrack?.id,
     playbackState?.durationMs,
@@ -1222,6 +1417,7 @@ function App() {
     playbackState?.progressMs,
     pickAutoTransitionDecision,
     provider,
+    resolveCandidateLeadMs,
   ]);
 
   useEffect(() => {
@@ -1234,6 +1430,7 @@ function App() {
 
     const decision = pickAutoTransitionDecision(currentTrackId, nowMs);
     setLastAutoTransitionDecision(decision);
+    setSuggestedManualCandidate(TRANSITION_VNEXT_ENABLED ? decision.manualQueueCandidate : null);
     if (decision.decision !== 'selected' || !decision.selectedCandidate) {
       maybeNoteAutoTransitionSkip(currentTrackId, decision);
       return;
@@ -1244,7 +1441,8 @@ function App() {
       pinnedSourceTimeMs ?? candidate.sourceTimeMs,
       playbackState.durationMs ?? undefined
     );
-    const transitionStartMs = Math.max(0, triggerAtMs - autoTransitionLeadMsRef.current);
+    const candidateLeadMs = resolveCandidateLeadMs(candidate);
+    const transitionStartMs = Math.max(0, triggerAtMs - candidateLeadMs);
     const progressNowMs = playbackState.progressMs ?? 0;
 
     if (progressNowMs < Math.max(0, transitionStartMs - 300)) return;
@@ -1264,7 +1462,18 @@ function App() {
     autoTransitionedSourceTrackIdRef.current = currentTrackId;
     void (async () => {
       setIsAutoTransitioning(true);
-      await handlePlayTransitionCandidate(candidate, { reason: 'auto' });
+      const queuedManual = queuedManualTransitionRef.current;
+      const isQueuedManual = Boolean(
+        queuedManual
+        && queuedManual.candidate.sourceTrackId === candidate.sourceTrackId
+        && queuedManual.candidate.targetTrackId === candidate.targetTrackId
+        && queuedManual.candidate.targetTimeMs === candidate.targetTimeMs
+      );
+      await handlePlayTransitionCandidate(candidate, {
+        reason: isQueuedManual ? 'manual' : 'auto',
+        decision,
+        manualAccepted: isQueuedManual ? queuedManual?.manualAccepted : false,
+      });
       setIsAutoTransitioning(false);
     })();
   }, [
@@ -1277,6 +1486,7 @@ function App() {
     playbackState?.isPlaying,
     playbackState?.progressMs,
     pickAutoTransitionDecision,
+    resolveCandidateLeadMs,
   ]);
 
   const currentTrack = playbackState?.currentTrack ?? null;
@@ -1290,6 +1500,10 @@ function App() {
       : 'Skor dusuk';
     return `Auto gecis atlandi: ${reasons}`;
   }, [lastAutoTransitionDecision]);
+  const manualSuggestionReasons = useMemo(
+    () => (lastAutoTransitionDecision?.gate.reasons ?? []).map(formatAutoDecisionReasonLabel),
+    [lastAutoTransitionDecision]
+  );
 
   const sortedLibrary = useMemo(
     () => [...library].sort((a, b) => {
@@ -1508,6 +1722,7 @@ function App() {
         enforceRegressionGate: scope === 'benchmark',
         enforceTuningValidationGate: scope === 'benchmark',
         enforceRuntimeGate: scope === 'benchmark',
+        enforceBenchmarkMergeGate: scope === 'benchmark',
         minTransitionRuntimeSampleCount: scope === 'benchmark'
           ? benchmarkRuntimeThresholds.minTransitionRuntimeSampleCount
           : undefined,
@@ -2052,10 +2267,19 @@ function App() {
         autoTransitionLeadMs={autoTransitionLeadMs}
         lastAutoTransitionLatencyMs={lastAutoTransitionLatencyMs}
         autoDecisionSummary={autoDecisionSummary}
+        manualSuggestionReasons={manualSuggestionReasons}
+        suggestedManualCandidate={suggestedManualCandidate}
         canSendFeedback={Boolean(feedbackTargetEventKey)}
         lastFeedbackLabel={lastFeedbackLabel}
         onRefreshCandidates={() => {
           void refreshTransitionCandidates();
+        }}
+        onApplySuggestedManual={() => {
+          if (!suggestedManualCandidate) return;
+          void handleNowTransition(suggestedManualCandidate, {
+            manualAccepted: true,
+            decision: lastAutoTransitionDecision,
+          });
         }}
         onNowTransition={(candidate) => {
           void handleNowTransition(candidate);
@@ -2067,6 +2291,8 @@ function App() {
         baselineHistory={baselineHistory}
         runtimeEvents={runtimeEvents}
         feedbackEvents={transitionFeedbackEvents}
+        feedbackModel={transitionFeedbackModel}
+        libraryTrackMap={libraryTrackMap}
       />
     ) : (
       <SettingsPage advancedContent={advancedToolsContent} />

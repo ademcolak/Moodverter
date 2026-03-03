@@ -12,6 +12,7 @@ export interface YouTubePlayerState {
 }
 
 export type PlayerStateCallback = (state: YouTubePlayerState) => void;
+const PLAYER_STATE_POLL_INTERVAL_MS = 120;
 
 // YouTube Player states (from IFrame API)
 export const PlayerState = {
@@ -301,7 +302,7 @@ export class YouTubePlayer {
         this.state.duration = duration;
         this.notifyStateChange();
       }
-    }, 250);
+    }, PLAYER_STATE_POLL_INTERVAL_MS);
   }
 
   private stopPolling(): void {
@@ -427,21 +428,32 @@ export class YouTubePlayer {
   }
 }
 
-// Singleton instance for global use
-let playerInstance: YouTubePlayer | null = null;
+// Container-scoped instances allow dual-deck playback providers.
+const playerInstances = new Map<string, YouTubePlayer>();
 
 export function getYouTubePlayer(containerId = 'youtube-player'): YouTubePlayer {
-  if (!playerInstance) {
-    playerInstance = new YouTubePlayer(containerId);
+  const existing = playerInstances.get(containerId);
+  if (existing) {
+    return existing;
   }
-  return playerInstance;
+  const player = new YouTubePlayer(containerId);
+  playerInstances.set(containerId, player);
+  return player;
 }
 
-export function destroyYouTubePlayer(): void {
-  if (playerInstance) {
-    playerInstance.destroy();
-    playerInstance = null;
+export function destroyYouTubePlayer(containerId?: string): void {
+  if (containerId) {
+    const player = playerInstances.get(containerId);
+    if (player) {
+      player.destroy();
+      playerInstances.delete(containerId);
+    }
+    return;
   }
+  playerInstances.forEach((player) => {
+    player.destroy();
+  });
+  playerInstances.clear();
 }
 
 // Utility: Extract video ID from YouTube URL

@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { PlaybackState } from '../types/provider';
 import { getYouTubeProvider, type YouTubeProvider } from '../services/providers/youtube';
 
+const PLAYBACK_STATE_POLL_INTERVAL_MS = 200;
+
 export interface UseProviderReturn {
   provider: YouTubeProvider | null;
   isLoading: boolean;
@@ -83,7 +85,7 @@ export function useProvider(): UseProviderReturn {
 
     pollIntervalRef.current = setInterval(() => {
       void refreshPlaybackState(provider);
-    }, 1000);
+    }, PLAYBACK_STATE_POLL_INTERVAL_MS);
 
     return () => {
       if (pollIntervalRef.current) {

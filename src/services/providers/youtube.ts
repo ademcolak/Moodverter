@@ -33,6 +33,14 @@ const DEFAULT_TRANSITION_HANDOFF_HOLD_MS = 360;
 const PLAYBACK_START_RECOVERY_MAX_POLLS = 8;
 const PLAYBACK_START_RECOVERY_POLL_MS = 160;
 const TRANSITION_WARMUP_MAX_CONCURRENCY = 1;
+const PRIMARY_DECK_CONTAINER_ID = 'youtube-player-primary';
+const SECONDARY_DECK_CONTAINER_ID = 'youtube-player-secondary';
+const DUAL_DECK_PREROLL_MS = 420;
+const DUAL_DECK_MAX_PREROLL_MS = 1400;
+const TRANSITION_SWAP_DRIFT_SEEK_THRESHOLD_SECONDS = 0.85;
+const TRANSITION_AUDIO_OVERLAP_MS = 90;
+
+type DeckKey = 'primary' | 'secondary';
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -54,6 +62,8 @@ export interface TransitionPlaybackOptions {
   sourceLoudnessRms?: number;
   targetLoudnessRms?: number;
   effectStyle?: TransitionEffectStyle;
+  contentHint?: TransitionContentHint;
+  silenceAwarePreDuck?: boolean;
 }
 
 export interface TransitionHandoffProfile {
@@ -63,6 +73,7 @@ export interface TransitionHandoffProfile {
 }
 
 export type TransitionEffectStyle = 'clean' | 'ambient' | 'punchy';
+export type TransitionContentHint = 'neutral' | 'vocal-heavy' | 'bass-heavy' | 'build-up';
 
 export interface TransitionEffectProfile {
   style: TransitionEffectStyle;
@@ -75,6 +86,21 @@ export interface TransitionEffectProfile {
 
 interface AddTrackOptions {
   skipAnalysis?: boolean;
+}
+
+interface LoadTrackOptions {
+  deck?: DeckKey;
+  autoplay?: boolean;
+  makeActive?: boolean;
+  emitReason?: 'manual';
+}
+
+interface PrimedTransitionState {
+  deck: DeckKey;
+  trackId: string;
+  targetTimeMs: number;
+  primedAt: number;
+  expectedLeadMs: number;
 }
 
 interface TransitionEnvelopePlan {
@@ -117,6 +143,8 @@ export class YouTubeProvider implements MusicProvider {
   readonly name = 'youtube' as const;
 
   private player: YouTubePlayer | null = null;
+  private secondaryPlayer: YouTubePlayer | null = null;
+  private activeDeck: DeckKey = 'primary';
   private isInitialized = false;
   private initPromise: Promise<void> | null = null;
   private volume = 100;
@@ -137,6 +165,7 @@ export class YouTubeProvider implements MusicProvider {
   };
   private transitionEffectProfile: TransitionEffectProfile = { ...TRANSITION_EFFECT_PROFILES.clean };
   private hasWarnedRecentQuota = false;
+  private primedTransition: PrimedTransitionState | null = null;
 
   constructor() {
     this.reloadLibrary();
@@ -155,12 +184,48 @@ export class YouTubeProvider implements MusicProvider {
     this.listeners.forEach((listener) => listener(payload));
   }
 
-  private onPlayerStateChange(state: {
+  private getDeckPlayer(deck: DeckKey): YouTubePlayer | null {
+    return deck === 'primary' ? this.player : this.secondaryPlayer;
+  }
+
+  private getActivePlayer(): YouTubePlayer | null {
+    return this.getDeckPlayer(this.activeDeck) ?? this.player;
+  }
+
+  private getInactiveDeck(): DeckKey {
+    return this.activeDeck === 'primary' ? 'secondary' : 'primary';
+  }
+
+  private ensurePlayerContainer(containerId: string): void {
+    if (document.getElementById(containerId)) return;
+    const container = document.createElement('div');
+    container.id = containerId;
+    container.style.position = 'absolute';
+    container.style.width = '1px';
+    container.style.height = '1px';
+    container.style.opacity = '0';
+    container.style.pointerEvents = 'none';
+    document.body.appendChild(container);
+  }
+
+  private clearPrimedTransition(): void {
+    const primed = this.primedTransition;
+    if (!primed) return;
+    const player = this.getDeckPlayer(primed.deck);
+    if (player && primed.deck !== this.activeDeck) {
+      player.pause();
+      player.setVolume(0);
+    }
+    this.primedTransition = null;
+  }
+
+  private onPlayerStateChange(sourceDeck: DeckKey, state: {
     isPlaying: boolean;
     videoId: string | null;
     currentTime: number;
     duration: number;
   }): void {
+    if (sourceDeck !== this.activeDeck) return;
     const prev = this.previousSnapshot;
 
     if (prev && prev.isPlaying && !state.isPlaying) {
@@ -199,21 +264,18 @@ export class YouTubeProvider implements MusicProvider {
     }
 
     this.initPromise = (async () => {
-      let container = document.getElementById('youtube-player');
-      if (!container) {
-        container = document.createElement('div');
-        container.id = 'youtube-player';
-        container.style.position = 'absolute';
-        container.style.width = '1px';
-        container.style.height = '1px';
-        container.style.opacity = '0';
-        container.style.pointerEvents = 'none';
-        document.body.appendChild(container);
-      }
+      this.ensurePlayerContainer(PRIMARY_DECK_CONTAINER_ID);
+      this.ensurePlayerContainer(SECONDARY_DECK_CONTAINER_ID);
 
-      this.player = getYouTubePlayer('youtube-player');
+      this.player = getYouTubePlayer(PRIMARY_DECK_CONTAINER_ID);
+      this.secondaryPlayer = getYouTubePlayer(SECONDARY_DECK_CONTAINER_ID);
       await this.player.initialize();
-      this.player.onStateChange((state) => this.onPlayerStateChange(state));
+      await this.secondaryPlayer.initialize();
+      this.player.onStateChange((state) => this.onPlayerStateChange('primary', state));
+      this.secondaryPlayer.onStateChange((state) => this.onPlayerStateChange('secondary', state));
+      this.player.setVolume(this.volume);
+      this.secondaryPlayer.setVolume(0);
+      this.activeDeck = 'primary';
       this.isInitialized = true;
     })();
 
@@ -255,9 +317,9 @@ export class YouTubeProvider implements MusicProvider {
     return Math.max(0, Math.min(100, Math.round(percent)));
   }
 
-  private applyPlayerVolume(percent: number): void {
-    if (!this.player) return;
-    this.player.setVolume(this.clampVolume(percent));
+  private applyPlayerVolume(percent: number, player: YouTubePlayer | null = this.getActivePlayer()): void {
+    if (!player) return;
+    player.setVolume(this.clampVolume(percent));
   }
 
   private cancelTransitionVolumeAutomation(resetToBaseVolume = false): void {
@@ -271,9 +333,10 @@ export class YouTubeProvider implements MusicProvider {
     fromPercent: number,
     toPercent: number,
     durationMs: number,
-    automationToken: number
+    automationToken: number,
+    player: YouTubePlayer | null = this.getActivePlayer()
   ): Promise<void> {
-    if (!this.player) return;
+    if (!player) return;
     const clampedFrom = this.clampVolume(fromPercent);
     const clampedTo = this.clampVolume(toPercent);
     const steps = Math.max(1, Math.floor(Math.max(0, durationMs) / TRANSITION_VOLUME_STEP_MS));
@@ -282,7 +345,7 @@ export class YouTubeProvider implements MusicProvider {
       if (automationToken !== this.transitionVolumeAutomationToken) return;
       const ratio = step / steps;
       const volume = clampedFrom + (clampedTo - clampedFrom) * ratio;
-      this.applyPlayerVolume(volume);
+      this.applyPlayerVolume(volume, player);
       if (step < steps) {
         await wait(TRANSITION_VOLUME_STEP_MS);
       }
@@ -312,7 +375,9 @@ export class YouTubeProvider implements MusicProvider {
   private buildTransitionEnvelopePlan(
     sourceLoudnessRms: number | undefined,
     targetLoudnessRms: number | undefined,
-    effectProfile: TransitionEffectProfile
+    effectProfile: TransitionEffectProfile,
+    contentHint: TransitionContentHint,
+    silenceAwarePreDuck: boolean
   ): TransitionEnvelopePlan {
     const baseVolume = this.clampVolume(this.volume);
     const compensatedVolume = this.clampVolume(
@@ -329,12 +394,40 @@ export class YouTubeProvider implements MusicProvider {
       : 0;
     const louderTargetExtraDuck = Math.max(0, Math.min(8, Math.round(loudnessDelta * 1.2)));
     const handoffInfluenceDuck = Math.round(this.transitionHandoffProfile.duckPercent * 0.45);
-    const dynamicDuckPercent = this.clampVolume(
+    let dynamicDuckPercent = this.clampVolume(
       Math.max(
         effectProfile.sourceDuckPercent,
         handoffInfluenceDuck + louderTargetExtraDuck
       )
     );
+    let preDuckMs = Math.max(40, Math.min(260, Math.round(effectProfile.preDuckMs)));
+    let attackBoostMs = 0;
+    let settleBoostMs = 0;
+    let releaseBoostMs = 0;
+    if (contentHint === 'vocal-heavy') {
+      dynamicDuckPercent = this.clampVolume(dynamicDuckPercent + 4);
+      attackBoostMs = 120;
+      releaseBoostMs = 220;
+      preDuckMs = Math.min(260, preDuckMs + 20);
+    } else if (contentHint === 'bass-heavy') {
+      dynamicDuckPercent = this.clampVolume(dynamicDuckPercent + 5);
+      attackBoostMs = -50;
+      settleBoostMs = 110;
+      preDuckMs = Math.min(260, preDuckMs + 15);
+    } else if (contentHint === 'build-up') {
+      dynamicDuckPercent = this.clampVolume(dynamicDuckPercent + 2);
+      attackBoostMs = 90;
+      settleBoostMs = 180;
+      releaseBoostMs = 140;
+      preDuckMs = Math.min(260, preDuckMs + 35);
+    }
+    const lowEnergyTarget = typeof targetLoudnessRms === 'number'
+      && Number.isFinite(targetLoudnessRms)
+      && targetLoudnessRms <= -26;
+    if (silenceAwarePreDuck && lowEnergyTarget) {
+      preDuckMs = Math.max(40, Math.round(preDuckMs * 0.6));
+      attackBoostMs = Math.min(attackBoostMs, -60);
+    }
     const duckedVolume = this.clampVolume(
       Math.max(TRANSITION_VOLUME_MIN, baseVolume - dynamicDuckPercent)
     );
@@ -347,6 +440,7 @@ export class YouTubeProvider implements MusicProvider {
           effectProfile.crossfadeMs
           + compensationDistance * 16
           + this.transitionHandoffProfile.rampMs * 0.35
+          + attackBoostMs
         )
       )
     );
@@ -358,6 +452,7 @@ export class YouTubeProvider implements MusicProvider {
           effectProfile.crossfadeMs * 1.15
           + Math.max(0, loudnessDelta) * 60
           + this.transitionHandoffProfile.holdMs * 0.4
+          + settleBoostMs
         )
       )
     );
@@ -369,6 +464,7 @@ export class YouTubeProvider implements MusicProvider {
           effectProfile.releaseMs
           + compensationDistance * 20
           + this.transitionHandoffProfile.rampMs * 0.7
+          + releaseBoostMs
         )
       )
     );
@@ -379,47 +475,55 @@ export class YouTubeProvider implements MusicProvider {
       attackMs,
       settleMs,
       releaseMs,
-      preDuckMs: Math.max(40, Math.min(260, Math.round(effectProfile.preDuckMs))),
+      preDuckMs,
     };
   }
 
   private startTransitionVolumeEnvelope(
     sourceLoudnessRms: number | undefined,
     targetLoudnessRms: number | undefined,
-    effectProfile: TransitionEffectProfile
+    effectProfile: TransitionEffectProfile,
+    contentHint: TransitionContentHint,
+    silenceAwarePreDuck: boolean,
+    sourcePlayer: YouTubePlayer | null
   ): TransitionEnvelopePlan | null {
-    if (!this.player) return null;
+    if (!sourcePlayer) return null;
     const baseVolume = this.clampVolume(this.volume);
     const envelopePlan = this.buildTransitionEnvelopePlan(
       sourceLoudnessRms,
       targetLoudnessRms,
-      effectProfile
+      effectProfile,
+      contentHint,
+      silenceAwarePreDuck
     );
     const token = this.transitionVolumeAutomationToken + 1;
     this.transitionVolumeAutomationToken = token;
 
-    this.applyPlayerVolume(envelopePlan.duckedVolume);
+    this.applyPlayerVolume(envelopePlan.duckedVolume, sourcePlayer);
     void (async () => {
       await wait(140);
       await this.rampPlayerVolume(
         envelopePlan.duckedVolume,
         envelopePlan.compensatedVolume,
         envelopePlan.attackMs,
-        token
+        token,
+        sourcePlayer
       );
       await wait(envelopePlan.settleMs);
       await this.rampPlayerVolume(
         envelopePlan.compensatedVolume,
         baseVolume,
         envelopePlan.releaseMs,
-        token
+        token,
+        sourcePlayer
       );
     })();
     return envelopePlan;
   }
 
   private startTransitionHandoffEnvelope(): void {
-    if (!this.player) return;
+    const sourcePlayer = this.getActivePlayer();
+    if (!sourcePlayer) return;
     const baseVolume = this.clampVolume(this.volume);
     const handoffVolume = this.clampVolume(
       Math.max(TRANSITION_VOLUME_MIN, baseVolume - this.transitionHandoffProfile.duckPercent)
@@ -430,7 +534,13 @@ export class YouTubeProvider implements MusicProvider {
     this.transitionHandoffToken = handoffToken;
 
     void (async () => {
-      await this.rampPlayerVolume(baseVolume, handoffVolume, this.transitionHandoffProfile.rampMs, volumeToken);
+      await this.rampPlayerVolume(
+        baseVolume,
+        handoffVolume,
+        this.transitionHandoffProfile.rampMs,
+        volumeToken,
+        sourcePlayer
+      );
       await wait(this.transitionHandoffProfile.holdMs);
       if (
         handoffToken !== this.transitionHandoffToken
@@ -438,7 +548,13 @@ export class YouTubeProvider implements MusicProvider {
       ) {
         return;
       }
-      await this.rampPlayerVolume(handoffVolume, baseVolume, this.transitionHandoffProfile.rampMs, volumeToken);
+      await this.rampPlayerVolume(
+        handoffVolume,
+        baseVolume,
+        this.transitionHandoffProfile.rampMs,
+        volumeToken,
+        sourcePlayer
+      );
     })();
   }
 
@@ -477,28 +593,59 @@ export class YouTubeProvider implements MusicProvider {
     return track;
   }
 
-  private async loadTrackAtTime(trackId: string, startTimeMs = 0): Promise<UnifiedTrack> {
+  private async loadTrackAtTime(
+    trackId: string,
+    startTimeMs = 0,
+    options: LoadTrackOptions = {}
+  ): Promise<UnifiedTrack> {
     await this.ensureInitialized();
-    if (!this.player) {
+    const targetDeck = options.deck ?? this.activeDeck;
+    const player = this.getDeckPlayer(targetDeck);
+    if (!player) {
       throw new Error('Player is not ready');
     }
 
     const track = await this.resolveTrackForPlayback(trackId);
-    this.currentTrack = track;
     const startMs = this.clampStartMsToTrack(startTimeMs, track.durationMs);
     const startSeconds = startMs / 1000;
+    const autoplay = options.autoplay ?? true;
+    const makeActive = options.makeActive ?? autoplay;
 
-    this.player.loadVideo(trackId, true, startSeconds);
-
-    if (startMs > 0) {
-      // Fallback seeks improve reliability while iframe transitions from buffering to playing.
-      await wait(180);
-      this.player.seek(startSeconds);
-      await wait(220);
-      this.player.seek(startSeconds);
+    if (!autoplay) {
+      player.cueVideo(trackId, startSeconds);
+    } else {
+      player.loadVideo(trackId, true, startSeconds);
     }
 
-    await this.recoverPlaybackStart(trackId, startSeconds);
+    if (startMs > 0 && autoplay) {
+      // Fallback seeks improve reliability while iframe transitions from buffering to playing.
+      await wait(180);
+      player.seek(startSeconds);
+      await wait(220);
+      player.seek(startSeconds);
+    }
+
+    if (autoplay) {
+      await this.recoverPlaybackStart(player, trackId, startSeconds, true);
+    }
+
+    if (makeActive) {
+      const previousActive = this.getActivePlayer();
+      if (previousActive && previousActive !== player) {
+        previousActive.pause();
+        previousActive.setVolume(0);
+      }
+      this.activeDeck = targetDeck;
+      this.currentTrack = track;
+      this.previousSnapshot = null;
+      this.lastEndedSignature = null;
+      player.setVolume(this.volume);
+    }
+
+    if (!autoplay) {
+      return track;
+    }
+
     try {
       addToRecentlyPlayed({
         videoId: trackId,
@@ -519,23 +666,27 @@ export class YouTubeProvider implements MusicProvider {
     }
     this.emit({
       type: 'track_started',
-      reason: 'manual',
-      track: this.currentTrack,
+      reason: options.emitReason ?? 'manual',
+      track,
     });
 
     return track;
   }
 
-  private async recoverPlaybackStart(trackId: string, startSeconds: number): Promise<void> {
-    if (!this.player) return;
+  private async recoverPlaybackStart(
+    player: YouTubePlayer,
+    trackId: string,
+    startSeconds: number,
+    autoplay = true
+  ): Promise<void> {
+    if (!player) return;
 
     const normalizedStart = Math.max(0, Number.isFinite(startSeconds) ? startSeconds : 0);
     const allowReachedTimeAsSuccess = normalizedStart > 0.1;
     let hasReloaded = false;
 
     for (let attempt = 0; attempt < PLAYBACK_START_RECOVERY_MAX_POLLS; attempt += 1) {
-      if (!this.player) return;
-      const state = this.player.getState();
+      const state = player.getState();
       const hasExpectedTrack = state.videoId === trackId;
       const reachedExpectedTime = state.currentTime >= Math.max(0, normalizedStart - 0.35);
       if (hasExpectedTrack && state.error) {
@@ -548,14 +699,16 @@ export class YouTubeProvider implements MusicProvider {
 
       // Slow networks can leave iframe in a non-playing buffer state; nudge play/seek and reload once.
       if (attempt === 2 || attempt === 5) {
-        this.player.play();
+        if (autoplay) {
+          player.play();
+        }
         if (normalizedStart > 0) {
-          this.player.seek(normalizedStart);
+          player.seek(normalizedStart);
         }
       }
 
       if (!hasReloaded && attempt === 4) {
-        this.player.loadVideo(trackId, true, normalizedStart);
+        player.loadVideo(trackId, autoplay, normalizedStart);
         hasReloaded = true;
       }
 
@@ -564,7 +717,7 @@ export class YouTubeProvider implements MusicProvider {
       }
     }
 
-    const finalState = this.player?.getState();
+    const finalState = player.getState();
     if (finalState?.error) {
       throw new Error(`YouTube player error: ${finalState.error}`);
     }
@@ -582,14 +735,18 @@ export class YouTubeProvider implements MusicProvider {
   logout(): void {
     this.cancelTransitionVolumeAutomation(false);
     this.transitionHandoffToken += 1;
+    this.clearPrimedTransition();
     this.warmupPromises.clear();
     destroyYouTubePlayer();
     this.player = null;
+    this.secondaryPlayer = null;
+    this.activeDeck = 'primary';
     this.isInitialized = false;
     this.initPromise = null;
     this.currentTrack = null;
     this.previousSnapshot = null;
     this.lastEndedSignature = null;
+    this.primedTransition = null;
   }
 
   async getLibrary(): Promise<UnifiedTrack[]> {
@@ -618,17 +775,18 @@ export class YouTubeProvider implements MusicProvider {
   async play(trackId: string): Promise<void> {
     this.cancelTransitionVolumeAutomation(true);
     this.transitionHandoffToken += 1;
+    this.clearPrimedTransition();
     await this.loadTrackAtTime(trackId, 0);
   }
 
   async pause(): Promise<void> {
     this.transitionHandoffToken += 1;
-    this.player?.pause();
+    this.getActivePlayer()?.pause();
     this.emit({ type: 'playback_paused', track: this.currentTrack });
   }
 
   async resume(): Promise<void> {
-    this.player?.play();
+    this.getActivePlayer()?.play();
     this.emit({ type: 'playback_resumed', track: this.currentTrack });
   }
 
@@ -657,19 +815,20 @@ export class YouTubeProvider implements MusicProvider {
 
   async seek(positionMs: number): Promise<void> {
     this.transitionHandoffToken += 1;
-    this.player?.seek(positionMs / 1000);
+    this.getActivePlayer()?.seek(positionMs / 1000);
   }
 
   async setVolume(percent: number): Promise<void> {
     this.cancelTransitionVolumeAutomation(false);
     this.transitionHandoffToken += 1;
     this.volume = this.clampVolume(percent);
-    this.applyPlayerVolume(this.volume);
+    this.applyPlayerVolume(this.volume, this.getActivePlayer());
   }
 
   async getCurrentTrack(): Promise<UnifiedTrack | null> {
-    if (!this.player || !this.currentTrack) return null;
-    const state = this.player.getState();
+    const activePlayer = this.getActivePlayer();
+    if (!activePlayer || !this.currentTrack) return null;
+    const state = activePlayer.getState();
     if (state.videoId !== this.currentTrack.id) return null;
 
     if (state.duration > 0 && this.currentTrack.durationMs === 0) {
@@ -679,7 +838,8 @@ export class YouTubeProvider implements MusicProvider {
   }
 
   async getPlaybackState(): Promise<PlaybackState | null> {
-    if (!this.player) {
+    const activePlayer = this.getActivePlayer();
+    if (!activePlayer) {
       return {
         isPlaying: false,
         currentTrack: null,
@@ -690,7 +850,7 @@ export class YouTubeProvider implements MusicProvider {
       };
     }
 
-    const state = this.player.getState();
+    const state = activePlayer.getState();
     const currentTrack = await this.getCurrentTrack();
     return {
       isPlaying: state.isPlaying,
@@ -780,21 +940,160 @@ export class YouTubeProvider implements MusicProvider {
     await warmupPromise;
   }
 
+  async primeTransitionTargetPlayback(
+    trackId: string,
+    targetTimeMs: number,
+    expectedSwapLeadMs?: number
+  ): Promise<void> {
+    const normalizedTrackId = trackId.trim();
+    if (!normalizedTrackId) return;
+    void this.warmupTransitionTarget(normalizedTrackId);
+    await this.ensureInitialized();
+
+    const targetDeck = this.getInactiveDeck();
+    const targetPlayer = this.getDeckPlayer(targetDeck);
+    if (!targetPlayer) return;
+
+    const targetTrack = await this.resolveTrackForPlayback(normalizedTrackId);
+    const safeTargetTimeMs = this.clampStartMsToTrack(targetTimeMs, targetTrack.durationMs);
+    const existingPrime = this.primedTransition;
+    const requestedLeadMs = typeof expectedSwapLeadMs === 'number' && Number.isFinite(expectedSwapLeadMs)
+      ? expectedSwapLeadMs
+      : DUAL_DECK_PREROLL_MS;
+    const normalizedExpectedLeadMs = Math.max(
+      DUAL_DECK_PREROLL_MS,
+      Math.min(
+        DUAL_DECK_MAX_PREROLL_MS,
+        Math.round(requestedLeadMs)
+      )
+    );
+    if (
+      existingPrime
+      && existingPrime.deck === targetDeck
+      && existingPrime.trackId === normalizedTrackId
+      && Math.abs(existingPrime.targetTimeMs - safeTargetTimeMs) <= 250
+      && Math.abs(existingPrime.expectedLeadMs - normalizedExpectedLeadMs) <= 180
+    ) {
+      return;
+    }
+
+    const primeStartMs = Math.max(0, safeTargetTimeMs - normalizedExpectedLeadMs);
+    const primeStartSeconds = primeStartMs / 1000;
+    targetPlayer.setVolume(0);
+    targetPlayer.loadVideo(normalizedTrackId, true, primeStartSeconds);
+    await this.recoverPlaybackStart(targetPlayer, normalizedTrackId, primeStartSeconds, true);
+    this.primedTransition = {
+      deck: targetDeck,
+      trackId: normalizedTrackId,
+      targetTimeMs: safeTargetTimeMs,
+      primedAt: Date.now(),
+      expectedLeadMs: normalizedExpectedLeadMs,
+    };
+  }
+
   async playTransitionTarget(
     trackId: string,
     targetTimeMs: number,
     options: TransitionPlaybackOptions = {}
   ): Promise<void> {
     this.transitionHandoffToken += 1;
-    await this.warmupTransitionTarget(trackId);
+    void this.warmupTransitionTarget(trackId);
+    await this.ensureInitialized();
     const effectProfile = this.resolveTransitionEffectProfile(options.effectStyle);
+    const sourceDeck = this.activeDeck;
+    const sourcePlayer = this.getDeckPlayer(sourceDeck);
+    const targetDeck = this.getInactiveDeck();
+    const targetPlayer = this.getDeckPlayer(targetDeck);
+    if (!sourcePlayer || !targetPlayer) {
+      await this.loadTrackAtTime(trackId, targetTimeMs, {
+        deck: sourceDeck,
+        autoplay: true,
+        makeActive: true,
+        emitReason: 'manual',
+      });
+      return;
+    }
+
+    const targetTrack = await this.resolveTrackForPlayback(trackId);
+    const safeTargetTimeMs = this.clampStartMsToTrack(targetTimeMs, targetTrack.durationMs);
+    const targetStartSeconds = safeTargetTimeMs / 1000;
+    const primed = this.primedTransition;
+    const primedReady = Boolean(
+      primed
+      && primed.deck === targetDeck
+      && primed.trackId === trackId
+      && Math.abs(primed.targetTimeMs - safeTargetTimeMs) <= 650
+    );
+    if (!primedReady) {
+      await this.primeTransitionTargetPlayback(trackId, safeTargetTimeMs);
+    }
+
     const envelopePlan = this.startTransitionVolumeEnvelope(
       options.sourceLoudnessRms,
       options.targetLoudnessRms,
-      effectProfile
+      effectProfile,
+      options.contentHint ?? 'neutral',
+      Boolean(options.silenceAwarePreDuck),
+      sourcePlayer
     );
     await wait(envelopePlan?.preDuckMs ?? effectProfile.preDuckMs);
-    await this.loadTrackAtTime(trackId, targetTimeMs);
+    const targetStateBeforeSwap = targetPlayer.getState();
+    const isTargetAlreadyRunning = targetStateBeforeSwap.isPlaying && targetStateBeforeSwap.videoId === trackId;
+    if (!isTargetAlreadyRunning) {
+      targetPlayer.play();
+    }
+    const driftSeconds = Math.abs(targetStateBeforeSwap.currentTime - targetStartSeconds);
+    if (driftSeconds > TRANSITION_SWAP_DRIFT_SEEK_THRESHOLD_SECONDS) {
+      targetPlayer.seek(targetStartSeconds);
+    }
+    if (!isTargetAlreadyRunning) {
+      void this.recoverPlaybackStart(targetPlayer, trackId, targetStartSeconds, true).catch((error) => {
+        console.warn('Late transition deck recovery failed:', error);
+      });
+    }
+    const targetStartVolume = envelopePlan?.compensatedVolume ?? this.volume;
+    targetPlayer.setVolume(targetStartVolume);
+    await wait(TRANSITION_AUDIO_OVERLAP_MS);
+    sourcePlayer.pause();
+    sourcePlayer.setVolume(0);
+    this.activeDeck = targetDeck;
+    this.primedTransition = null;
+    this.currentTrack = targetTrack;
+    this.previousSnapshot = null;
+    this.lastEndedSignature = null;
+
+    const settleMs = envelopePlan?.settleMs ?? 0;
+    const releaseMs = envelopePlan?.releaseMs ?? effectProfile.releaseMs;
+    const token = this.transitionVolumeAutomationToken + 1;
+    this.transitionVolumeAutomationToken = token;
+    void (async () => {
+      if (settleMs > 0) {
+        await wait(settleMs);
+      }
+      await this.rampPlayerVolume(targetStartVolume, this.volume, releaseMs, token, targetPlayer);
+    })();
+
+    try {
+      addToRecentlyPlayed({
+        videoId: trackId,
+        title: targetTrack.name,
+        artist: targetTrack.artist,
+        thumbnail: targetTrack.albumArt ?? '',
+      });
+    } catch (error) {
+      if (!isQuotaExceededError(error)) {
+        throw error;
+      }
+      if (!this.hasWarnedRecentQuota) {
+        this.hasWarnedRecentQuota = true;
+        console.warn('Skipping recent history writes due to storage quota.');
+      }
+    }
+    this.emit({
+      type: 'track_started',
+      reason: 'manual',
+      track: targetTrack,
+    });
   }
 
   primeTransitionHandoff(): void {

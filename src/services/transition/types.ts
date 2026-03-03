@@ -35,6 +35,11 @@ export interface TransitionEdgeScore {
 export type TransitionMatchPolicyVersion = 'v2' | 'v3';
 
 export type TransitionGateReason =
+  | 'NO_CANDIDATE'
+  | 'DUPLICATE_CLUSTER'
+  | 'LOW_CONFIDENCE_FALLBACK'
+  | 'HIGH_ARTIFACT_RISK'
+  | 'MANUAL_QUEUE_SUGGESTED'
   | 'EVENT_MISMATCH'
   | 'LOW_EVENT_CONFIDENCE'
   | 'TEMPO_OUT_OF_RANGE'
@@ -52,6 +57,9 @@ export interface AutoTransitionDecisionConfig {
   minTop1Score: number;
   minTop1Top2Margin: number;
   maxArtifactPenalty: number;
+  confidenceThreshold: number;
+  fallbackOnLowConfidence: boolean;
+  manualQueueOnLowConfidence: boolean;
 }
 
 export interface HardGateConfig {
@@ -63,10 +71,12 @@ export interface HardGateConfig {
 
 export interface TransitionDecision {
   selectedCandidate: TransitionCandidate | null;
+  manualQueueCandidate: TransitionCandidate | null;
   decision: 'selected' | 'skipped';
   gate: TransitionGateResult;
   top1Score: number | null;
   top1Top2Margin: number | null;
+  confidenceScore: number | null;
 }
 
 export type BenchmarkRunMode = 'synthetic' | 'real';
@@ -99,7 +109,11 @@ export interface FindTransitionCandidatesInput {
   trackId: string;
   sourceTimeMs?: number;
   limit?: number;
+  excludeTargetTrackIds?: string[];
+  seedTrackPerformanceTier?: TransitionPerformanceTier;
 }
+
+export type TransitionPerformanceTier = 'high' | 'mid' | 'low';
 
 export type TransitionScoreDriver =
   | 'event'
@@ -117,9 +131,14 @@ export interface TransitionCandidate {
   sourceTrackId: string;
   sourceTimeMs: number;
   sourceLoudnessRms: number;
+  sourceEventType: TransitionEventType;
   targetTrackId: string;
   targetTimeMs: number;
   targetLoudnessRms: number;
+  targetEventType: TransitionEventType;
+  confidenceScore: number;
+  diversityPenalty: number;
+  learningBias: number;
   score: TransitionEdgeScore;
   diagnostic: TransitionScoreDiagnostic;
   explain: TransitionDecisionExplain;
@@ -141,6 +160,11 @@ export interface TransitionRuntimeEvent {
   mode: TransitionRuntimeMode;
   skippedAutoTransition?: boolean;
   skipReasons?: TransitionGateReason[];
+  confidenceScore?: number;
+  decisionReasonPrimary?: TransitionGateReason;
+  fallbackTriggered?: boolean;
+  manualQueueSuggested?: boolean;
+  manualAccepted?: boolean;
 }
 
 export interface RecordTransitionRuntimeEventInput {
@@ -152,6 +176,37 @@ export interface RecordTransitionRuntimeEventInput {
   mode?: TransitionRuntimeMode;
   skippedAutoTransition?: boolean;
   skipReasons?: TransitionGateReason[];
+  confidenceScore?: number;
+  decisionReasonPrimary?: TransitionGateReason;
+  fallbackTriggered?: boolean;
+  manualQueueSuggested?: boolean;
+  manualAccepted?: boolean;
+}
+
+export interface TransitionFeedbackEntry {
+  recordedAt: string;
+  sourceTrackId: string;
+  targetTrackId: string;
+  rating: 'good' | 'ok' | 'bad';
+}
+
+export interface TransitionFeedbackPairStats {
+  pairKey: string;
+  sourceTrackId: string;
+  targetTrackId: string;
+  totalCount: number;
+  goodCount: number;
+  okCount: number;
+  badCount: number;
+  meanScore: number;
+  badStreak: number;
+  updatedAt: string;
+  blacklistUntil?: string;
+}
+
+export interface TransitionFeedbackModel {
+  updatedAt: string;
+  byPair: Record<string, TransitionFeedbackPairStats>;
 }
 
 export interface RuntimeGateThresholds {
@@ -226,6 +281,8 @@ export interface BaselineEvaluationInput {
   enforceRelevantTargetMinimum?: boolean;
   enforceTuningValidationGate?: boolean;
   enforceRuntimeGate?: boolean;
+  enforceBenchmarkMergeGate?: boolean;
+  minimumCoverageRate?: number;
   runMode?: BenchmarkRunMode;
   minTransitionRuntimeSampleCount?: number;
   maxTransitionLatencyP95Ms?: number;
@@ -259,6 +316,8 @@ export interface BaselineTuningAction {
   issue: TransitionScoreDriver;
   recommendation: string;
   confidence: number;
+  priority: 'normal' | 'high';
+  escalationReason: string | null;
   gateFailSampleCount: number;
   gateFailDistribution: Array<{
     reason: TransitionGateReason;
@@ -360,6 +419,10 @@ export interface BaselineEvaluationResult {
   transitionLatencyP95Ms: number | null;
   transitionStallRate: number | null;
   transitionDropRate: number | null;
+  averageDecisionConfidenceScore: number | null;
+  fallbackTriggeredCount: number;
+  manualQueueSuggestedCount: number;
+  manualQueueAcceptedCount: number;
   autoTransitionDecisionSampleCount: number;
   autoTransitionSkippedCount: number;
   autoTransitionSkipRate: number | null;
@@ -368,6 +431,11 @@ export interface BaselineEvaluationResult {
   runtimeGateEnforced: boolean;
   runtimeGatePassed: boolean;
   runtimeGateSummary: string | null;
+  benchmarkMergeGateEnforced: boolean;
+  benchmarkMergeGatePassed: boolean;
+  benchmarkMergeGateSummary: string | null;
+  minimumCoverageRate: number;
+  coverageGatePassed: boolean;
   runtimeGateThresholds: RuntimeGateThresholds;
   limit: number;
   goodThreshold: number;

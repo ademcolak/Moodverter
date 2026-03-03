@@ -1,6 +1,6 @@
 # Moodverter Genel Plan (YouTube + Perfect Transition)
 
-> Son güncelleme: 19 Şubat 2026
+> Son güncelleme: 03 Mart 2026
 > Kapsam: YouTube core playback + moment-level transition discovery
 
 ## Özet
@@ -111,9 +111,18 @@ Kabul kriterleri:
 - Handoff envelope (`duck/ramp/hold`) benchmark bottom-seed metriklerine gore adaptif hale getirildi.
 - Cok yavas aglarda startup/playback stall etkisini azaltan oynatma baslangic toparlama adimi eklendi.
 - Uygulama genelindeki panel/buton metinleri daha sade ve tutarli terminolojiye cekildi.
+- Transition API vNext kontrati eklendi (`confidenceScore`, `diversityPenalty`, `learningBias`, yeni gate reason seti).
+- Low-confidence fallback akisi eklendi: auto skip + optional manual queue suggestion.
+- Transition paneline confidence badge ve onerilen manuel gecis (tek tik uygulama) eklendi.
+- Runtime telemetry artifact alanlari genisletildi (`decisionReasonPrimary`, `fallbackTriggered`, `manualQueueSuggested`, `manualAccepted`).
+- Pair-level feedback modeli + bounded learning bias + 7 gun TTL blacklist eklendi.
+- Retrieval tarafinda dinamik diversity budget (seed tier'e gore) ve ayni artist tekrar cezasi eklendi.
+- Benchmark merge gate'e coverage kosulu eklendi (`coverageRate >= minCoverage`).
+- Bottom-3 seed icin 3 kosu ust uste tekrar durumunda high-priority escalation eklendi.
+- Content-aware envelope v2 + silence-aware pre-duck opsiyonu eklendi.
 
 ### Yapilacak (Sprint Scope)
-- Bu sprintte acik kalan zorunlu uygulama maddesi yok.
+- Task 12 kapsaminda phase dokumani checklist kapanislarini tamamla.
 - Aktif urun/kalite takip maddeleri asagidaki `Next` bolumunde tutulur.
 
 ## Sprint Plani (Baslangic: 2026-02-17)

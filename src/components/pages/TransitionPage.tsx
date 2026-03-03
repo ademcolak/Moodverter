@@ -32,9 +32,12 @@ export interface TransitionPageProps {
   autoTransitionLeadMs: number;
   lastAutoTransitionLatencyMs: number | null;
   autoDecisionSummary: string | null;
+  manualSuggestionReasons: string[];
+  suggestedManualCandidate: TransitionCandidate | null;
   canSendFeedback: boolean;
   lastFeedbackLabel: string | null;
   onRefreshCandidates: () => void;
+  onApplySuggestedManual: () => void;
   onNowTransition: (candidate: TransitionCandidate) => void;
   onSubmitFeedback: (value: 'good' | 'ok' | 'bad') => void;
 }
@@ -49,9 +52,12 @@ export function TransitionPage({
   autoTransitionLeadMs,
   lastAutoTransitionLatencyMs,
   autoDecisionSummary,
+  manualSuggestionReasons,
+  suggestedManualCandidate,
   canSendFeedback,
   lastFeedbackLabel,
   onRefreshCandidates,
+  onApplySuggestedManual,
   onNowTransition,
   onSubmitFeedback,
 }: TransitionPageProps) {
@@ -89,6 +95,25 @@ export function TransitionPage({
         {autoDecisionSummary && (
           <div className="mt-1 text-[11px] text-amber-300">
             {autoDecisionSummary}
+          </div>
+        )}
+        {suggestedManualCandidate && (
+          <div className="mt-2 border border-amber-400/30 bg-amber-500/10 px-2 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <div
+                className="text-[11px] text-amber-200 truncate"
+                title={manualSuggestionReasons.join(' + ')}
+              >
+                Onerilen manuel gecis: {libraryTrackMap.get(suggestedManualCandidate.targetTrackId)?.name ?? suggestedManualCandidate.targetTrackId}
+              </div>
+              <button
+                type="button"
+                onClick={onApplySuggestedManual}
+                className="px-2 py-1 text-[10px] border border-amber-300/40 text-amber-200 hover:text-white"
+              >
+                Uygula
+              </button>
+            </div>
           </div>
         )}
         <div className="mt-2 flex items-center gap-2">
@@ -182,6 +207,9 @@ export function TransitionPage({
                     <div className="flex flex-col items-end gap-2 shrink-0">
                       <div className="text-xs text-emerald-300">
                         Uyum {formatPercent(candidate.score.finalScore)}
+                      </div>
+                      <div className="text-[10px] text-sky-300 border border-sky-400/30 px-1 py-0.5">
+                        Guven {formatPercent(candidate.confidenceScore)}
                       </div>
                       <button
                         type="button"

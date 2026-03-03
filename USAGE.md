@@ -33,10 +33,13 @@ pnpm dev
 7. Geçiş öncesi hedef şarkı için warmup/prefetch hazırlığı arka planda çalışır.
 8. Geçiş sırasında hedef zamanına start-time cue ile atlanır ve loudness smoothing uygulanır.
 9. Geçişten hemen önce handoff pre-duck (pseudo-crossfade) uygulanır.
-10. İstersen source moment ayarı yap:
-11. `Pinle`: slider konumunu kullan.
-12. `Simdiki Ani Al`: o anki playback zamanını al.
-13. `Oto`: pinlemeyi kaldır.
+10. Düsuk guvenli kararda auto skip olur; sistem onerilen manuel gecisi panelde tek tikla sunar.
+11. Transition kartlarinda confidence badge gorunur.
+12. Geçiş geri bildirimi (`iyi / idare eder / kotu`) pair-level ogrenme modeline islenir.
+13. İstersen source moment ayarı yap:
+14. `Pinle`: slider konumunu kullan.
+15. `Simdiki Ani Al`: o anki playback zamanını al.
+16. `Oto`: pinlemeyi kaldır.
 
 ## 4) Yapıldı (Kullanım Tarafı)
 
@@ -63,6 +66,11 @@ pnpm dev
 - [x] Transition adayinda explainability (`Neden bu aday?`, 3-4 neden)
 - [x] History ekraninda `skip reason trend` + `son 20 gecis kalite trendi`
 - [x] Gecis sonrasi hizli feedback (`iyi / idare eder / kotu`)
+- [x] Low-confidence fallback + manual queue suggestion akisi
+- [x] Transition confidence badge + fallback reason tooltip
+- [x] Pair-level feedback ogrenme modeli + TTL blacklist
+- [x] Silence-aware pre-duck opsiyonu
+- [x] History ekraninda "en cok skip ureten seed" ve "en cok kotu feedback alan pair" kartlari
 - [x] Bottom-3 diagnostic bundle üretimi (`tuning:loop --diagnostic-bundle-out`)
 - [x] `seedSetHash + runMode` metadata zorunlulugu ve karsilastirma korumasi
 - [x] Retrieval quality raporuna cesitlilik metriği (`uniqueTargetRatio`)
@@ -111,6 +119,7 @@ pnpm run smoke:real-mini-run
 - Tuning action önerilerini benchmark geçmişi ile doğrulamadan ağırlık/penalty güncellemesini kalıcılaştırma.
 - Her scoring/penalty değişikliğinden sonra benchmark baseline + regression gate’i tekrar çalıştır.
 - Runtime gate (`Latency p95`, `Stall`, `Drop`) bozulursa tuning’i reddet.
+- Benchmark merge gate kararinda coverage kosulunu zorunlu tut (`coverageRate >= 0.80`).
 - Scoring/formül değişikliğinde smoke testleri zorunlu çalıştır (önerilen tek komut: `pnpm run pipeline:quality`).
 - Baseline metrik davranışını etkileyen değişiklikte test ekle/güncelle.
 - Subjektif ses kalitesi dışındaki kontrolleri önce otomasyonla doğrula.
@@ -123,7 +132,7 @@ pnpm run smoke:real-mini-run
 Kaynak: `docs/PLAN.md` altındaki `Next` bölümü.
 Detayli execution tasklist: `docs/phases/phase-05-eval-reliability-tuning-ops.md`.
 
-- [ ] Labelled seed sayısını en az 10 seviyesinde sürekli koru
-- [ ] Seed başına minimum 2 relevant target etiketini koru
-- [ ] Düşük performanslı (`Bottom-3`) seed’ler için düzenli score breakdown + tuning döngüsü yürüt
-- [ ] Her scoring/penalty değişikliğinden sonra benchmark baseline + regression gate çalıştır
+- [x] Labelled seed sayısını en az 10 seviyesinde sürekli koru (benchmark auto-bootstrap + label gate guard)
+- [x] Seed başına minimum 2 relevant target etiketini koru (baseline run gate + benchmark gap kontrolü)
+- [x] Düşük performanslı (`Bottom-3`) seed’ler için düzenli score breakdown + tuning döngüsü yürüt (`tuning:loop` + escalation)
+- [x] Her scoring/penalty değişikliğinden sonra benchmark baseline + regression gate çalıştır (`pipeline:quality` zorunlu akış)

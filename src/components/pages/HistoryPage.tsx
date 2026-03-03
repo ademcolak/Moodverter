@@ -1,4 +1,9 @@
-import type { BaselineRunArtifact, TransitionRuntimeEvent } from '../../services/transition';
+import type {
+  BaselineRunArtifact,
+  TransitionFeedbackModel,
+  TransitionRuntimeEvent,
+} from '../../services/transition';
+import type { UnifiedTrack } from '../../types/provider';
 
 export interface TransitionFeedbackEntry {
   eventKey: string;
@@ -11,11 +16,22 @@ export interface HistoryPageProps {
   baselineHistory: BaselineRunArtifact[];
   runtimeEvents: TransitionRuntimeEvent[];
   feedbackEvents: TransitionFeedbackEntry[];
+  feedbackModel: TransitionFeedbackModel;
+  libraryTrackMap: Map<string, UnifiedTrack>;
 }
 
 function formatPercent(value: number): string {
   if (!Number.isFinite(value)) return '--';
   return `${Math.round(value * 100)}%`;
+}
+
+function formatRemainingTime(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return 'expired';
+  const totalMinutes = Math.floor(ms / 60_000);
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  return `${hours}h`;
 }
 
 function scoreRuntimeQuality(event: TransitionRuntimeEvent): number {
@@ -31,6 +47,8 @@ export function HistoryPage({
   baselineHistory,
   runtimeEvents,
   feedbackEvents,
+  feedbackModel,
+  libraryTrackMap,
 }: HistoryPageProps) {
   const recentRuntime = runtimeEvents.slice(0, 20);
   const skipReasonCounts = recentRuntime.reduce<Map<string, number>>((counts, event) => {
@@ -75,6 +93,33 @@ export function HistoryPage({
     })
     .sort((a, b) => b.combinedSignal - a.combinedSignal)
     .slice(0, 5);
+  const mostSkippedSeed = [...recentRuntime.reduce<Map<string, number>>((counts, event) => {
+    if (!event.skippedAutoTransition) return counts;
+    counts.set(event.sourceTrackId, (counts.get(event.sourceTrackId) ?? 0) + 1);
+    return counts;
+  }, new Map()).entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] ?? null;
+  const worstPair = Object.values(feedbackModel.byPair)
+    .filter((pair) => pair.totalCount > 0)
+    .sort((a, b) => {
+      if (a.meanScore !== b.meanScore) return a.meanScore - b.meanScore;
+      return b.badCount - a.badCount;
+    })[0] ?? null;
+  const nowMs = Number.isFinite(Date.parse(feedbackModel.updatedAt))
+    ? Date.parse(feedbackModel.updatedAt)
+    : 0;
+  const activeBlacklistedPairs = Object.values(feedbackModel.byPair)
+    .filter((pair) => {
+      if (!pair.blacklistUntil) return false;
+      const blacklistUntilMs = Date.parse(pair.blacklistUntil);
+      return Number.isFinite(blacklistUntilMs) && blacklistUntilMs > nowMs;
+    })
+    .sort((a, b) => {
+      const aUntil = Date.parse(a.blacklistUntil ?? '');
+      const bUntil = Date.parse(b.blacklistUntil ?? '');
+      return aUntil - bUntil;
+    });
+  const blacklistPreview = activeBlacklistedPairs.slice(0, 3);
 
   return (
     <div className="h-full min-h-0 overflow-hidden flex flex-col gap-4">
@@ -83,6 +128,35 @@ export function HistoryPage({
         <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
           Geçiş geçmişi, skip reason trendi ve kalite sinyalleri.
         </p>
+      </section>
+
+      <section className="bg-[var(--color-surface)] border border-white/10 p-4">
+        <div className="text-xs uppercase tracking-wide text-[var(--color-text-secondary)]">
+          Operasyon Kartları
+        </div>
+        <div className="mt-2 text-sm text-[var(--color-text-primary)]">
+          En cok skip ureten seed:{' '}
+          {mostSkippedSeed
+            ? `${libraryTrackMap.get(mostSkippedSeed[0])?.name ?? mostSkippedSeed[0]} (${mostSkippedSeed[1]})`
+            : 'N/A'}
+          {' | '} En cok kotu feedback alan pair:{' '}
+          {worstPair
+            ? `${libraryTrackMap.get(worstPair.sourceTrackId)?.name ?? worstPair.sourceTrackId} -> ${libraryTrackMap.get(worstPair.targetTrackId)?.name ?? worstPair.targetTrackId} (bad ${worstPair.badCount}, mean ${formatPercent(worstPair.meanScore)})`
+            : 'N/A'}
+          {' | '} Aktif blacklist pair: {activeBlacklistedPairs.length}
+        </div>
+        {blacklistPreview.length > 0 && (
+          <div className="mt-2 text-[11px] text-[var(--color-text-secondary)]">
+            Blacklist expiry: {blacklistPreview
+              .map((pair) => {
+                const remainingMs = Date.parse(pair.blacklistUntil ?? '') - nowMs;
+                const sourceName = libraryTrackMap.get(pair.sourceTrackId)?.name ?? pair.sourceTrackId;
+                const targetName = libraryTrackMap.get(pair.targetTrackId)?.name ?? pair.targetTrackId;
+                return `${sourceName} -> ${targetName} (${formatRemainingTime(remainingMs)})`;
+              })
+              .join(' | ')}
+          </div>
+        )}
       </section>
 
       <section className="bg-[var(--color-surface)] border border-white/10 p-4">

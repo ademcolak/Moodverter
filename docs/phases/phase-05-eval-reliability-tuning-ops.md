@@ -56,7 +56,7 @@ Transition kalitesini yalnizca skorla degil, karar guvenilirligi + runtime sagli
 ## Checklist (Chronological)
 
 ### M0 - Baseline Contract Freeze
-- [ ] Phase 04 threshold/default degerlerini Phase 05 baslangic referansi olarak sabitle.
+- [x] Phase 04 threshold/default degerlerini Phase 05 baslangic referansi olarak sabitle.
 - [x] Scope kuralini sertlestir: farkli `scopeId` ile karsilastirmayi hard-fail yap.
 - [x] Benchmark artifact schema version alanini arttir.
 
@@ -75,9 +75,9 @@ Transition kalitesini yalnizca skorla degil, karar guvenilirligi + runtime sagli
 
 ### M3 - Transition Smoothness & Decision Policy vNext
 - [x] Final score yanina `smoothnessScore` ekseni ekle.
-- [ ] Karar politikasi: dusuk guvende gecis yerine skip + fallback anini zorunlu kil.
-- [ ] Icerik-farkindali envelope ayari ekle (vocal-heavy, bass-heavy, build-up).
-- [ ] Skip kararlarinin reason taxonomy'sini standardize et.
+- [x] Karar politikasi: dusuk guvende gecis yerine skip + fallback anini zorunlu kil.
+- [x] Icerik-farkindali envelope ayari ekle (vocal-heavy, bass-heavy, build-up).
+- [x] Skip kararlarinin reason taxonomy'sini standardize et.
 
 ### M4 - Retrieval & Rerank Precision
 - [x] Near-duplicate target moment baskilama kurali ekle.
@@ -94,7 +94,7 @@ Transition kalitesini yalnizca skorla degil, karar guvenilirligi + runtime sagli
 ### M6 - Quality Gates & CI Hardening
 - [x] `pipeline:quality` icine real dataset mini-run adimi ekle.
 - [x] Scoring/penalty degisimi oldugunda before/after raporu zorunlu kil.
-- [ ] Regression + runtime gate birlikte PASS olmadan tuning merge edilmesin.
+- [x] Regression + runtime gate birlikte PASS olmadan tuning merge edilmesin.
 - [x] OSS guard + retrieval gate + transition gate adimlarini zorunlu zincirde tut.
 
 ## Test Plani
@@ -120,19 +120,19 @@ Transition kalitesini yalnizca skorla degil, karar guvenilirligi + runtime sagli
   - [x] real mini-run adimi pipeline sirasinda zorunlu.
 
 ### Acceptance
-- [ ] Hit@3/Hit@5 dususu olmadan tuning yapilabilmeli.
+- [x] Hit@3/Hit@5 dususu olmadan tuning yapilabilmeli.
 - [x] Runtime gate gercek ornekle PASS/FALL kararini uretebilmeli.
 - [x] Bottom-3 icin otomatik diagnostic bundle her run'da cikmali.
 - [x] UI `why chosen` ve `skip reason` bilgisi gozle gorulur olmali.
 - [x] `pipeline:quality` tek komutta tum zorunlu gate'leri gecmeli.
 
 ## Risk & Mitigation
-- [ ] Risk: Fazla gate nedeniyle gecis sayisi asiri dusebilir.
-- [ ] Mitigation: threshold kalibrasyonu + controlled rollout.
-- [ ] Risk: Real mini-run CI suresini uzatir.
-- [ ] Mitigation: kucuk sabit fixture dataset + zaman limiti.
-- [ ] Risk: Feedback verisi gurultulu olabilir.
-- [ ] Mitigation: feedback'i tek basina degil benchmark sinyalleriyle agirliklandir.
+- [x] Risk: Fazla gate nedeniyle gecis sayisi asiri dusebilir.
+- [x] Mitigation: threshold kalibrasyonu + controlled rollout (`Decision Matrix` smoke gate + runtime telemetry trend).
+- [x] Risk: Real mini-run CI suresini uzatir.
+- [x] Mitigation: kucuk sabit fixture dataset + zaman limiti (pipeline adimi fixture tabanli tutuldu).
+- [x] Risk: Feedback verisi gurultulu olabilir.
+- [x] Mitigation: feedback'i tek basina degil benchmark sinyalleriyle agirliklandir (bounded bias + TTL blacklist + benchmark merge/coverage gate).
 
 ## Defaults (Phase 05 Baslangic)
 - [x] `minRuntimeSamples = 10`
@@ -140,7 +140,30 @@ Transition kalitesini yalnizca skorla degil, karar guvenilirligi + runtime sagli
 - [x] `bottomSeedCount = 3`
 - [x] `whyChosenReasonCount = 3`
 - [x] `diversityBudgetTopN = 5`
-- [ ] `fallbackOnLowConfidence = true`
+- [x] `fallbackOnLowConfidence = true`
+
+## VNext Addendum (2026-03-03)
+- [x] `TransitionGateReason` taxonomy genisletildi:
+  - [x] `DUPLICATE_CLUSTER`
+  - [x] `LOW_CONFIDENCE_FALLBACK`
+  - [x] `HIGH_ARTIFACT_RISK`
+  - [x] `MANUAL_QUEUE_SUGGESTED`
+- [x] `TransitionCandidate` alanlari genisletildi:
+  - [x] `confidenceScore`
+  - [x] `diversityPenalty`
+  - [x] `learningBias`
+- [x] Runtime event telemetry kontrati genisletildi:
+  - [x] `confidenceScore`
+  - [x] `decisionReasonPrimary`
+  - [x] `fallbackTriggered`
+  - [x] `manualQueueSuggested`
+  - [x] `manualAccepted`
+- [x] Pair-level `TransitionFeedbackModel` + 7 gun TTL blacklist eklendi.
+- [x] Retrieval tarafinda seed-tier'e bagli dinamik diversity budget eklendi.
+- [x] Low-confidence fallback durumunda manual queue suggestion UI akisi eklendi.
+- [x] Content-aware envelope v2 ve silence-aware pre-duck provider optionu eklendi.
+- [x] Benchmark merge gate coverage kosulu ile sertlestirildi (`minCoverage = 0.80`).
+- [x] Bottom-3 ayni seed 3 run tekrarinda high-priority escalation eklendi.
 
 ## Uygulama Notlari (karar tamamlayici)
 1. Bu faz mevcut kodu degistirmeden once dokuman ve schema kontratini netlestirme odakli acilmalidir.

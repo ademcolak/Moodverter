@@ -24,11 +24,15 @@ import type {
   BottomSeedDiagnostic,
   BottomSeedDiagnosticBundle,
   TransitionCandidate,
+  TransitionFeedbackEntry,
+  TransitionFeedbackModel,
+  TransitionFeedbackPairStats,
   TransitionDecisionExplain,
   TransitionDecision,
   TransitionEdgeScore,
   TransitionGateReason,
   TransitionGateResult,
+  TransitionPerformanceTier,
   TransitionScoreDiagnostic,
   TransitionScoreDriver,
   TransitionEventType,
@@ -44,6 +48,28 @@ import { createRetrievalIndex } from './retrieval-index';
 const ANALYSIS_VERSION = 2;
 const BASELINE_RUN_SCHEMA_VERSION = 2;
 export const TRANSITION_SCORING_VERSION = 'v2';
+export const TRANSITION_VNEXT_ENABLED = true;
+export const LEARNING_BIAS_ENABLED = true;
+export const SILENCE_AWARE_ENVELOPE_ENABLED = true;
+export const PHASE_04_BASELINE_REFERENCE = Object.freeze({
+  decisionPolicy: {
+    minTop1Score: 0.62,
+    minTop1Top2Margin: 0.06,
+    maxArtifactPenalty: 0.58,
+  },
+  hardGate: {
+    minEventConfidence: 0.45,
+    maxTempoRatioDistance: 0.35,
+    maxKeyDistanceClass: 4,
+    maxLoudnessJumpDb: 9,
+  },
+  runtimeGate: {
+    minTransitionRuntimeSampleCount: 10,
+    maxTransitionLatencyP95Ms: 2200,
+    maxTransitionStallRate: 0.2,
+    maxTransitionDropRate: 0.1,
+  },
+});
 
 const STORAGE_KEYS = {
   queue: 'moodverter_transition_analysis_queue',
@@ -51,6 +77,8 @@ const STORAGE_KEYS = {
   nodes: 'moodverter_transition_nodes',
   baselineRuns: 'moodverter_transition_baseline_runs',
   runtimeEvents: 'moodverter_transition_runtime_events',
+  trackMetadata: 'moodverter_transition_track_metadata',
+  feedbackModel: 'moodverter_transition_feedback_model',
 } as const;
 
 const SCORE_WEIGHTS = {
@@ -65,26 +93,29 @@ export const TRANSITION_SCORE_WEIGHTS = {
 } as const;
 
 export const DEFAULT_RUNTIME_GATE_THRESHOLDS = {
-  minTransitionRuntimeSampleCount: 10,
-  maxTransitionLatencyP95Ms: 2200,
-  maxTransitionStallRate: 0.2,
-  maxTransitionDropRate: 0.1,
+  ...PHASE_04_BASELINE_REFERENCE.runtimeGate,
 } as const;
 
 export const DEFAULT_HARD_GATE_CONFIG: HardGateConfig = {
-  minEventConfidence: 0.45,
-  maxTempoRatioDistance: 0.35,
-  maxKeyDistanceClass: 4,
-  maxLoudnessJumpDb: 9,
+  ...PHASE_04_BASELINE_REFERENCE.hardGate,
 };
 
 export const DEFAULT_AUTO_TRANSITION_DECISION_CONFIG: AutoTransitionDecisionConfig = {
-  minTop1Score: 0.62,
-  minTop1Top2Margin: 0.06,
-  maxArtifactPenalty: 0.58,
+  ...PHASE_04_BASELINE_REFERENCE.decisionPolicy,
+  confidenceThreshold: 0.58,
+  fallbackOnLowConfidence: true,
+  manualQueueOnLowConfidence: true,
 };
-const DIVERSITY_BUDGET_TOP_N = 5;
+const DIVERSITY_BUDGET_BY_TIER: Record<TransitionPerformanceTier, number> = {
+  high: 3,
+  mid: 5,
+  low: 7,
+};
 const NEAR_DUPLICATE_TARGET_WINDOW_MS = 5000;
+const FEEDBACK_BAD_STREAK_BLACKLIST_THRESHOLD = 3;
+const FEEDBACK_BLACKLIST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const LEARNING_BIAS_MAX_ABS = 0.12;
+const BENCHMARK_MINIMUM_COVERAGE_DEFAULT = 0.8;
 
 const EVENT_COMPATIBILITY: Record<string, Partial<Record<string, number>>> = {
   'scream-hit': {
@@ -173,8 +204,13 @@ let isHydrated = false;
 let analysisQueue: string[] = [];
 let analysisStates: Record<string, AnalysisState> = {};
 let nodesByTrack: Record<string, TransitionNode[]> = {};
+let trackMetadataById: Record<string, { name: string; artist: string }> = {};
 let baselineRunHistory: BaselineRunArtifact[] = [];
 let transitionRuntimeEvents: TransitionRuntimeEvent[] = [];
+let transitionFeedbackModel: TransitionFeedbackModel = {
+  updatedAt: nowIsoString(),
+  byPair: {},
+};
 let isStorageWriteDisabled = false;
 const warnedStorageKeys = new Set<string>();
 
@@ -285,7 +321,12 @@ function parseTransitionScoreDriver(value: unknown): TransitionScoreDriver | nul
 }
 
 function isTransitionGateReason(value: unknown): value is TransitionGateReason {
-  return value === 'EVENT_MISMATCH'
+  return value === 'NO_CANDIDATE'
+    || value === 'DUPLICATE_CLUSTER'
+    || value === 'LOW_CONFIDENCE_FALLBACK'
+    || value === 'HIGH_ARTIFACT_RISK'
+    || value === 'MANUAL_QUEUE_SUGGESTED'
+    || value === 'EVENT_MISMATCH'
     || value === 'LOW_EVENT_CONFIDENCE'
     || value === 'TEMPO_OUT_OF_RANGE'
     || value === 'KEY_DISTANCE_HIGH'
@@ -400,6 +441,8 @@ function sanitizeBaselineTuningAction(value: unknown): BaselineTuningAction | nu
     issue,
     recommendation,
     confidence: clamp(toFiniteNumber(entry.confidence, 0.5), 0, 1),
+    priority: entry.priority === 'high' ? 'high' : 'normal',
+    escalationReason: typeof entry.escalationReason === 'string' ? entry.escalationReason : null,
     gateFailSampleCount,
     gateFailDistribution,
   };
@@ -428,6 +471,72 @@ function sanitizeTransitionRuntimeEvent(value: unknown): TransitionRuntimeEvent 
     mode,
     skippedAutoTransition: Boolean(entry.skippedAutoTransition),
     skipReasons: parseTransitionGateReasons(entry.skipReasons),
+    confidenceScore: toOptionalFiniteRate(entry.confidenceScore) ?? undefined,
+    decisionReasonPrimary: parseTransitionGateReasons([entry.decisionReasonPrimary])[0],
+    fallbackTriggered: Boolean(entry.fallbackTriggered),
+    manualQueueSuggested: Boolean(entry.manualQueueSuggested),
+    manualAccepted: Boolean(entry.manualAccepted),
+  };
+}
+
+function sanitizeFeedbackPairStats(value: unknown): TransitionFeedbackPairStats | null {
+  if (!value || typeof value !== 'object') return null;
+  const entry = value as Record<string, unknown>;
+  const sourceTrackId = typeof entry.sourceTrackId === 'string' ? entry.sourceTrackId.trim() : '';
+  const targetTrackId = typeof entry.targetTrackId === 'string' ? entry.targetTrackId.trim() : '';
+  if (!sourceTrackId || !targetTrackId) return null;
+  const pairKey = typeof entry.pairKey === 'string' && entry.pairKey.trim().length > 0
+    ? entry.pairKey.trim()
+    : `${sourceTrackId}->${targetTrackId}`;
+  const updatedAt = typeof entry.updatedAt === 'string' && entry.updatedAt.trim().length > 0
+    ? entry.updatedAt
+    : nowIsoString();
+  const totalCount = Math.max(0, Math.floor(toFiniteNumber(entry.totalCount, 0)));
+  const goodCount = Math.max(0, Math.floor(toFiniteNumber(entry.goodCount, 0)));
+  const okCount = Math.max(0, Math.floor(toFiniteNumber(entry.okCount, 0)));
+  const badCount = Math.max(0, Math.floor(toFiniteNumber(entry.badCount, 0)));
+  const meanScore = clamp(toFiniteNumber(entry.meanScore, 0.5), 0, 1);
+  const badStreak = Math.max(0, Math.floor(toFiniteNumber(entry.badStreak, 0)));
+  const blacklistUntil = typeof entry.blacklistUntil === 'string' && entry.blacklistUntil.trim().length > 0
+    ? entry.blacklistUntil
+    : undefined;
+  return {
+    pairKey,
+    sourceTrackId,
+    targetTrackId,
+    totalCount: totalCount > 0 ? totalCount : goodCount + okCount + badCount,
+    goodCount,
+    okCount,
+    badCount,
+    meanScore,
+    badStreak,
+    updatedAt,
+    ...(blacklistUntil ? { blacklistUntil } : {}),
+  };
+}
+
+function sanitizeTransitionFeedbackModel(value: unknown): TransitionFeedbackModel {
+  if (!value || typeof value !== 'object') {
+    return {
+      updatedAt: nowIsoString(),
+      byPair: {},
+    };
+  }
+  const entry = value as Record<string, unknown>;
+  const rawByPair = (entry.byPair && typeof entry.byPair === 'object')
+    ? (entry.byPair as Record<string, unknown>)
+    : {};
+  const byPair = Object.fromEntries(
+    Object.entries(rawByPair)
+      .map(([, pairStats]) => sanitizeFeedbackPairStats(pairStats))
+      .filter((pairStats): pairStats is TransitionFeedbackPairStats => pairStats !== null)
+      .map((pairStats) => [pairStats.pairKey, pairStats])
+  );
+  return {
+    updatedAt: typeof entry.updatedAt === 'string' && entry.updatedAt.trim().length > 0
+      ? entry.updatedAt
+      : nowIsoString(),
+    byPair,
   };
 }
 
@@ -469,6 +578,22 @@ function hydrateFromStorage(): void {
   analysisQueue = readStorage<string[]>(STORAGE_KEYS.queue, []);
   analysisStates = readStorage<Record<string, AnalysisState>>(STORAGE_KEYS.states, {});
   const rawNodesByTrack = readStorage<Record<string, TransitionNode[]>>(STORAGE_KEYS.nodes, {});
+  const rawTrackMetadata = readStorage<Record<string, { name?: unknown; artist?: unknown }>>(
+    STORAGE_KEYS.trackMetadata,
+    {}
+  );
+  trackMetadataById = Object.fromEntries(
+    Object.entries(rawTrackMetadata).map(([rawTrackId, metadata]) => {
+      const trackId = rawTrackId.trim();
+      const typedMetadata = metadata as { name?: unknown; artist?: unknown } | undefined;
+      const name = typeof typedMetadata?.name === 'string' ? typedMetadata.name.trim() : trackId;
+      const artist = typeof typedMetadata?.artist === 'string' ? typedMetadata.artist.trim() : 'Unknown Artist';
+      return [trackId, { name: name || trackId, artist: artist || 'Unknown Artist' }] as const;
+    }).filter(([trackId]) => trackId.length > 0)
+  );
+  transitionFeedbackModel = sanitizeTransitionFeedbackModel(
+    readStorage<TransitionFeedbackModel | null>(STORAGE_KEYS.feedbackModel, null)
+  );
   baselineRunHistory = readStorage<BaselineRunArtifact[]>(STORAGE_KEYS.baselineRuns, [])
     .filter((run) => typeof run?.runAt === 'string' && Array.isArray(run?.seedTrackIds))
     .map((run) => {
@@ -661,6 +786,21 @@ function hydrateFromStorage(): void {
         runtimeGateSummary: typeof run.runtimeGateSummary === 'string'
           ? run.runtimeGateSummary
           : null,
+        averageDecisionConfidenceScore: toOptionalFiniteRate(run.averageDecisionConfidenceScore),
+        fallbackTriggeredCount: Math.max(0, Math.floor(Number(run.fallbackTriggeredCount ?? 0))),
+        manualQueueSuggestedCount: Math.max(0, Math.floor(Number(run.manualQueueSuggestedCount ?? 0))),
+        manualQueueAcceptedCount: Math.max(0, Math.floor(Number(run.manualQueueAcceptedCount ?? 0))),
+        benchmarkMergeGateEnforced: Boolean(run.benchmarkMergeGateEnforced),
+        benchmarkMergeGatePassed: typeof run.benchmarkMergeGatePassed === 'boolean'
+          ? run.benchmarkMergeGatePassed
+          : true,
+        benchmarkMergeGateSummary: typeof run.benchmarkMergeGateSummary === 'string'
+          ? run.benchmarkMergeGateSummary
+          : null,
+        minimumCoverageRate: clamp(toFiniteNumber(run.minimumCoverageRate, BENCHMARK_MINIMUM_COVERAGE_DEFAULT), 0, 1),
+        coverageGatePassed: typeof run.coverageGatePassed === 'boolean'
+          ? run.coverageGatePassed
+          : true,
         runtimeGateThresholds: {
           minTransitionRuntimeSampleCount: Math.max(
             1,
@@ -760,8 +900,10 @@ function persistStorage(): void {
   writeStorage(STORAGE_KEYS.queue, analysisQueue);
   writeStorage(STORAGE_KEYS.states, analysisStates);
   writeStorage(STORAGE_KEYS.nodes, nodesByTrack);
+  writeStorage(STORAGE_KEYS.trackMetadata, trackMetadataById);
   writeStorage(STORAGE_KEYS.baselineRuns, baselineRunHistory);
   writeStorage(STORAGE_KEYS.runtimeEvents, transitionRuntimeEvents);
+  writeStorage(STORAGE_KEYS.feedbackModel, transitionFeedbackModel);
 }
 
 function setAnalysisState(
@@ -912,6 +1054,86 @@ function getEventFamily(eventType: TransitionEventType): string {
   return 'other';
 }
 
+function toUnixMs(iso: string | undefined): number | null {
+  if (!iso) return null;
+  const value = Date.parse(iso);
+  return Number.isFinite(value) ? value : null;
+}
+
+function buildFeedbackPairKey(sourceTrackId: string, targetTrackId: string): string {
+  return `${sourceTrackId}->${targetTrackId}`;
+}
+
+function getFeedbackPairStats(sourceTrackId: string, targetTrackId: string): TransitionFeedbackPairStats | null {
+  const key = buildFeedbackPairKey(sourceTrackId, targetTrackId);
+  return transitionFeedbackModel.byPair[key] ?? null;
+}
+
+function isFeedbackPairBlacklisted(
+  sourceTrackId: string,
+  targetTrackId: string,
+  nowMs = Date.now()
+): boolean {
+  const pair = getFeedbackPairStats(sourceTrackId, targetTrackId);
+  if (!pair?.blacklistUntil) return false;
+  const blacklistUntilMs = toUnixMs(pair.blacklistUntil);
+  if (blacklistUntilMs === null) return false;
+  return nowMs < blacklistUntilMs;
+}
+
+function computeLearningBias(
+  sourceTrackId: string,
+  targetTrackId: string
+): number {
+  if (!LEARNING_BIAS_ENABLED) return 0;
+  const pair = getFeedbackPairStats(sourceTrackId, targetTrackId);
+  if (!pair) return 0;
+  const centered = (pair.meanScore - 0.5) * 2;
+  const confidence = clamp(pair.totalCount / 6, 0, 1);
+  return clamp(centered * LEARNING_BIAS_MAX_ABS * confidence, -LEARNING_BIAS_MAX_ABS, LEARNING_BIAS_MAX_ABS);
+}
+
+function resolveSeedPerformanceTier(
+  sourceTrackId: string,
+  requestedTier?: TransitionPerformanceTier
+): TransitionPerformanceTier {
+  if (requestedTier) return requestedTier;
+  const latestRun = [...baselineRunHistory]
+    .reverse()
+    .find((run) => run.bottomSeeds.some((seed) => seed.trackId === sourceTrackId));
+  const seedSnapshot = latestRun?.bottomSeeds.find((seed) => seed.trackId === sourceTrackId);
+  if (!seedSnapshot) return 'mid';
+  if (seedSnapshot.meanTopKScore >= 0.72) return 'high';
+  if (seedSnapshot.meanTopKScore < 0.55) return 'low';
+  return 'mid';
+}
+
+function resolveDiversityBudgetTopN(
+  limit: number,
+  seedTier: TransitionPerformanceTier
+): number {
+  const targetBudget = DIVERSITY_BUDGET_BY_TIER[seedTier];
+  return Math.max(2, Math.min(limit, targetBudget));
+}
+
+function computeDecisionConfidenceScore(input: {
+  topCandidate: TransitionCandidate;
+  top1Top2Margin: number | null;
+  gateReasonsCount: number;
+}): number {
+  const marginScore = input.top1Top2Margin === null ? 1 : clamp(input.top1Top2Margin / 0.2, 0, 1);
+  const gatePenalty = clamp(input.gateReasonsCount / 5, 0, 1);
+  const artifactRisk = clamp(input.topCandidate.score.artifactPenalty, 0, 1);
+  return clamp(
+    input.topCandidate.score.finalScore * 0.55
+      + marginScore * 0.25
+      + (1 - artifactRisk) * 0.15
+      + (1 - gatePenalty) * 0.05,
+    0,
+    1
+  );
+}
+
 function resolveHardGateConfig(config: Partial<HardGateConfig> = {}): HardGateConfig {
   return {
     minEventConfidence: clamp(
@@ -1012,6 +1234,15 @@ function resolveAutoTransitionDecisionConfig(
       0,
       1
     ),
+    confidenceThreshold: clamp(
+      config.confidenceThreshold ?? DEFAULT_AUTO_TRANSITION_DECISION_CONFIG.confidenceThreshold,
+      0,
+      1
+    ),
+    fallbackOnLowConfidence: config.fallbackOnLowConfidence
+      ?? DEFAULT_AUTO_TRANSITION_DECISION_CONFIG.fallbackOnLowConfidence,
+    manualQueueOnLowConfidence: config.manualQueueOnLowConfidence
+      ?? DEFAULT_AUTO_TRANSITION_DECISION_CONFIG.manualQueueOnLowConfidence,
   };
 }
 
@@ -1030,41 +1261,71 @@ export function decideAutoTransition(
   if (!topCandidate) {
     return {
       selectedCandidate: null,
+      manualQueueCandidate: null,
       decision: 'skipped',
       gate: {
         passed: false,
-        reasons: ['LOW_SCORE'],
+        reasons: ['NO_CANDIDATE'],
       },
       top1Score: null,
       top1Top2Margin: null,
+      confidenceScore: null,
     };
   }
 
   const reasons: TransitionGateReason[] = [];
+  let hasLowConfidence = false;
   const gatePreview = topCandidate.gatePreview;
   if (gatePreview && !gatePreview.wouldPassV3) {
     reasons.push(...gatePreview.reasons);
   }
   if (topCandidate.score.finalScore < decisionConfig.minTop1Score) {
     reasons.push('LOW_SCORE');
+    hasLowConfidence = true;
   }
   if (topCandidate.score.artifactPenalty > decisionConfig.maxArtifactPenalty) {
-    reasons.push('LOW_SCORE');
+    reasons.push('HIGH_ARTIFACT_RISK');
+    hasLowConfidence = true;
   }
   if (
     top1Top2Margin !== null
     && top1Top2Margin < decisionConfig.minTop1Top2Margin
   ) {
     reasons.push('LOW_MARGIN');
+    hasLowConfidence = true;
+  }
+  if (topCandidate.diversityPenalty > 0.6) {
+    reasons.push('DUPLICATE_CLUSTER');
+    hasLowConfidence = true;
+  }
+  if (hasLowConfidence && decisionConfig.fallbackOnLowConfidence) {
+    reasons.push('LOW_CONFIDENCE_FALLBACK');
+  }
+  const confidenceScore = computeDecisionConfidenceScore({
+    topCandidate,
+    top1Top2Margin,
+    gateReasonsCount: reasons.length,
+  });
+  if (confidenceScore < decisionConfig.confidenceThreshold) {
+    reasons.push('LOW_CONFIDENCE_FALLBACK');
+    hasLowConfidence = true;
+  }
+  if (hasLowConfidence && decisionConfig.manualQueueOnLowConfidence) {
+    reasons.push('MANUAL_QUEUE_SUGGESTED');
   }
 
   const gate = normalizeGateResult(reasons);
+  const manualQueueCandidate = gate.passed || !decisionConfig.manualQueueOnLowConfidence
+    ? null
+    : topCandidate;
   return {
     selectedCandidate: gate.passed ? topCandidate : null,
+    manualQueueCandidate,
     decision: gate.passed ? 'selected' : 'skipped',
     gate,
     top1Score,
     top1Top2Margin,
+    confidenceScore,
   };
 }
 
@@ -1309,6 +1570,8 @@ function buildSeedTuningAction(
     issue,
     recommendation: `${buildTuningRecommendation(issue, seed)} ${gateFailSummary}`,
     confidence: clamp(confidenceBase, 0, 1),
+    priority: 'normal',
+    escalationReason: null,
     gateFailSampleCount: gateFailContext.sampleCount,
     gateFailDistribution: gateFailContext.distribution,
   };
@@ -1515,6 +1778,10 @@ export async function analyzeTrackWithHeuristicV1(
   track: Pick<UnifiedTrack, 'id' | 'durationMs' | 'name' | 'artist'>
 ): Promise<AnalysisState> {
   const normalizedTrackId = normalizeTrackId(track.id);
+  trackMetadataById[normalizedTrackId] = {
+    name: track.name.trim() || normalizedTrackId,
+    artist: track.artist.trim() || 'Unknown Artist',
+  };
   await enqueueTrackForAnalysis(normalizedTrackId);
 
   try {
@@ -1532,6 +1799,9 @@ export async function findTransitionCandidates(
   hydrateFromStorage();
 
   const sourceTrackId = normalizeTrackId(input.trackId);
+  const excludedTargetTrackIds = new Set(
+    normalizeTrackIds(input.excludeTargetTrackIds).filter((trackId) => trackId !== sourceTrackId)
+  );
   const sourceNodes = nodesByTrack[sourceTrackId] ?? [];
   if (sourceNodes.length === 0) return [];
 
@@ -1540,11 +1810,9 @@ export async function findTransitionCandidates(
       ? sourceNodes
       : [getSourceNode(sourceNodes, input.sourceTimeMs)];
   const limit = clamp(input.limit ?? 5, 1, 50);
-
-  type CandidateWithTags = TransitionCandidate & {
-    sourceEventType: TransitionEventType;
-    targetEventType: TransitionEventType;
-  };
+  const sourceTier = resolveSeedPerformanceTier(sourceTrackId, input.seedTrackPerformanceTier);
+  const diversityBudgetTopN = resolveDiversityBudgetTopN(limit, sourceTier);
+  const sourceArtistNormalized = (trackMetadataById[sourceTrackId]?.artist ?? '').trim().toLowerCase();
 
   interface TargetNodeReference {
     trackId: string;
@@ -1553,7 +1821,7 @@ export async function findTransitionCandidates(
 
   const targetNodeReferences: TargetNodeReference[] = [];
   Object.entries(nodesByTrack).forEach(([targetTrackId, targetNodes]) => {
-    if (targetTrackId === sourceTrackId) return;
+    if (targetTrackId === sourceTrackId || excludedTargetTrackIds.has(targetTrackId)) return;
     targetNodes.forEach((node) => {
       targetNodeReferences.push({
         trackId: targetTrackId,
@@ -1570,7 +1838,7 @@ export async function findTransitionCandidates(
     }))
   );
 
-  const candidates: CandidateWithTags[] = [];
+  const candidates: TransitionCandidate[] = [];
   const retrievalPoolLimit = Math.min(
     targetNodeReferences.length,
     Math.max(limit * 18, 40)
@@ -1585,8 +1853,11 @@ export async function findTransitionCandidates(
       : targetNodeReferences;
 
     retrievalPool.forEach((targetEntry) => {
+      if (excludedTargetTrackIds.has(targetEntry.trackId)) return;
+      if (isFeedbackPairBlacklisted(sourceTrackId, targetEntry.trackId)) return;
       const score = scoreTransition(sourceNode, targetEntry.node);
       const gatePreview = applyHardGate(sourceNode, targetEntry.node);
+      const learningBias = computeLearningBias(sourceTrackId, targetEntry.trackId);
       candidates.push({
         sourceTrackId,
         sourceTimeMs: sourceNode.timeMs,
@@ -1594,6 +1865,13 @@ export async function findTransitionCandidates(
         targetTrackId: targetEntry.trackId,
         targetTimeMs: targetEntry.node.timeMs,
         targetLoudnessRms: targetEntry.node.loudnessRms,
+        confidenceScore: clamp(
+          score.finalScore * 0.75 + (1 - score.artifactPenalty) * 0.25 + learningBias * 0.5,
+          0,
+          1
+        ),
+        diversityPenalty: 0,
+        learningBias,
         score,
         diagnostic: buildScoreDiagnostic(score),
         explain: buildTransitionExplain(score, {
@@ -1616,48 +1894,75 @@ export async function findTransitionCandidates(
     if (aGate !== bGate) {
       return aGate ? -1 : 1;
     }
-    return b.score.finalScore - a.score.finalScore;
+    return (b.score.finalScore + b.learningBias) - (a.score.finalScore + a.learningBias);
   });
 
-  const reranked: CandidateWithTags[] = [];
+  const reranked: TransitionCandidate[] = [];
   const includedKeys = new Set<string>();
   const uniqueTargetTrackIds = new Set<string>();
   const targetUseCount = new Map<string, number>();
+  const targetArtistUseCount = new Map<string, number>();
   const targetSelectedTimesByTrack = new Map<string, number[]>();
   const eventPairUseCount = new Map<string, number>();
   const eventFamilyPairUseCount = new Map<string, number>();
   const driverUseCount = new Map<string, number>();
 
-  const getCandidateKey = (candidate: CandidateWithTags): string =>
+  const getCandidateKey = (candidate: TransitionCandidate): string =>
     `${candidate.targetTrackId}:${candidate.targetTimeMs}:${candidate.sourceTimeMs}`;
-  const getEventPairKey = (candidate: CandidateWithTags): string =>
+  const getTargetArtist = (candidate: TransitionCandidate): string =>
+    (trackMetadataById[candidate.targetTrackId]?.artist ?? '').trim().toLowerCase();
+  const getEventPairKey = (candidate: TransitionCandidate): string =>
     `${candidate.sourceEventType}->${candidate.targetEventType}`;
-  const getEventFamilyPairKey = (candidate: CandidateWithTags): string =>
+  const getEventFamilyPairKey = (candidate: TransitionCandidate): string =>
     `${getEventFamily(candidate.sourceEventType)}->${getEventFamily(candidate.targetEventType)}`;
   const incrementMap = (counter: Map<string, number>, key: string): void => {
     counter.set(key, (counter.get(key) ?? 0) + 1);
   };
-  const countNearbyTargetMoments = (candidate: CandidateWithTags): number => {
+  const countNearbyTargetMoments = (candidate: TransitionCandidate): number => {
     const selectedTimes = targetSelectedTimesByTrack.get(candidate.targetTrackId) ?? [];
     return selectedTimes.reduce((count, selectedTime) => (
       count + (Math.abs(selectedTime - candidate.targetTimeMs) <= NEAR_DUPLICATE_TARGET_WINDOW_MS ? 1 : 0)
     ), 0);
   };
 
-  const includeCandidate = (candidate: CandidateWithTags): boolean => {
+  const includeCandidate = (candidate: TransitionCandidate): boolean => {
     const key = `${candidate.targetTrackId}:${candidate.targetTimeMs}:${candidate.sourceTimeMs}`;
     if (includedKeys.has(key)) return false;
     const existingCount = targetUseCount.get(candidate.targetTrackId) ?? 0;
-    if (reranked.length < DIVERSITY_BUDGET_TOP_N && existingCount >= 1) {
+    if (reranked.length < diversityBudgetTopN && existingCount >= 1) {
       return false;
     }
-    if (countNearbyTargetMoments(candidate) > 0) {
+    const nearbyMomentCount = countNearbyTargetMoments(candidate);
+    if (nearbyMomentCount > 0) {
       return false;
     }
-    reranked.push(candidate);
+    const targetArtist = getTargetArtist(candidate);
+    const sameArtistPenalty = sourceArtistNormalized.length > 0 && targetArtist === sourceArtistNormalized
+      ? 0.12
+      : 0;
+    const artistReusePenalty = targetArtist.length === 0
+      ? 0
+      : 0.05 * (targetArtistUseCount.get(targetArtist) ?? 0);
+    const diversityPenalty = clamp(
+      0.09 * existingCount
+      + 0.04 * nearbyMomentCount
+      + sameArtistPenalty
+      + artistReusePenalty,
+      0,
+      1
+    );
+    const normalizedCandidate: TransitionCandidate = {
+      ...candidate,
+      diversityPenalty,
+      confidenceScore: clamp(candidate.confidenceScore - diversityPenalty * 0.35, 0, 1),
+    };
+    reranked.push(normalizedCandidate);
     includedKeys.add(key);
     uniqueTargetTrackIds.add(candidate.targetTrackId);
     incrementMap(targetUseCount, candidate.targetTrackId);
+    if (targetArtist.length > 0) {
+      incrementMap(targetArtistUseCount, targetArtist);
+    }
     incrementMap(eventPairUseCount, getEventPairKey(candidate));
     incrementMap(eventFamilyPairUseCount, getEventFamilyPairKey(candidate));
     incrementMap(driverUseCount, candidate.diagnostic.primaryDriver);
@@ -1695,15 +2000,19 @@ export async function findTransitionCandidates(
 
     remaining.forEach((candidate, index) => {
       const targetCount = targetUseCount.get(candidate.targetTrackId) ?? 0;
+      const targetArtist = getTargetArtist(candidate);
+      const targetArtistCount = targetArtist.length > 0 ? (targetArtistUseCount.get(targetArtist) ?? 0) : 0;
       const eventPairCount = eventPairUseCount.get(getEventPairKey(candidate)) ?? 0;
       const eventFamilyCount = eventFamilyPairUseCount.get(getEventFamilyPairKey(candidate)) ?? 0;
       const driverCount = driverUseCount.get(candidate.diagnostic.primaryDriver) ?? 0;
       const nearbyMomentCount = countNearbyTargetMoments(candidate);
+      const sameArtistPenalty = sourceArtistNormalized.length > 0 && targetArtist === sourceArtistNormalized ? 0.12 : 0;
 
       const targetPenalty = 0.09 * targetCount;
       const targetSaturationPenalty = reranked.length === 0
         ? 0
         : 0.05 * (targetCount / reranked.length);
+      const targetArtistPenalty = 0.06 * targetArtistCount;
       const eventPairPenalty = 0.06 * eventPairCount;
       const eventFamilyPenalty = 0.045 * eventFamilyCount;
       const driverPenalty = 0.03 * driverCount;
@@ -1714,9 +2023,12 @@ export async function findTransitionCandidates(
         + (eventFamilyCount === 0 ? 0.02 : 0);
       const adjustedScore =
         candidate.score.finalScore
+        + candidate.learningBias
         + noveltyBonus
         - targetPenalty
         - targetSaturationPenalty
+        - targetArtistPenalty
+        - sameArtistPenalty
         - eventPairPenalty
         - eventFamilyPenalty
         - driverPenalty
@@ -1731,7 +2043,7 @@ export async function findTransitionCandidates(
     includeCandidate(bestCandidate);
   }
 
-  return reranked.map(({ sourceEventType: _source, targetEventType: _target, ...candidate }) => candidate);
+  return reranked;
 }
 
 export async function runBaselineEvaluation(
@@ -1745,6 +2057,7 @@ export async function runBaselineEvaluation(
   const regressionGateEnforced = Boolean(input.enforceRegressionGate);
   const tuningValidationGateEnforced = Boolean(input.enforceTuningValidationGate);
   const runtimeGateEnforced = Boolean(input.enforceRuntimeGate);
+  const benchmarkMergeGateEnforced = Boolean(input.enforceBenchmarkMergeGate);
   const runtimeGateThresholds = {
     minTransitionRuntimeSampleCount: Math.max(
       1,
@@ -1825,7 +2138,11 @@ export async function runBaselineEvaluation(
   const seedReports: BaselineSeedReport[] = [];
 
   for (const trackId of seedTrackIds) {
-    const candidates = await findTransitionCandidates({ trackId, limit });
+    const candidates = await findTransitionCandidates({
+      trackId,
+      limit,
+      seedTrackPerformanceTier: resolveSeedPerformanceTier(trackId),
+    });
     const seedScoreProfile = computeSeedScoreProfile(candidates);
     const relevantTargetTrackIds = relevantTargetsBySeed[trackId] ?? [];
     let seedHitAt3: number | null = null;
@@ -1937,6 +2254,19 @@ export async function runBaselineEvaluation(
   });
 
   const runtimeStats = computeRuntimeStats(scopedRuntimeEvents);
+  const runtimeConfidenceSamples = scopedRuntimeEvents
+    .map((event) => event.confidenceScore)
+    .filter((value): value is number => value !== undefined && value !== null && Number.isFinite(value));
+  const averageDecisionConfidenceScore = runtimeConfidenceSamples.length === 0
+    ? null
+    : clamp(
+      runtimeConfidenceSamples.reduce((sum, value) => sum + value, 0) / runtimeConfidenceSamples.length,
+      0,
+      1
+    );
+  const fallbackTriggeredCount = scopedRuntimeEvents.filter((event) => event.fallbackTriggered).length;
+  const manualQueueSuggestedCount = scopedRuntimeEvents.filter((event) => event.manualQueueSuggested).length;
+  const manualQueueAcceptedCount = scopedRuntimeEvents.filter((event) => event.manualAccepted).length;
   const autoTransitionDecisionSampleCount = scopedRuntimeEvents.length;
   const autoTransitionSkippedCount = scopedRuntimeEvents
     .filter((event) => event.skippedAutoTransition)
@@ -2026,6 +2356,11 @@ export async function runBaselineEvaluation(
   const runtimeGateSummary = runtimeGatePassed
     ? null
     : `${runtimeGateReasons.join(' | ')} | Aksiyon: real run orneklerini arttirip runtime kalibrasyonunu tekrar uygula.`;
+  const minimumCoverageRate = clamp(
+    input.minimumCoverageRate ?? BENCHMARK_MINIMUM_COVERAGE_DEFAULT,
+    0,
+    1
+  );
   const runtimeSampleCount = transitionRuntimeSampleCount;
   const benchmarkMeta: BenchmarkRunMeta = {
     seedSetHash,
@@ -2037,6 +2372,8 @@ export async function runBaselineEvaluation(
 
   const nextHitAt3 = labeledSeedCount === 0 ? null : safeDiv(hitAt3Total, labeledSeedCount);
   const nextHitAt5 = labeledSeedCount === 0 ? null : safeDiv(hitAt5Total, labeledSeedCount);
+  const coverageRate = safeDiv(seedWithCandidates, seedTrackIds.length);
+  const coverageGatePassed = coverageRate >= minimumCoverageRate;
   const previousComparableRun = [...baselineRunHistory]
     .reverse()
     .find((run) => run.scopeLabel === scopeLabel && run.scopeId === scopeId);
@@ -2073,6 +2410,34 @@ export async function runBaselineEvaluation(
     regressionDetected: regressionReasons.length > 0,
     runtimeGatePassed,
   });
+  const previousComparableRuns = baselineRunHistory
+    .filter((run) => run.scopeLabel === scopeLabel && run.scopeId === scopeId)
+    .slice(-2);
+  const escalatedTuningActions = tuningActions.map((action) => {
+    const appearsInAllRecentBottom3 = previousComparableRuns.length >= 2
+      && previousComparableRuns.every((run) => run.bottomSeeds.some((seed) => seed.trackId === action.trackId));
+    if (!appearsInAllRecentBottom3) return action;
+    return {
+      ...action,
+      priority: 'high' as const,
+      escalationReason: 'Bottom-3 seed son 3 benchmark kosusunda tekrarlandi.',
+      recommendation: `${action.recommendation} Escalation: bu seed son 3 kosuda tekrar Bottom-3.`
+    };
+  });
+  const benchmarkMergeGatePassed = regressionReasons.length === 0 && runtimeGatePassed && coverageGatePassed;
+  const benchmarkMergeGateSummary = benchmarkMergeGatePassed
+    ? null
+    : [
+      regressionReasons.length > 0
+        ? `Regression gate fail: ${regressionReasons.join(' | ')}`
+        : null,
+      !runtimeGatePassed
+        ? `Runtime gate fail: ${runtimeGateSummary ?? 'Runtime SLO degraded'}`
+        : null,
+      !coverageGatePassed
+        ? `Coverage gate fail: ${formatPercentLabel(coverageRate)} < ${formatPercentLabel(minimumCoverageRate)}`
+        : null,
+    ].filter((item): item is string => item !== null).join(' || ');
   const relevanceTargetGatePassed = seedsBelowRelevantTargetMinimum.length === 0;
   const relevanceTargetGateSummary = relevanceTargetGatePassed
     ? null
@@ -2095,14 +2460,14 @@ export async function runBaselineEvaluation(
     seedCount: seedTrackIds.length,
     seedWithCandidates,
     labeledSeedCount,
-    coverageRate: safeDiv(seedWithCandidates, seedTrackIds.length),
+    coverageRate,
     meanTop1Score: safeDiv(top1Total, seedWithCandidates),
     meanTopKScore: safeDiv(topKMeanTotal, seedWithCandidates),
     goodCandidateRate: safeDiv(goodSeedCount, seedWithCandidates),
     hitAt3: labeledSeedCount === 0 ? null : safeDiv(hitAt3Total, labeledSeedCount),
     hitAt5: labeledSeedCount === 0 ? null : safeDiv(hitAt5Total, labeledSeedCount),
     bottomSeeds,
-    tuningActions,
+    tuningActions: escalatedTuningActions,
     tuningValidationSummary: tuningValidation.summary,
     tuningValidationPassed: tuningValidation.passed,
     tuningValidationGateEnforced,
@@ -2120,6 +2485,10 @@ export async function runBaselineEvaluation(
     transitionLatencyP95Ms,
     transitionStallRate,
     transitionDropRate,
+    averageDecisionConfidenceScore,
+    fallbackTriggeredCount,
+    manualQueueSuggestedCount,
+    manualQueueAcceptedCount,
     autoTransitionDecisionSampleCount,
     autoTransitionSkippedCount,
     autoTransitionSkipRate,
@@ -2128,6 +2497,11 @@ export async function runBaselineEvaluation(
     runtimeGateEnforced,
     runtimeGatePassed,
     runtimeGateSummary,
+    benchmarkMergeGateEnforced,
+    benchmarkMergeGatePassed,
+    benchmarkMergeGateSummary,
+    minimumCoverageRate,
+    coverageGatePassed,
     runtimeGateThresholds,
     limit,
     goodThreshold,
@@ -2153,6 +2527,9 @@ export async function runBaselineEvaluation(
   }
   if (result.runtimeGateEnforced && !result.runtimeGatePassed) {
     throw new Error(`Runtime gate failed: ${result.runtimeGateSummary ?? 'Runtime SLO degraded'}`);
+  }
+  if (result.benchmarkMergeGateEnforced && !result.benchmarkMergeGatePassed) {
+    throw new Error(`Benchmark merge gate failed: ${result.benchmarkMergeGateSummary ?? 'Regression/runtime gate failed'}`);
   }
 
   return result;
@@ -2487,6 +2864,65 @@ export function getBaselineRunHistory(limit = 10): BaselineRunArtifact[] {
   return baselineRunHistory.slice(-boundedLimit).reverse();
 }
 
+export function getTransitionFeedbackModel(): TransitionFeedbackModel {
+  hydrateFromStorage();
+  return JSON.parse(JSON.stringify(transitionFeedbackModel)) as TransitionFeedbackModel;
+}
+
+export function recordTransitionFeedback(
+  input: Omit<TransitionFeedbackEntry, 'recordedAt'> & { recordedAt?: string }
+): TransitionFeedbackPairStats {
+  hydrateFromStorage();
+  const sourceTrackId = normalizeTrackId(input.sourceTrackId);
+  const targetTrackId = normalizeTrackId(input.targetTrackId);
+  const rating = input.rating === 'good' || input.rating === 'ok' || input.rating === 'bad'
+    ? input.rating
+    : 'ok';
+  const score = rating === 'good' ? 1 : rating === 'ok' ? 0.6 : 0.2;
+  const pairKey = buildFeedbackPairKey(sourceTrackId, targetTrackId);
+  const previous = transitionFeedbackModel.byPair[pairKey];
+  const totalCount = (previous?.totalCount ?? 0) + 1;
+  const goodCount = (previous?.goodCount ?? 0) + (rating === 'good' ? 1 : 0);
+  const okCount = (previous?.okCount ?? 0) + (rating === 'ok' ? 1 : 0);
+  const badCount = (previous?.badCount ?? 0) + (rating === 'bad' ? 1 : 0);
+  const previousWeightedTotal = (previous?.meanScore ?? 0.5) * (previous?.totalCount ?? 0);
+  const meanScore = clamp((previousWeightedTotal + score) / totalCount, 0, 1);
+  const badStreak = rating === 'bad' ? (previous?.badStreak ?? 0) + 1 : 0;
+  const now = input.recordedAt ?? nowIsoString();
+  const nextPair: TransitionFeedbackPairStats = {
+    pairKey,
+    sourceTrackId,
+    targetTrackId,
+    totalCount,
+    goodCount,
+    okCount,
+    badCount,
+    meanScore,
+    badStreak,
+    updatedAt: now,
+    ...(badStreak >= FEEDBACK_BAD_STREAK_BLACKLIST_THRESHOLD
+      ? { blacklistUntil: new Date(Date.now() + FEEDBACK_BLACKLIST_TTL_MS).toISOString() }
+      : previous?.blacklistUntil
+        ? { blacklistUntil: previous.blacklistUntil }
+        : {}),
+  };
+  if (nextPair.blacklistUntil) {
+    const blacklistUntilMs = toUnixMs(nextPair.blacklistUntil);
+    if (blacklistUntilMs !== null && Date.now() >= blacklistUntilMs) {
+      delete nextPair.blacklistUntil;
+    }
+  }
+  transitionFeedbackModel = {
+    updatedAt: now,
+    byPair: {
+      ...transitionFeedbackModel.byPair,
+      [pairKey]: nextPair,
+    },
+  };
+  persistStorage();
+  return nextPair;
+}
+
 export function recordTransitionRuntimeEvent(
   input: RecordTransitionRuntimeEventInput
 ): TransitionRuntimeEvent {
@@ -2503,6 +2939,11 @@ export function recordTransitionRuntimeEvent(
     mode: input.mode === 'manual' ? 'manual' : 'auto',
     skippedAutoTransition: Boolean(input.skippedAutoTransition),
     skipReasons: parseTransitionGateReasons(input.skipReasons),
+    confidenceScore: toOptionalFiniteRate(input.confidenceScore) ?? undefined,
+    decisionReasonPrimary: parseTransitionGateReasons([input.decisionReasonPrimary])[0],
+    fallbackTriggered: Boolean(input.fallbackTriggered),
+    manualQueueSuggested: Boolean(input.manualQueueSuggested),
+    manualAccepted: Boolean(input.manualAccepted),
   };
   transitionRuntimeEvents = [...transitionRuntimeEvents, event].slice(-500);
   persistStorage();
@@ -2524,8 +2965,13 @@ export function clearTransitionData(): void {
   analysisQueue = [];
   analysisStates = {};
   nodesByTrack = {};
+  trackMetadataById = {};
   baselineRunHistory = [];
   transitionRuntimeEvents = [];
+  transitionFeedbackModel = {
+    updatedAt: nowIsoString(),
+    byPair: {},
+  };
   isStorageWriteDisabled = false;
   warnedStorageKeys.clear();
   isHydrated = false;
@@ -2533,6 +2979,8 @@ export function clearTransitionData(): void {
   removeStorage(STORAGE_KEYS.queue);
   removeStorage(STORAGE_KEYS.states);
   removeStorage(STORAGE_KEYS.nodes);
+  removeStorage(STORAGE_KEYS.trackMetadata);
   removeStorage(STORAGE_KEYS.baselineRuns);
   removeStorage(STORAGE_KEYS.runtimeEvents);
+  removeStorage(STORAGE_KEYS.feedbackModel);
 }

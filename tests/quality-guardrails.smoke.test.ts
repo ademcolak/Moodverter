@@ -14,11 +14,18 @@ test('qa:auto keeps regression gate in the QA sequence', async () => {
 
   const smokeTestsIndex = source.indexOf("name: 'Smoke Tests'");
   const regressionGateIndex = source.indexOf("name: 'Regression Gate'");
+  const benchmarkMergeGateIndex = source.indexOf("name: 'Benchmark Merge Gate'");
 
   assert.ok(smokeTestsIndex >= 0, 'Smoke Tests step must exist in qa:auto');
   assert.ok(regressionGateIndex >= 0, 'Regression Gate step must exist in qa:auto');
+  assert.ok(benchmarkMergeGateIndex >= 0, 'Benchmark Merge Gate step must exist in qa:auto');
   assert.ok(regressionGateIndex > smokeTestsIndex, 'Regression Gate should run after Smoke Tests');
+  assert.ok(
+    benchmarkMergeGateIndex > regressionGateIndex,
+    'Benchmark Merge Gate should run after Regression Gate'
+  );
   assert.match(source, /args:\s*\['run', 'smoke:regression-gate'\]/);
+  assert.match(source, /args:\s*\['run', 'smoke:benchmark-merge-gate'\]/);
 });
 
 test('pipeline:quality keeps required quality guard steps', async () => {
@@ -30,6 +37,8 @@ test('pipeline:quality keeps required quality guard steps', async () => {
     'Retrieval Gate',
     'Transition Gating',
     'Transition Decision',
+    'Decision Matrix',
+    'Feedback Blacklist',
     'Tuning Dry Run',
     'Real Mini Run',
     'Before/After Report',
@@ -48,6 +57,8 @@ test('pipeline:quality keeps required quality guard steps', async () => {
   assert.match(source, /args:\s*\['run', 'smoke:retrieval-gate'\]/);
   assert.match(source, /args:\s*\['run', 'smoke:transition-gating'\]/);
   assert.match(source, /args:\s*\['run', 'smoke:transition-decision'\]/);
+  assert.match(source, /args:\s*\['run', 'smoke:decision-matrix'\]/);
+  assert.match(source, /args:\s*\['run', 'smoke:feedback-blacklist'\]/);
   assert.match(source, /args:\s*\['run', 'smoke:tuning-loop-dry-run'\]/);
   assert.match(source, /args:\s*\['run', 'smoke:real-mini-run'\]/);
   assert.match(source, /args:\s*\['run', 'smoke:benchmark-before-after-report'\]/);
@@ -70,8 +81,11 @@ test('repo config keeps smoke artifact ignored and quality scripts published', a
   assert.equal(typeof scripts['qa:auto'], 'string');
   assert.equal(typeof scripts['oss:guard'], 'string');
   assert.equal(typeof scripts['smoke:regression-gate'], 'string');
+  assert.equal(typeof scripts['smoke:benchmark-merge-gate'], 'string');
   assert.equal(typeof scripts['smoke:transition-gating'], 'string');
   assert.equal(typeof scripts['smoke:transition-decision'], 'string');
+  assert.equal(typeof scripts['smoke:decision-matrix'], 'string');
+  assert.equal(typeof scripts['smoke:feedback-blacklist'], 'string');
   assert.equal(typeof scripts['smoke:real-mini-run'], 'string');
   assert.equal(typeof scripts['smoke:benchmark-before-after-report'], 'string');
 });

@@ -548,6 +548,68 @@ test('regression gate rejects baseline run when enforced and Hit@K drops', async
   );
 });
 
+test('benchmark merge gate rejects when regression or runtime gate is degraded', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-merge-gate',
+    name: 'Seed Track Merge Gate',
+    artist: 'Seed Artist Merge Gate',
+    durationMs: 180_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-merge-gate-a',
+    name: 'Target Track Merge Gate A',
+    artist: 'Target Artist Merge Gate',
+    durationMs: 181_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-merge-gate-b',
+    name: 'Target Track Merge Gate B',
+    artist: 'Target Artist Merge Gate',
+    durationMs: 182_000,
+  });
+
+  const candidates = await findTransitionCandidates({
+    trackId: 'seed-track-merge-gate',
+    limit: 5,
+  });
+  assert.ok(candidates.length > 0);
+
+  recordTransitionRuntimeEvent({
+    sourceTrackId: 'seed-track-merge-gate',
+    targetTrackId: 'target-track-merge-gate-a',
+    latencyMs: 800,
+    stalled: false,
+    dropped: false,
+    mode: 'auto',
+  });
+
+  await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-merge-gate'],
+    limit: 5,
+    scopeLabel: 'custom',
+    scopeId: 'benchmark-merge-gate-v1',
+    relevantTargetsBySeed: {
+      'seed-track-merge-gate': [candidates[0].targetTrackId],
+    },
+  });
+
+  await assert.rejects(
+    runBaselineEvaluation({
+      seedTrackIds: ['seed-track-merge-gate'],
+      limit: 5,
+      scopeLabel: 'custom',
+      scopeId: 'benchmark-merge-gate-v1',
+      enforceBenchmarkMergeGate: true,
+      maxTransitionLatencyP95Ms: 700,
+      minTransitionRuntimeSampleCount: 1,
+      relevantTargetsBySeed: {
+        'seed-track-merge-gate': ['missing-track-id'],
+      },
+    }),
+    /Benchmark merge gate failed/
+  );
+});
+
 test('relevance target gate rejects baseline run when enforced and labels are insufficient', async () => {
   await analyzeTrackWithHeuristicV1({
     id: 'seed-track-label-gate',

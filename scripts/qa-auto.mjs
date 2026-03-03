@@ -8,6 +8,9 @@ const stepDefinitions = [
   { name: 'Build', command: 'pnpm', args: ['run', 'build'] },
   { name: 'Smoke Tests', command: 'pnpm', args: ['run', 'smoke:test'] },
   { name: 'Regression Gate', command: 'pnpm', args: ['run', 'smoke:regression-gate'] },
+  { name: 'Benchmark Merge Gate', command: 'pnpm', args: ['run', 'smoke:benchmark-merge-gate'] },
+  { name: 'Decision Matrix', command: 'pnpm', args: ['run', 'smoke:decision-matrix'] },
+  { name: 'Feedback Blacklist', command: 'pnpm', args: ['run', 'smoke:feedback-blacklist'] },
 ];
 
 function runStep(step) {
