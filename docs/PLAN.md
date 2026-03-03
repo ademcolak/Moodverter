@@ -88,6 +88,9 @@ Kabul kriterleri:
 - [x] V3 policy smoke testleri (`transition-gating`, `transition-decision`, evaluation v3).
 - [x] Faz dokumani: `docs/phases/phase-04-transition-quality-v3.md`.
 
+### Phase 05 - Evaluation Reliability + Tuning Ops
+- [ ] Faz dokumani: `docs/phases/phase-05-eval-reliability-tuning-ops.md`.
+
 ## Son Degisiklik Ozeti (19 Subat 2026)
 ### Yapildi
 - Kütüphanede satıra tıklama ile direkt oynatma aktif edildi.

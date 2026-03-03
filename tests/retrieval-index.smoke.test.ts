@@ -50,6 +50,7 @@ test('evaluateRetrievalQuality reports high recall/top1 on deterministic vectors
   assert.equal(report.skippedQueryCount, 0);
   assert.ok(report.recallAtK >= 0.95);
   assert.ok(report.exactTop1Rate >= 0.9);
+  assert.ok(report.uniqueTargetRatio > 0);
 });
 
 test('evaluateRetrievalQuality skips invalid query vectors', async () => {
@@ -69,6 +70,7 @@ test('evaluateRetrievalQuality skips invalid query vectors', async () => {
   assert.equal(report.skippedQueryCount, 2);
   assert.ok(report.recallAtK >= 0.95);
   assert.ok(report.exactTop1Rate >= 0.9);
+  assert.ok(report.uniqueTargetRatio > 0);
 });
 
 test('evaluateRetrievalQuality stays high on analyzed node pool', async () => {
@@ -110,4 +112,5 @@ test('evaluateRetrievalQuality stays high on analyzed node pool', async () => {
   assert.equal(report.evaluatedQueryCount, queries.length);
   assert.ok(report.recallAtK >= 0.95);
   assert.ok(report.exactTop1Rate >= 0.9);
+  assert.ok(report.uniqueTargetRatio > 0);
 });

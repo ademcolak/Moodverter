@@ -35,6 +35,8 @@ function buildSeedTrackIds(count: number): string[] {
 function toSummary(result: BaselineEvaluationResult): Record<string, unknown> {
   return {
     runAt: result.runAt,
+    runMode: result.runMode,
+    runtimeSampleCount: result.runtimeSampleCount,
     seedCount: result.seedCount,
     hitAt3: result.hitAt3,
     hitAt5: result.hitAt5,
@@ -121,6 +123,15 @@ async function main(): Promise<void> {
     limit: 5,
     relevantTargetsBySeed: afterRelevantTargetsBySeed,
   });
+  if (before.scopeId !== after.scopeId) {
+    throw new Error(`scopeId mismatch: ${before.scopeId} != ${after.scopeId}`);
+  }
+  if (before.seedSetHash !== after.seedSetHash) {
+    throw new Error(`seedSetHash mismatch: ${before.seedSetHash} != ${after.seedSetHash}`);
+  }
+  if (before.runMode !== after.runMode) {
+    throw new Error(`runMode mismatch: ${before.runMode} != ${after.runMode}`);
+  }
 
   const artifact = {
     generatedAt: new Date().toISOString(),
@@ -129,6 +140,9 @@ async function main(): Promise<void> {
     comparison: {
       sameSeedSet: before.seedCount === after.seedCount,
       sameScopeId: before.scopeId === after.scopeId,
+      runMode: before.runMode,
+      runtimeSampleCountBefore: before.runtimeSampleCount,
+      runtimeSampleCountAfter: after.runtimeSampleCount,
       hitAt3Delta:
         before.hitAt3 !== null && after.hitAt3 !== null
           ? after.hitAt3 - before.hitAt3

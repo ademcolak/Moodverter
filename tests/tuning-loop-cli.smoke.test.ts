@@ -48,6 +48,7 @@ test('tuning-loop cli single mode writes artifact', async () => {
   await withTempDir(async (tmpDir) => {
     const inputPath = path.join(tmpDir, 'single-input.json');
     const outputPath = path.join(tmpDir, 'single-output.json');
+    const diagnosticPath = path.join(tmpDir, 'single-diagnostic.json');
 
     await fs.writeFile(inputPath, JSON.stringify({
       scopeId: 'smoke-single-2026-02-20',
@@ -64,7 +65,14 @@ test('tuning-loop cli single mode writes artifact', async () => {
       },
     }), 'utf-8');
 
-    const execution = await runCli(['--input', inputPath, '--output', outputPath]);
+    const execution = await runCli([
+      '--input',
+      inputPath,
+      '--output',
+      outputPath,
+      '--diagnostic-bundle-out',
+      diagnosticPath,
+    ]);
     assert.match(execution.stdout, /\[tuning:loop\] scoring=v2/);
 
     const artifactRaw = await fs.readFile(outputPath, 'utf-8');
@@ -76,6 +84,11 @@ test('tuning-loop cli single mode writes artifact', async () => {
     const summary = artifact.summary as Record<string, unknown>;
     assert.equal(summary.hitAt3, 1);
     assert.equal(summary.hitAt5, 1);
+
+    const diagnosticRaw = await fs.readFile(diagnosticPath, 'utf-8');
+    const diagnostic = JSON.parse(diagnosticRaw) as Record<string, unknown>;
+    assert.equal(typeof diagnostic.scopeId, 'string');
+    assert.ok(Array.isArray(diagnostic.diagnostics));
   });
 });
 
@@ -83,6 +96,7 @@ test('tuning-loop cli search mode ranks trials and validates best trial', async 
   await withTempDir(async (tmpDir) => {
     const inputPath = path.join(tmpDir, 'search-input.json');
     const outputPath = path.join(tmpDir, 'search-output.json');
+    const diagnosticPath = path.join(tmpDir, 'search-diagnostic.json');
 
     await fs.writeFile(inputPath, JSON.stringify({
       scopeId: 'smoke-search-2026-02-20',
@@ -122,7 +136,14 @@ test('tuning-loop cli search mode ranks trials and validates best trial', async 
       },
     }), 'utf-8');
 
-    const execution = await runCli(['--input', inputPath, '--output', outputPath]);
+    const execution = await runCli([
+      '--input',
+      inputPath,
+      '--output',
+      outputPath,
+      '--diagnostic-bundle-out',
+      diagnosticPath,
+    ]);
     assert.match(execution.stdout, /\[tuning:loop\]\[search\] trial-a objective=/);
     assert.match(execution.stdout, /\[tuning:loop\]\[best\] scoring=v2/);
 
@@ -142,5 +163,10 @@ test('tuning-loop cli search mode ranks trials and validates best trial', async 
     const validationResult = search.validationResult as Record<string, unknown>;
     assert.equal(typeof validationResult.scopeId, 'string');
     assert.equal(validationResult.relevanceTargetGatePassed, true);
+
+    const diagnosticRaw = await fs.readFile(diagnosticPath, 'utf-8');
+    const diagnostic = JSON.parse(diagnosticRaw) as Record<string, unknown>;
+    assert.equal(typeof diagnostic.scopeId, 'string');
+    assert.ok(Array.isArray(diagnostic.diagnostics));
   });
 });

@@ -27,6 +27,7 @@ export interface TransitionEdgeScore {
   harmonicCompatibilityScore: number;
   rhythmAlignmentScore: number;
   loudnessContinuityScore: number;
+  smoothnessScore: number;
   artifactPenalty: number;
   finalScore: number;
 }
@@ -68,6 +69,22 @@ export interface TransitionDecision {
   top1Top2Margin: number | null;
 }
 
+export type BenchmarkRunMode = 'synthetic' | 'real';
+
+export interface BenchmarkRunMeta {
+  seedSetHash: string;
+  scoringVersion: string;
+  analysisVersion: string;
+  runMode: BenchmarkRunMode;
+  runtimeSampleCount: number;
+}
+
+export interface TransitionDecisionExplain {
+  topReasons: string[];
+  gateStatus: 'pass' | 'fail';
+  skipReason?: string;
+}
+
 export type AnalysisStatus = 'pending' | 'ready' | 'failed';
 
 export interface AnalysisState {
@@ -105,6 +122,7 @@ export interface TransitionCandidate {
   targetLoudnessRms: number;
   score: TransitionEdgeScore;
   diagnostic: TransitionScoreDiagnostic;
+  explain: TransitionDecisionExplain;
   gatePreview?: {
     wouldPassV3: boolean;
     reasons: TransitionGateReason[];
@@ -208,6 +226,7 @@ export interface BaselineEvaluationInput {
   enforceRelevantTargetMinimum?: boolean;
   enforceTuningValidationGate?: boolean;
   enforceRuntimeGate?: boolean;
+  runMode?: BenchmarkRunMode;
   minTransitionRuntimeSampleCount?: number;
   maxTransitionLatencyP95Ms?: number;
   maxTransitionStallRate?: number;
@@ -230,6 +249,7 @@ export interface BaselineSeedReport {
   averageHarmonicCompatibilityScore: number;
   averageRhythmAlignmentScore: number;
   averageLoudnessContinuityScore: number;
+  averageSmoothnessScore: number;
   averageArtifactPenalty: number;
   dominantDriver: TransitionScoreDriver | null;
 }
@@ -267,10 +287,47 @@ export interface AutoTransitionSeedSkipSummary {
   topSkipReasons: TransitionSkipReasonBreakdown[];
 }
 
+export interface BottomSeedDiagnostic {
+  trackId: string;
+  candidateBreakdown: Array<{
+    targetTrackId: string;
+    targetTimeMs: number;
+    finalScore: number;
+    smoothnessScore: number;
+    dominantDriver: TransitionScoreDriver;
+    explainTopReasons: string[];
+    gateStatus: 'pass' | 'fail';
+    skipReason?: string;
+  }>;
+  gateFailDistribution: Array<{
+    reason: TransitionGateReason;
+    count: number;
+    rate: number;
+  }>;
+  recommendedActions: Array<{
+    issue: TransitionScoreDriver;
+    recommendation: string;
+    confidence: number;
+  }>;
+}
+
+export interface BottomSeedDiagnosticBundle {
+  generatedAt: string;
+  scopeId: string;
+  runMode: BenchmarkRunMode;
+  runtimeSampleCount: number;
+  bottomSeedCount: number;
+  diagnostics: BottomSeedDiagnostic[];
+}
+
 export interface BaselineEvaluationResult {
   schemaVersion: number;
   analysisVersion: number;
   scoringVersion: string;
+  seedSetHash: string;
+  runMode: BenchmarkRunMode;
+  runtimeSampleCount: number;
+  benchmarkMeta: BenchmarkRunMeta;
   scoreWeights: TransitionScoreWeights;
   runAt: string;
   scopeLabel: BaselineScopeLabel;

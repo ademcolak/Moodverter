@@ -15,6 +15,8 @@ import {
   recordTransitionRuntimeEvent,
   removeRelevantTarget,
   runBaselineEvaluation,
+  scoreTransitionPair,
+  buildBottomSeedDiagnosticBundle,
 } from '../src/services/transition';
 import { installBrowserMocks, resetBrowserMocks } from './helpers/browser-mocks';
 
@@ -366,8 +368,11 @@ test('baseline run history persists latest runs', async () => {
   assert.equal(history[1].runAt, first.runAt);
   assert.deepEqual(history[0].seedTrackIds, ['seed-track-history']);
   assert.equal(history[0].scopeLabel, 'selected');
-  assert.equal(history[0].schemaVersion, 1);
+  assert.equal(history[0].schemaVersion, 2);
   assert.equal(history[0].analysisVersion, 2);
+  assert.equal(history[0].runMode, 'synthetic');
+  assert.equal(typeof history[0].seedSetHash, 'string');
+  assert.ok(history[0].seedSetHash.length > 0);
 });
 
 test('baseline evaluation reports bottom seeds and detects Hit@K regression per scope', async () => {
@@ -576,4 +581,263 @@ test('relevance target gate rejects baseline run when enforced and labels are in
     }),
     /Label quality gate failed/
   );
+});
+
+test('seedSetHash is deterministic for the same seed set', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-hash-a',
+    name: 'Seed Track Hash A',
+    artist: 'Seed Artist Hash',
+    durationMs: 180_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-hash-b',
+    name: 'Seed Track Hash B',
+    artist: 'Seed Artist Hash',
+    durationMs: 181_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-hash-a',
+    name: 'Target Track Hash A',
+    artist: 'Target Artist Hash',
+    durationMs: 182_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-hash-b',
+    name: 'Target Track Hash B',
+    artist: 'Target Artist Hash',
+    durationMs: 183_000,
+  });
+
+  const first = await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-hash-a', 'seed-track-hash-b'],
+    scopeLabel: 'custom',
+    scopeId: 'seed-hash-deterministic',
+    limit: 5,
+    relevantTargetsBySeed: {
+      'seed-track-hash-a': ['target-track-hash-a', 'target-track-hash-b'],
+      'seed-track-hash-b': ['target-track-hash-a', 'target-track-hash-b'],
+    },
+  });
+  const second = await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-hash-b', 'seed-track-hash-a'],
+    scopeLabel: 'custom',
+    scopeId: 'seed-hash-deterministic',
+    limit: 5,
+    relevantTargetsBySeed: {
+      'seed-track-hash-a': ['target-track-hash-a', 'target-track-hash-b'],
+      'seed-track-hash-b': ['target-track-hash-a', 'target-track-hash-b'],
+    },
+  });
+
+  assert.equal(first.seedSetHash, second.seedSetHash);
+});
+
+test('runMode is synthetic by default and can be real when explicitly set', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-mode',
+    name: 'Seed Track Mode',
+    artist: 'Seed Artist Mode',
+    durationMs: 180_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-mode',
+    name: 'Target Track Mode',
+    artist: 'Target Artist Mode',
+    durationMs: 182_000,
+  });
+
+  const syntheticResult = await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-mode'],
+    scopeLabel: 'custom',
+    scopeId: 'mode-synthetic',
+    limit: 5,
+    relevantTargetsBySeed: {
+      'seed-track-mode': ['target-track-mode', 'seed-track-mode'],
+    },
+  });
+  const realResult = await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-mode'],
+    scopeLabel: 'custom',
+    scopeId: 'mode-real',
+    runMode: 'real',
+    limit: 5,
+    relevantTargetsBySeed: {
+      'seed-track-mode': ['target-track-mode', 'seed-track-mode'],
+    },
+  });
+
+  assert.equal(syntheticResult.runMode, 'synthetic');
+  assert.equal(realResult.runMode, 'real');
+});
+
+test('smoothnessScore stays within 0..1 for edge-case transition pairs', () => {
+  const edgeA = scoreTransitionPair({
+    id: 'a',
+    trackId: 'seed-edge',
+    timeMs: 10_000,
+    eventType: 'drop',
+    eventConfidence: 1,
+    embedding: Array.from({ length: 16 }, () => 0.4),
+    bpmLocal: 90,
+    chroma: Array.from({ length: 12 }, () => 0),
+    loudnessRms: -28,
+  }, {
+    id: 'b',
+    trackId: 'target-edge',
+    timeMs: 20_000,
+    eventType: 'drop',
+    eventConfidence: 1,
+    embedding: Array.from({ length: 16 }, () => 0.3),
+    bpmLocal: 190,
+    chroma: Array.from({ length: 12 }, () => 1),
+    loudnessRms: -2,
+  });
+  const edgeB = scoreTransitionPair({
+    id: 'c',
+    trackId: 'seed-edge-2',
+    timeMs: 12_000,
+    eventType: 'build-up',
+    eventConfidence: 0.8,
+    embedding: Array.from({ length: 16 }, () => 0.1),
+    bpmLocal: 128,
+    chroma: Array.from({ length: 12 }, () => 0.2),
+    loudnessRms: -10,
+  }, {
+    id: 'd',
+    trackId: 'target-edge-2',
+    timeMs: 18_000,
+    eventType: 'build-up',
+    eventConfidence: 0.8,
+    embedding: Array.from({ length: 16 }, () => 0.12),
+    bpmLocal: 129,
+    chroma: Array.from({ length: 12 }, () => 0.21),
+    loudnessRms: -10.5,
+  });
+
+  assert.ok(edgeA.smoothnessScore >= 0 && edgeA.smoothnessScore <= 1);
+  assert.ok(edgeB.smoothnessScore >= 0 && edgeB.smoothnessScore <= 1);
+  assert.ok(edgeB.smoothnessScore > edgeA.smoothnessScore);
+});
+
+test('scopeId mismatch in seedSet/runMode context hard-fails for comparable runs', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-scope-hardfail-a',
+    name: 'Seed Scope A',
+    artist: 'Seed Scope',
+    durationMs: 180_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-scope-hardfail-b',
+    name: 'Seed Scope B',
+    artist: 'Seed Scope',
+    durationMs: 181_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-scope-hardfail',
+    name: 'Target Scope',
+    artist: 'Target Scope',
+    durationMs: 182_000,
+  });
+
+  await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-scope-hardfail-a'],
+    scopeLabel: 'custom',
+    scopeId: 'scope-hard-fail-v1',
+    limit: 5,
+    relevantTargetsBySeed: {
+      'seed-track-scope-hardfail-a': ['target-track-scope-hardfail'],
+    },
+  });
+
+  await assert.rejects(
+    runBaselineEvaluation({
+      seedTrackIds: ['seed-track-scope-hardfail-a', 'seed-track-scope-hardfail-b'],
+      scopeLabel: 'custom',
+      scopeId: 'scope-hard-fail-v1',
+      limit: 5,
+      relevantTargetsBySeed: {
+        'seed-track-scope-hardfail-a': ['target-track-scope-hardfail'],
+        'seed-track-scope-hardfail-b': ['target-track-scope-hardfail'],
+      },
+    }),
+    /Scope comparison mismatch/
+  );
+});
+
+test('buildBottomSeedDiagnosticBundle emits candidate breakdown for bottom seeds', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-diagnostic',
+    name: 'Seed Diagnostic',
+    artist: 'Seed Diagnostic Artist',
+    durationMs: 180_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-diagnostic-a',
+    name: 'Target Diagnostic A',
+    artist: 'Target Diagnostic Artist',
+    durationMs: 181_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-diagnostic-b',
+    name: 'Target Diagnostic B',
+    artist: 'Target Diagnostic Artist',
+    durationMs: 182_000,
+  });
+
+  const baseline = await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-diagnostic'],
+    scopeLabel: 'custom',
+    scopeId: 'diag-bundle-test',
+    limit: 5,
+    relevantTargetsBySeed: {
+      'seed-track-diagnostic': ['target-track-diagnostic-a', 'target-track-diagnostic-b'],
+    },
+  });
+  const bundle = await buildBottomSeedDiagnosticBundle({
+    baselineResult: baseline,
+    candidateLimit: 5,
+  });
+
+  assert.equal(bundle.scopeId, baseline.scopeId);
+  assert.ok(bundle.diagnostics.length >= 1);
+  const first = bundle.diagnostics[0];
+  assert.equal(typeof first.trackId, 'string');
+  assert.ok(Array.isArray(first.candidateBreakdown));
+  assert.ok(first.candidateBreakdown.length > 0);
+  assert.equal(typeof first.candidateBreakdown[0].smoothnessScore, 'number');
+});
+
+test('findTransitionCandidates protects diversity budget in top-5 and suppresses near-duplicates', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-diversity',
+    name: 'Seed Diversity',
+    artist: 'Seed Diversity Artist',
+    durationMs: 180_000,
+  });
+  const targetTrackIds = Array.from({ length: 8 }, (_, index) => `target-track-diversity-${index + 1}`);
+  for (const [index, trackId] of targetTrackIds.entries()) {
+    await analyzeTrackWithHeuristicV1({
+      id: trackId,
+      name: `Target Diversity ${index + 1}`,
+      artist: 'Target Diversity Artist',
+      durationMs: 175_000 + index * 800,
+    });
+  }
+
+  const candidates = await findTransitionCandidates({
+    trackId: 'seed-track-diversity',
+    limit: 5,
+  });
+
+  assert.equal(candidates.length, 5);
+  const uniqueTop5Tracks = new Set(candidates.slice(0, 5).map((item) => item.targetTrackId));
+  assert.equal(uniqueTop5Tracks.size, 5);
+  for (let i = 0; i < candidates.length; i += 1) {
+    for (let j = i + 1; j < candidates.length; j += 1) {
+      if (candidates[i].targetTrackId !== candidates[j].targetTrackId) continue;
+      const deltaMs = Math.abs(candidates[i].targetTimeMs - candidates[j].targetTimeMs);
+      assert.ok(deltaMs > 5000);
+    }
+  }
 });

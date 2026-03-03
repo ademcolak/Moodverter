@@ -19,6 +19,7 @@
     "smoke:transition-decision": "pnpm run smoke:compile && node --test .smoke-dist/tests/transition-decision.smoke.test.js",
     "smoke:retrieval-gate": "pnpm run smoke:compile && node --test --test-name-pattern=\"evaluateRetrievalQuality\" .smoke-dist/tests/retrieval-index.smoke.test.js",
     "smoke:benchmark-before-after-report": "pnpm run smoke:compile && node .smoke-dist/tests/benchmark-before-after-report.cli.js --output ./dataset/output/benchmark-before-after.report.json",
+    "smoke:real-mini-run": "node scripts/real-mini-run-quality-gate.mjs",
     "smoke:tuning-loop-dry-run": "node scripts/tuning-loop-dry-run.mjs",
     "runtime:drift-report": "pnpm run smoke:compile && node .smoke-dist/tests/runtime-drift-report.cli.js",
     "eval:report": "pnpm run smoke:compile && node .smoke-dist/tests/eval-report.cli.js",

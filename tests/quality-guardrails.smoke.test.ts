@@ -31,6 +31,7 @@ test('pipeline:quality keeps required quality guard steps', async () => {
     'Transition Gating',
     'Transition Decision',
     'Tuning Dry Run',
+    'Real Mini Run',
     'Before/After Report',
   ];
   const stepIndexes = stepNames.map((stepName) => source.indexOf(`name: '${stepName}'`));
@@ -48,6 +49,7 @@ test('pipeline:quality keeps required quality guard steps', async () => {
   assert.match(source, /args:\s*\['run', 'smoke:transition-gating'\]/);
   assert.match(source, /args:\s*\['run', 'smoke:transition-decision'\]/);
   assert.match(source, /args:\s*\['run', 'smoke:tuning-loop-dry-run'\]/);
+  assert.match(source, /args:\s*\['run', 'smoke:real-mini-run'\]/);
   assert.match(source, /args:\s*\['run', 'smoke:benchmark-before-after-report'\]/);
 });
 
@@ -70,5 +72,6 @@ test('repo config keeps smoke artifact ignored and quality scripts published', a
   assert.equal(typeof scripts['smoke:regression-gate'], 'string');
   assert.equal(typeof scripts['smoke:transition-gating'], 'string');
   assert.equal(typeof scripts['smoke:transition-decision'], 'string');
+  assert.equal(typeof scripts['smoke:real-mini-run'], 'string');
   assert.equal(typeof scripts['smoke:benchmark-before-after-report'], 'string');
 });

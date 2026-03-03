@@ -11,6 +11,7 @@ function makeScore(patch: Partial<TransitionEdgeScore>): TransitionEdgeScore {
     harmonicCompatibilityScore: patch.harmonicCompatibilityScore ?? 0.8,
     rhythmAlignmentScore: patch.rhythmAlignmentScore ?? 0.8,
     loudnessContinuityScore: patch.loudnessContinuityScore ?? 0.8,
+    smoothnessScore: patch.smoothnessScore ?? 0.8,
     artifactPenalty: patch.artifactPenalty ?? 0.2,
     finalScore: patch.finalScore ?? 0.75,
   };
@@ -28,6 +29,10 @@ function makeCandidate(id: string, finalScore: number): TransitionCandidate {
     diagnostic: {
       primaryDriver: 'event',
       summary: 'fixture',
+    },
+    explain: {
+      topReasons: ['fixture'],
+      gateStatus: 'pass',
     },
     gatePreview: {
       wouldPassV3: true,

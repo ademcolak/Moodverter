@@ -1,7 +1,7 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppFrame } from './components/layout/AppFrame';
 import { BottomTabBar } from './components/navigation/BottomTabBar';
-import { HistoryPage } from './components/pages/HistoryPage';
+import { HistoryPage, type TransitionFeedbackEntry } from './components/pages/HistoryPage';
 import { LibraryPage } from './components/pages/LibraryPage';
 import { SettingsPage } from './components/pages/SettingsPage';
 import { TransitionPage } from './components/pages/TransitionPage';
@@ -34,6 +34,7 @@ import {
   getBaselineRunHistory,
   getBenchmarkSeedTrackIds,
   getRuntimeGateCalibration,
+  getTransitionRuntimeEvents,
   getTransitionRelevanceMap,
   recordTransitionRuntimeEvent,
   resolveBenchmarkSeedTargetCount,
@@ -48,11 +49,13 @@ import {
   type TransitionDecision,
   type TransitionRelevanceMap,
   type RuntimeGateThresholds,
+  type TransitionRuntimeEvent,
   runBaselineEvaluation,
   type TransitionCandidate,
 } from './services/transition';
 
 const ONE_TIME_DATA_RESET_KEY = 'moodverter_data_reset_20260209';
+const TRANSITION_FEEDBACK_STORAGE_KEY = 'moodverter_transition_feedback_v1';
 type AppTab = 'library' | 'transition' | 'history' | 'settings';
 type BaselineScope = 'selected' | 'all' | 'benchmark';
 const REQUIRED_RELEVANT_TARGETS_PER_SEED = 2;
@@ -181,6 +184,49 @@ function formatTuningIssue(issue: BaselineTuningAction['issue']): string {
 
 function formatGateLabel(passed: boolean): string {
   return passed ? 'PASS' : 'FAIL';
+}
+
+function buildRuntimeEventKey(event: Pick<TransitionRuntimeEvent, 'recordedAt' | 'sourceTrackId' | 'targetTrackId'>): string {
+  return `${event.recordedAt}:${event.sourceTrackId}:${event.targetTrackId}`;
+}
+
+function readTransitionFeedbackEvents(): TransitionFeedbackEntry[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(TRANSITION_FEEDBACK_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const entry = item as Partial<TransitionFeedbackEntry>;
+        if (
+          typeof entry.eventKey !== 'string'
+          || (entry.rating !== 'good' && entry.rating !== 'ok' && entry.rating !== 'bad')
+          || typeof entry.recordedAt !== 'string'
+        ) {
+          return null;
+        }
+        return entry as TransitionFeedbackEntry;
+      })
+      .filter((entry): entry is TransitionFeedbackEntry => entry !== null)
+      .slice(0, 200);
+  } catch {
+    return [];
+  }
+}
+
+function writeTransitionFeedbackEvents(entries: TransitionFeedbackEntry[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      TRANSITION_FEEDBACK_STORAGE_KEY,
+      JSON.stringify(entries.slice(0, 200))
+    );
+  } catch (error) {
+    console.warn('Failed to persist transition feedback:', error);
+  }
 }
 
 function computeAverage(values: number[]): number {
@@ -360,6 +406,10 @@ function App() {
   const [lastAutoTransitionDecision, setLastAutoTransitionDecision] = useState<TransitionDecision | null>(null);
   const [transitionEffectStyle, setTransitionEffectStyle] = useState<TransitionEffectStyle>('clean');
   const [runtimeEventVersion, setRuntimeEventVersion] = useState(0);
+  const [runtimeEvents, setRuntimeEvents] = useState<TransitionRuntimeEvent[]>([]);
+  const [transitionFeedbackEvents, setTransitionFeedbackEvents] = useState<TransitionFeedbackEntry[]>([]);
+  const [feedbackTargetEventKey, setFeedbackTargetEventKey] = useState<string | null>(null);
+  const [lastFeedbackLabel, setLastFeedbackLabel] = useState<string | null>(null);
   const [handoffProfile, setHandoffProfile] = useState<TransitionHandoffProfile>(() =>
     getYouTubeProvider().getTransitionHandoffProfile()
   );
@@ -401,6 +451,10 @@ function App() {
     setLastAutoTransitionDecision(null);
     setTransitionEffectStyle('clean');
     setRuntimeEventVersion(0);
+    setRuntimeEvents([]);
+    setTransitionFeedbackEvents([]);
+    setFeedbackTargetEventKey(null);
+    setLastFeedbackLabel(null);
     setActiveTab('library');
     autoSkipDecisionLoggedAtRef.current.clear();
     libraryScrollTopRef.current = 0;
@@ -430,6 +484,8 @@ function App() {
     setRelevanceMap(getTransitionRelevanceMap());
     setBaselineHistory(getBaselineRunHistory(5));
     setBenchmarkSeedTrackIdsState(getBenchmarkSeedTrackIds());
+    setRuntimeEvents(getTransitionRuntimeEvents(50));
+    setTransitionFeedbackEvents(readTransitionFeedbackEvents());
   }, []);
 
   useEffect(() => {
@@ -450,6 +506,9 @@ function App() {
     clearYouTubeLocalData();
     clearTransitionData();
     clearBenchmarkSeedTrackIds();
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(TRANSITION_FEEDBACK_STORAGE_KEY);
+    }
     try {
       window.localStorage.setItem(ONE_TIME_DATA_RESET_KEY, '1');
     } catch (error) {
@@ -804,6 +863,9 @@ function App() {
       }
       clearTransitionData();
       clearBenchmarkSeedTrackIds();
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem(TRANSITION_FEEDBACK_STORAGE_KEY);
+      }
       setAnalysisStates({});
       setSeedTrackId(null);
       setTransitionCandidates([]);
@@ -831,10 +893,27 @@ function App() {
     }
   }, [isClearingLibrary, library, refreshLibrary]);
 
-  const noteRuntimeEvent = useCallback((input: RecordTransitionRuntimeEventInput) => {
-    recordTransitionRuntimeEvent(input);
+  const noteRuntimeEvent = useCallback((input: RecordTransitionRuntimeEventInput): TransitionRuntimeEvent => {
+    const event = recordTransitionRuntimeEvent(input);
     setRuntimeEventVersion((current) => current + 1);
+    return event;
   }, []);
+
+  const handleSubmitTransitionFeedback = useCallback((rating: 'good' | 'ok' | 'bad') => {
+    if (!feedbackTargetEventKey) return;
+    const nextEntry: TransitionFeedbackEntry = {
+      eventKey: feedbackTargetEventKey,
+      rating,
+      recordedAt: new Date().toISOString(),
+    };
+    setTransitionFeedbackEvents((current) => {
+      const withoutSameEvent = current.filter((entry) => entry.eventKey !== feedbackTargetEventKey);
+      const next = [nextEntry, ...withoutSameEvent].slice(0, 200);
+      writeTransitionFeedbackEvents(next);
+      return next;
+    });
+    setLastFeedbackLabel(rating === 'good' ? 'iyi' : rating === 'ok' ? 'idare eder' : 'kotu');
+  }, [feedbackTargetEventKey]);
 
   const handlePlayTransitionCandidate = useCallback(async (
     candidate: TransitionCandidate,
@@ -865,7 +944,7 @@ function App() {
       const finishedAtMs =
         typeof performance !== 'undefined' ? performance.now() : Date.now();
       const observedLatencyMs = Math.max(0, Math.round(finishedAtMs - startedAtMs));
-      noteRuntimeEvent({
+      const runtimeEvent = noteRuntimeEvent({
         sourceTrackId: candidate.sourceTrackId,
         targetTrackId: candidate.targetTrackId,
         latencyMs: observedLatencyMs,
@@ -873,6 +952,8 @@ function App() {
         dropped: false,
         mode: options.reason === 'auto' ? 'auto' : 'manual',
       });
+      setFeedbackTargetEventKey(buildRuntimeEventKey(runtimeEvent));
+      setLastFeedbackLabel(null);
       setLastAutoTransitionLatencyMs(observedLatencyMs);
       const nextLead = computeAdaptiveTransitionLeadMs(
         autoTransitionLeadMsRef.current,
@@ -909,7 +990,7 @@ function App() {
       const failedAtMs =
         typeof performance !== 'undefined' ? performance.now() : Date.now();
       const failureLatencyMs = Math.max(0, Math.round(failedAtMs - startedAtMs));
-      noteRuntimeEvent({
+      const runtimeEvent = noteRuntimeEvent({
         sourceTrackId: candidate.sourceTrackId,
         targetTrackId: candidate.targetTrackId,
         latencyMs: failureLatencyMs,
@@ -917,6 +998,7 @@ function App() {
         dropped: true,
         mode: options.reason === 'auto' ? 'auto' : 'manual',
       });
+      setFeedbackTargetEventKey(buildRuntimeEventKey(runtimeEvent));
       console.error('Failed to play transition candidate:', error);
       queuedManualTransitionRef.current = null;
       setUiError('Transition adayi calinamadi.');
@@ -1471,6 +1553,10 @@ function App() {
     setHandoffProfile(appliedProfile);
   }, [baselineResult, baselineScope, provider]);
 
+  useEffect(() => {
+    setRuntimeEvents(getTransitionRuntimeEvents(50));
+  }, [runtimeEventVersion]);
+
   const extractAutoRelevantTargetIds = useCallback(async (
     seedId: string,
     minimumCount: number
@@ -1614,6 +1700,9 @@ function App() {
       clearYouTubeLocalData();
       clearTransitionData();
       clearBenchmarkSeedTrackIds();
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem(TRANSITION_FEEDBACK_STORAGE_KEY);
+      }
       resetRuntimeState({ clearInput: true });
 
       await refreshLibrary();
@@ -1963,15 +2052,22 @@ function App() {
         autoTransitionLeadMs={autoTransitionLeadMs}
         lastAutoTransitionLatencyMs={lastAutoTransitionLatencyMs}
         autoDecisionSummary={autoDecisionSummary}
+        canSendFeedback={Boolean(feedbackTargetEventKey)}
+        lastFeedbackLabel={lastFeedbackLabel}
         onRefreshCandidates={() => {
           void refreshTransitionCandidates();
         }}
         onNowTransition={(candidate) => {
           void handleNowTransition(candidate);
         }}
+        onSubmitFeedback={handleSubmitTransitionFeedback}
       />
     ) : activeTab === 'history' ? (
-      <HistoryPage />
+      <HistoryPage
+        baselineHistory={baselineHistory}
+        runtimeEvents={runtimeEvents}
+        feedbackEvents={transitionFeedbackEvents}
+      />
     ) : (
       <SettingsPage advancedContent={advancedToolsContent} />
     );

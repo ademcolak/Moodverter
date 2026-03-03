@@ -32,7 +32,7 @@ test('getRuntimeGateCalibration returns fallback thresholds when samples are ins
   });
 
   assert.equal(calibration.usedFallbackThresholds, true);
-  assert.equal(calibration.thresholds.minTransitionRuntimeSampleCount, 5);
+  assert.equal(calibration.thresholds.minTransitionRuntimeSampleCount, 10);
   assert.equal(calibration.thresholds.maxTransitionLatencyP95Ms, 2200);
   assert.match(calibration.summary, /Fallback esikler kullanildi/);
 });

@@ -219,6 +219,10 @@ test('scoring fixture E: v3 decision selects top candidate with sufficient margi
       targetLoudnessRms: targetA.loudnessRms,
       score: scoreA,
       diagnostic: explainTransitionPair(source, targetA),
+      explain: {
+        topReasons: ['fixture'],
+        gateStatus: 'pass',
+      },
       gatePreview: {
         wouldPassV3: true,
         reasons: [],
@@ -233,6 +237,10 @@ test('scoring fixture E: v3 decision selects top candidate with sufficient margi
       targetLoudnessRms: targetB.loudnessRms,
       score: scoreB,
       diagnostic: explainTransitionPair(source, targetB),
+      explain: {
+        topReasons: ['fixture'],
+        gateStatus: 'pass',
+      },
       gatePreview: {
         wouldPassV3: true,
         reasons: [],

@@ -60,6 +60,13 @@ pnpm dev
 - [x] Benchmark panelinde runtime threshold drift trend ozeti
 - [x] Benchmark runtime ozet satiri (`Latency p95`, `Stall`, `Drop`)
 - [x] Scoring v2 (`tempo-ratio` + `harmonic compatibility`)
+- [x] Transition adayinda explainability (`Neden bu aday?`, 3-4 neden)
+- [x] History ekraninda `skip reason trend` + `son 20 gecis kalite trendi`
+- [x] Gecis sonrasi hizli feedback (`iyi / idare eder / kotu`)
+- [x] Bottom-3 diagnostic bundle üretimi (`tuning:loop --diagnostic-bundle-out`)
+- [x] `seedSetHash + runMode` metadata zorunlulugu ve karsilastirma korumasi
+- [x] Retrieval quality raporuna cesitlilik metriği (`uniqueTargetRatio`)
+- [x] `pipeline:quality` zincirine `Real Mini Run` adimi
 
 ## 5) Kalite Komutları
 
@@ -71,8 +78,10 @@ pnpm run qa:auto
 pnpm run oss:guard
 pnpm run dataset:pipeline -- --config ./configs/dataset-pipeline.example.json
 pnpm run tuning:loop -- --input <json> --output <json>
+pnpm run tuning:loop -- --input <json> --output <json> --diagnostic-bundle-out <json>
 pnpm run runtime:drift-report -- --input <json> --output <json>
 pnpm run smoke:tuning-loop-dry-run
+pnpm run smoke:real-mini-run
 ```
 
 Ayrı çalıştırma:
@@ -86,6 +95,7 @@ pnpm smoke:test
 pnpm smoke:regression-gate
 pnpm run smoke:retrieval-gate
 pnpm run smoke:tuning-loop-dry-run
+pnpm run smoke:real-mini-run
 ```
 
 ## 6) Operasyon Kuralları
@@ -111,6 +121,7 @@ pnpm run smoke:tuning-loop-dry-run
 ## 7) Aktif Takip Maddeleri
 
 Kaynak: `docs/PLAN.md` altındaki `Next` bölümü.
+Detayli execution tasklist: `docs/phases/phase-05-eval-reliability-tuning-ops.md`.
 
 - [ ] Labelled seed sayısını en az 10 seviyesinde sürekli koru
 - [ ] Seed başına minimum 2 relevant target etiketini koru

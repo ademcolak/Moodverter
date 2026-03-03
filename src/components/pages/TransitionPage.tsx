@@ -32,8 +32,11 @@ export interface TransitionPageProps {
   autoTransitionLeadMs: number;
   lastAutoTransitionLatencyMs: number | null;
   autoDecisionSummary: string | null;
+  canSendFeedback: boolean;
+  lastFeedbackLabel: string | null;
   onRefreshCandidates: () => void;
   onNowTransition: (candidate: TransitionCandidate) => void;
+  onSubmitFeedback: (value: 'good' | 'ok' | 'bad') => void;
 }
 
 export function TransitionPage({
@@ -46,8 +49,11 @@ export function TransitionPage({
   autoTransitionLeadMs,
   lastAutoTransitionLatencyMs,
   autoDecisionSummary,
+  canSendFeedback,
+  lastFeedbackLabel,
   onRefreshCandidates,
   onNowTransition,
+  onSubmitFeedback,
 }: TransitionPageProps) {
   return (
     <div className="h-full min-h-0 overflow-hidden flex flex-col gap-4">
@@ -85,6 +91,36 @@ export function TransitionPage({
             {autoDecisionSummary}
           </div>
         )}
+        <div className="mt-2 flex items-center gap-2">
+          <span className="text-[11px] text-[var(--color-text-secondary)]">Son geçiş:</span>
+          <button
+            type="button"
+            disabled={!canSendFeedback}
+            onClick={() => onSubmitFeedback('good')}
+            className="px-2 py-1 text-[10px] border border-white/10 text-emerald-300 disabled:opacity-50"
+          >
+            iyi
+          </button>
+          <button
+            type="button"
+            disabled={!canSendFeedback}
+            onClick={() => onSubmitFeedback('ok')}
+            className="px-2 py-1 text-[10px] border border-white/10 text-amber-300 disabled:opacity-50"
+          >
+            idare eder
+          </button>
+          <button
+            type="button"
+            disabled={!canSendFeedback}
+            onClick={() => onSubmitFeedback('bad')}
+            className="px-2 py-1 text-[10px] border border-white/10 text-rose-300 disabled:opacity-50"
+          >
+            kotu
+          </button>
+          {lastFeedbackLabel && (
+            <span className="text-[10px] text-[var(--color-text-secondary)]">Kaydedildi: {lastFeedbackLabel}</span>
+          )}
+        </div>
       </section>
 
       <section className="bg-[var(--color-surface)] border border-white/10 p-3 flex-1 min-h-0 overflow-hidden flex flex-col">
@@ -131,7 +167,15 @@ export function TransitionPage({
                         {targetTrack?.artist ?? 'Bilinmeyen sanatçı'}
                       </div>
                       <div className="text-[11px] text-[var(--color-text-secondary)] mt-1 truncate">
-                        {buildReasonLabel(candidate)}
+                        Neden bu aday? {candidate.explain.topReasons.slice(0, 3).join(' • ') || buildReasonLabel(candidate)}
+                      </div>
+                      {candidate.explain.gateStatus === 'fail' && candidate.explain.skipReason && (
+                        <div className="text-[11px] text-amber-300 mt-1 truncate">
+                          Gate notu: {candidate.explain.skipReason}
+                        </div>
+                      )}
+                      <div className="text-[11px] text-[var(--color-text-secondary)] mt-1">
+                        Smoothness {formatPercent(candidate.score.smoothnessScore)}
                       </div>
                     </div>
 

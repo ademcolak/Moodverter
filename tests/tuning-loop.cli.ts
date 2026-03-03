@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
   TRANSITION_SCORING_VERSION,
   analyzeTrackWithHeuristicV1,
+  buildBottomSeedDiagnosticBundle,
   clearTransitionData,
   clearTransitionRelevanceMap,
   findTransitionCandidates,
@@ -54,6 +55,7 @@ interface TuningLoopInput {
   goodThreshold?: number;
   scopeId?: string;
   runtimeGate?: RuntimeGateInput;
+  runMode?: 'synthetic' | 'real';
   search?: TuningSearchInput;
 }
 
@@ -89,7 +91,11 @@ function normalizePercent(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function parseArgs(argv: string[]): { inputPath: string | null; outputPath: string | null } {
+function parseArgs(argv: string[]): {
+  inputPath: string | null;
+  outputPath: string | null;
+  diagnosticBundleOutPath: string | null;
+} {
   const readFlagValue = (flag: string): string | null => {
     const index = argv.findIndex((token) => token === flag);
     if (index < 0) return null;
@@ -99,6 +105,7 @@ function parseArgs(argv: string[]): { inputPath: string | null; outputPath: stri
   return {
     inputPath: readFlagValue('--input'),
     outputPath: readFlagValue('--output'),
+    diagnosticBundleOutPath: readFlagValue('--diagnostic-bundle-out'),
   };
 }
 
@@ -268,6 +275,7 @@ function computeTrialObjective(result: BaselineEvaluationResult): number {
 
 function printSummary(prefix: string, result: BaselineEvaluationResult): void {
   console.log(`${prefix} scoring=${result.scoringVersion} hit@3=${result.hitAt3 ?? 'NA'} hit@5=${result.hitAt5 ?? 'NA'}`);
+  console.log(`${prefix} runMode=${result.runMode} runtimeSamples=${result.runtimeSampleCount} seedSetHash=${result.seedSetHash}`);
   console.log(`${prefix} coverage=${Math.round(result.coverageRate * 100)}% labeled=${result.labeledSeedCount}`);
   console.log(`${prefix} gates regression=${result.regressionGatePassed ? 'PASS' : 'FAIL'} tuning=${result.tuningValidationPassed ? 'PASS' : 'FAIL'} label=${result.relevanceTargetGatePassed ? 'PASS' : 'FAIL'} runtime=${result.runtimeGatePassed ? 'PASS' : 'FAIL'}`);
   if (result.tuningActions.length > 0) {
@@ -291,6 +299,7 @@ async function runTrial(input: {
   enforceTuningValidationGate: boolean;
   enforceRelevantTargetMinimum: boolean;
   enforceRuntimeGate: boolean;
+  runMode: 'synthetic' | 'real';
 }): Promise<BaselineEvaluationResult> {
   const persistedRelevantTargets = await prepareTrialState(
     input.tracks,
@@ -313,6 +322,7 @@ async function runTrial(input: {
     maxTransitionDropRate: input.runtimeGate.maxTransitionDropRate,
     scopeLabel: 'custom',
     scopeId: `${input.scopeId}:${input.trialId}`,
+    runMode: input.runMode,
     limit: input.limit,
     goodThreshold: input.goodThreshold,
   });
@@ -327,6 +337,7 @@ async function runSingleMode(input: {
   goodThreshold: number;
   requiredRelevantTargetsPerSeed: number;
   runtimeGate: NormalizedRuntimeGateInput;
+  runMode: 'synthetic' | 'real';
 }): Promise<{
   result: BaselineEvaluationResult;
   artifact: Record<string, unknown>;
@@ -345,6 +356,7 @@ async function runSingleMode(input: {
     enforceTuningValidationGate: true,
     enforceRelevantTargetMinimum: true,
     enforceRuntimeGate: input.runtimeGate.enforce,
+    runMode: input.runMode,
   });
 
   const artifact = {
@@ -402,6 +414,7 @@ async function runSearchMode(input: {
   defaultRequiredRelevantTargetsPerSeed: number;
   defaultRuntimeGate: NormalizedRuntimeGateInput;
   search: TuningSearchInput;
+  runMode: 'synthetic' | 'real';
 }): Promise<{
   bestResult: BaselineEvaluationResult;
   artifact: Record<string, unknown>;
@@ -435,6 +448,7 @@ async function runSearchMode(input: {
       enforceRuntimeGate: Boolean(
         trial.enforceRuntimeGate ?? runtimeGate.enforce
       ),
+      runMode: input.runMode,
     });
     const objectiveScore = computeTrialObjective(result);
     trialSummaries.push({
@@ -486,6 +500,7 @@ async function runSearchMode(input: {
       enforceTuningValidationGate: true,
       enforceRelevantTargetMinimum: true,
       enforceRuntimeGate: runtimeGate.enforce,
+      runMode: input.runMode,
     });
   }
 
@@ -526,7 +541,7 @@ async function runSearchMode(input: {
 }
 
 async function main(): Promise<void> {
-  const { inputPath, outputPath } = parseArgs(process.argv.slice(2));
+  const { inputPath, outputPath, diagnosticBundleOutPath } = parseArgs(process.argv.slice(2));
   const input = await loadInput(inputPath);
 
   if (!Array.isArray(input.tracks) || input.tracks.length < 2) {
@@ -551,6 +566,7 @@ async function main(): Promise<void> {
   const scopeId = (input.scopeId ?? 'tuning-loop').trim() || 'tuning-loop';
   const limit = Math.max(1, Math.floor(input.limit ?? 5));
   const goodThreshold = normalizePercent(input.goodThreshold ?? 0.6);
+  const runMode = input.runMode === 'real' ? 'real' : 'synthetic';
 
   installBrowserMocks();
 
@@ -564,9 +580,20 @@ async function main(): Promise<void> {
       defaultGoodThreshold: goodThreshold,
       defaultRequiredRelevantTargetsPerSeed: requiredRelevantTargetsPerSeed,
       defaultRuntimeGate: runtimeGate,
+      runMode,
       search: input.search,
     });
     printSummary('[tuning:loop][best]', bestResult);
+
+    if (diagnosticBundleOutPath) {
+      const bundle = await buildBottomSeedDiagnosticBundle({ baselineResult: bestResult, candidateLimit: 5 });
+      const absoluteBundlePath = path.isAbsolute(diagnosticBundleOutPath)
+        ? diagnosticBundleOutPath
+        : path.resolve(process.cwd(), diagnosticBundleOutPath);
+      await fs.mkdir(path.dirname(absoluteBundlePath), { recursive: true });
+      await fs.writeFile(absoluteBundlePath, `${JSON.stringify(bundle, null, 2)}\n`, 'utf-8');
+      console.log(`[tuning:loop] diagnostic bundle written: ${absoluteBundlePath}`);
+    }
 
     if (outputPath) {
       const absoluteOutputPath = path.isAbsolute(outputPath)
@@ -591,8 +618,19 @@ async function main(): Promise<void> {
     goodThreshold,
     requiredRelevantTargetsPerSeed,
     runtimeGate,
+    runMode,
   });
   printSummary('[tuning:loop]', result);
+
+  if (diagnosticBundleOutPath) {
+    const bundle = await buildBottomSeedDiagnosticBundle({ baselineResult: result, candidateLimit: 5 });
+    const absoluteBundlePath = path.isAbsolute(diagnosticBundleOutPath)
+      ? diagnosticBundleOutPath
+      : path.resolve(process.cwd(), diagnosticBundleOutPath);
+    await fs.mkdir(path.dirname(absoluteBundlePath), { recursive: true });
+    await fs.writeFile(absoluteBundlePath, `${JSON.stringify(bundle, null, 2)}\n`, 'utf-8');
+    console.log(`[tuning:loop] diagnostic bundle written: ${absoluteBundlePath}`);
+  }
 
   if (outputPath) {
     const absoluteOutputPath = path.isAbsolute(outputPath)

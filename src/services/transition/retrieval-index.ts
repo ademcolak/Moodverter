@@ -20,6 +20,7 @@ export interface RetrievalQualityReport {
   skippedQueryCount: number;
   recallAtK: number;
   exactTop1Rate: number;
+  uniqueTargetRatio: number;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -186,6 +187,7 @@ export async function evaluateRetrievalQuality(input: {
       skippedQueryCount: input.queries.length,
       recallAtK: 0,
       exactTop1Rate: 0,
+      uniqueTargetRatio: 0,
     };
   }
 
@@ -197,6 +199,7 @@ export async function evaluateRetrievalQuality(input: {
   let skippedQueryCount = 0;
   let recallTotal = 0;
   let exactTop1HitCount = 0;
+  const uniqueRetrievedIndices = new Set<number>();
 
   input.queries.forEach((query) => {
     if (!Array.isArray(query.vector) || query.vector.length !== dims) {
@@ -210,6 +213,9 @@ export async function evaluateRetrievalQuality(input: {
       return;
     }
     const actual = retrievalIndex.query(normalizedQuery, boundedLimit);
+    actual.forEach((index) => {
+      uniqueRetrievedIndices.add(index);
+    });
     const actualSet = new Set(actual);
     const hitCount = expected.filter((index) => actualSet.has(index)).length;
 
@@ -228,5 +234,8 @@ export async function evaluateRetrievalQuality(input: {
     skippedQueryCount,
     recallAtK: evaluatedQueryCount === 0 ? 0 : recallTotal / evaluatedQueryCount,
     exactTop1Rate: evaluatedQueryCount === 0 ? 0 : exactTop1HitCount / evaluatedQueryCount,
+    uniqueTargetRatio: evaluatedQueryCount === 0
+      ? 0
+      : clamp(uniqueRetrievedIndices.size / (evaluatedQueryCount * boundedLimit), 0, 1),
   };
 }
