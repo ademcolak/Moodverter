@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-03-03T11:26:17.435Z",
+  "generatedAt": "2026-03-05T06:31:38.607Z",
   "scopeId": "benchmark-before-after-v1",
   "seedTrackIds": [
     "report-seed-1",
@@ -24,7 +24,7 @@
     "meanTopKScoreDelta": 0
   },
   "before": {
-    "runAt": "2026-03-03T11:26:17.428Z",
+    "runAt": "2026-03-05T06:31:38.599Z",
     "runMode": "synthetic",
     "runtimeSampleCount": 0,
     "seedCount": 10,
@@ -70,7 +70,7 @@
     ]
   },
   "after": {
-    "runAt": "2026-03-03T11:26:17.435Z",
+    "runAt": "2026-03-05T06:31:38.606Z",
     "runMode": "synthetic",
     "runtimeSampleCount": 0,
     "seedCount": 10,

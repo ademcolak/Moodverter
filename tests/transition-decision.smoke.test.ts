@@ -139,3 +139,86 @@ test('decision matrix: duplicate cluster reason is emitted for high diversity pe
   assert.equal(decision.decision, 'skipped');
   assert.ok(decision.gate.reasons.includes('DUPLICATE_CLUSTER'));
 });
+
+test('decision matrix: positive runtime bias can clear confidence threshold for borderline candidate', () => {
+  const decision = decideAutoTransition(
+    [makeCandidate('t1', 0.66, { runtimeBias: 0.14 })],
+    {
+      minTop1Score: 0.6,
+      minTop1Top2Margin: 0.05,
+      maxArtifactPenalty: 0.58,
+      confidenceThreshold: 0.76,
+      fallbackOnLowConfidence: true,
+      manualQueueOnLowConfidence: false,
+    }
+  );
+
+  assert.equal(decision.decision, 'selected');
+  assert.equal(decision.gate.passed, true);
+  assert.ok((decision.confidenceScore ?? 0) >= 0.76);
+});
+
+test('decision matrix: negative runtime bias triggers low-confidence fallback for borderline candidate', () => {
+  const decision = decideAutoTransition(
+    [makeCandidate('t1', 0.66, { runtimeBias: -0.14 })],
+    {
+      minTop1Score: 0.6,
+      minTop1Top2Margin: 0.05,
+      maxArtifactPenalty: 0.58,
+      confidenceThreshold: 0.76,
+      fallbackOnLowConfidence: true,
+      manualQueueOnLowConfidence: false,
+    }
+  );
+
+  assert.equal(decision.decision, 'skipped');
+  assert.ok(decision.gate.reasons.includes('LOW_CONFIDENCE_FALLBACK'));
+  assert.ok((decision.confidenceScore ?? 1) < 0.76);
+});
+
+test('decision matrix: uncertainty band blocks auto when margin is thin and runtime risk is high', () => {
+  const decision = decideAutoTransition(
+    [
+      makeCandidate('t1', 0.791, {
+        runtimeBias: -0.14,
+        score: makeScore({ finalScore: 0.791, artifactPenalty: 0.42 }),
+      }),
+      makeCandidate('t2', 0.73),
+    ],
+    {
+      minTop1Score: 0.6,
+      minTop1Top2Margin: 0.06,
+      maxArtifactPenalty: 0.58,
+      confidenceThreshold: 0.2,
+      fallbackOnLowConfidence: true,
+      manualQueueOnLowConfidence: false,
+    }
+  );
+
+  assert.equal(decision.decision, 'skipped');
+  assert.ok(decision.gate.reasons.includes('LOW_CONFIDENCE_FALLBACK'));
+  assert.ok(!decision.gate.reasons.includes('LOW_MARGIN'));
+});
+
+test('decision matrix: uncertainty band does not block auto when runtime risk is low', () => {
+  const decision = decideAutoTransition(
+    [
+      makeCandidate('t1', 0.791, {
+        runtimeBias: 0.14,
+        score: makeScore({ finalScore: 0.791, artifactPenalty: 0.2 }),
+      }),
+      makeCandidate('t2', 0.73),
+    ],
+    {
+      minTop1Score: 0.6,
+      minTop1Top2Margin: 0.06,
+      maxArtifactPenalty: 0.58,
+      confidenceThreshold: 0.2,
+      fallbackOnLowConfidence: true,
+      manualQueueOnLowConfidence: false,
+    }
+  );
+
+  assert.equal(decision.decision, 'selected');
+  assert.equal(decision.gate.passed, true);
+});

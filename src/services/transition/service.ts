@@ -115,6 +115,15 @@ const NEAR_DUPLICATE_TARGET_WINDOW_MS = 5000;
 const FEEDBACK_BAD_STREAK_BLACKLIST_THRESHOLD = 3;
 const FEEDBACK_BLACKLIST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const LEARNING_BIAS_MAX_ABS = 0.12;
+const RUNTIME_PAIR_BIAS_MAX_ABS = 0.14;
+const RUNTIME_PAIR_BIAS_MIN_SAMPLES = 4;
+const RUNTIME_PAIR_BIAS_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+const RUNTIME_PAIR_BIAS_HALFLIFE_MS = 3 * 24 * 60 * 60 * 1000;
+const RUNTIME_CONTEXT_BIAS_MAX_ABS = 0.08;
+const RUNTIME_CONTEXT_BIAS_MIN_SAMPLES = 5;
+const DECISION_MARGIN_UNCERTAINTY_MULTIPLIER = 1.35;
+const DECISION_RUNTIME_RISK_BIAS_THRESHOLD = -0.04;
+const DECISION_ARTIFACT_RISK_THRESHOLD = 0.36;
 const BENCHMARK_MINIMUM_COVERAGE_DEFAULT = 0.8;
 
 const EVENT_COMPATIBILITY: Record<string, Partial<Record<string, number>>> = {
@@ -459,6 +468,22 @@ function sanitizeTransitionRuntimeEvent(value: unknown): TransitionRuntimeEvent 
     ? entry.recordedAt
     : nowIsoString();
   const latencyMs = Math.max(0, Math.round(toFiniteNumber(entry.latencyMs, 0)));
+  const audibleReadyWaitMs =
+    typeof entry.audibleReadyWaitMs === 'number' && Number.isFinite(entry.audibleReadyWaitMs)
+      ? Math.max(0, Math.round(entry.audibleReadyWaitMs))
+      : undefined;
+  const recoverPlaybackWaitMs =
+    typeof entry.recoverPlaybackWaitMs === 'number' && Number.isFinite(entry.recoverPlaybackWaitMs)
+      ? Math.max(0, Math.round(entry.recoverPlaybackWaitMs))
+      : undefined;
+  const overlapAppliedMs =
+    typeof entry.overlapAppliedMs === 'number' && Number.isFinite(entry.overlapAppliedMs)
+      ? Math.max(0, Math.round(entry.overlapAppliedMs))
+      : undefined;
+  const sourceFadeOutMs =
+    typeof entry.sourceFadeOutMs === 'number' && Number.isFinite(entry.sourceFadeOutMs)
+      ? Math.max(0, Math.round(entry.sourceFadeOutMs))
+      : undefined;
   const mode = entry.mode === 'manual' ? 'manual' : 'auto';
 
   return {
@@ -466,6 +491,10 @@ function sanitizeTransitionRuntimeEvent(value: unknown): TransitionRuntimeEvent 
     sourceTrackId,
     targetTrackId,
     latencyMs,
+    audibleReadyWaitMs,
+    recoverPlaybackWaitMs,
+    overlapAppliedMs,
+    sourceFadeOutMs,
     stalled: Boolean(entry.stalled),
     dropped: Boolean(entry.dropped),
     mode,
@@ -1093,6 +1122,197 @@ function computeLearningBias(
   return clamp(centered * LEARNING_BIAS_MAX_ABS * confidence, -LEARNING_BIAS_MAX_ABS, LEARNING_BIAS_MAX_ABS);
 }
 
+interface RuntimeBiasSnapshot {
+  event: TransitionRuntimeEvent;
+  weight: number;
+}
+
+interface RuntimeRiskSummary {
+  risk: number;
+  sampleCount: number;
+  weightedCount: number;
+}
+
+function computeRecencyWeight(eventMs: number, nowMs: number): number {
+  const ageMs = Math.max(0, nowMs - eventMs);
+  return Math.pow(0.5, ageMs / RUNTIME_PAIR_BIAS_HALFLIFE_MS);
+}
+
+function computeWeightedAverage(
+  values: Array<{ value: number; weight: number }>
+): number | null {
+  if (values.length === 0) return null;
+  const weightedSum = values.reduce((sum, entry) => sum + entry.value * entry.weight, 0);
+  const totalWeight = values.reduce((sum, entry) => sum + entry.weight, 0);
+  if (totalWeight <= 0) return null;
+  return weightedSum / totalWeight;
+}
+
+function summarizeRuntimeRisk(snapshots: RuntimeBiasSnapshot[]): RuntimeRiskSummary | null {
+  if (snapshots.length === 0) return null;
+  const totalWeight = snapshots.reduce((sum, snapshot) => sum + snapshot.weight, 0);
+  if (totalWeight <= 0) return null;
+
+  const weightedStallRate =
+    snapshots.reduce((sum, snapshot) => sum + (snapshot.event.stalled ? snapshot.weight : 0), 0) / totalWeight;
+  const weightedDropRate =
+    snapshots.reduce((sum, snapshot) => sum + (snapshot.event.dropped ? snapshot.weight : 0), 0) / totalWeight;
+  const weightedLatencyMs = computeWeightedAverage(
+    snapshots
+      .map((snapshot) => ({ value: snapshot.event.latencyMs, weight: snapshot.weight }))
+      .filter((entry) => Number.isFinite(entry.value))
+  );
+  const weightedAudibleWaitMs = computeWeightedAverage(
+    snapshots
+      .map((snapshot) => ({ value: snapshot.event.audibleReadyWaitMs ?? Number.NaN, weight: snapshot.weight }))
+      .filter((entry) => Number.isFinite(entry.value))
+  );
+
+  const latencyPenalty = weightedLatencyMs === null ? 0 : clamp((weightedLatencyMs - 1400) / 1800, 0, 1);
+  const audiblePenalty = weightedAudibleWaitMs === null ? 0 : clamp((weightedAudibleWaitMs - 320) / 500, 0, 1);
+
+  return {
+    risk: clamp(
+      weightedStallRate * 0.45
+        + weightedDropRate * 0.6
+        + latencyPenalty * 0.25
+        + audiblePenalty * 0.2,
+      0,
+      1
+    ),
+    sampleCount: snapshots.length,
+    weightedCount: totalWeight,
+  };
+}
+
+function toRuntimeBias(
+  summary: RuntimeRiskSummary,
+  options: {
+    maxAbs: number;
+    confidenceDivisor: number;
+  }
+): number {
+  const reliabilityScore = 1 - summary.risk;
+  const centered = (reliabilityScore - 0.5) * 2;
+  const confidence = clamp(summary.weightedCount / options.confidenceDivisor, 0, 1);
+  return clamp(centered * options.maxAbs * confidence, -options.maxAbs, options.maxAbs);
+}
+
+function computeRuntimeContextFallbackBias(
+  snapshots: RuntimeBiasSnapshot[],
+  sourceTrackId: string,
+  targetTrackId: string
+): number {
+  const sourceSummary = summarizeRuntimeRisk(
+    snapshots.filter((snapshot) => snapshot.event.sourceTrackId === sourceTrackId)
+  );
+  const targetSummary = summarizeRuntimeRisk(
+    snapshots.filter((snapshot) => snapshot.event.targetTrackId === targetTrackId)
+  );
+  const sourceArtist = (trackMetadataById[sourceTrackId]?.artist ?? '').trim().toLowerCase();
+  const targetArtist = (trackMetadataById[targetTrackId]?.artist ?? '').trim().toLowerCase();
+  const sourceArtistSummary = sourceArtist.length > 0
+    ? summarizeRuntimeRisk(
+      snapshots.filter((snapshot) => {
+        const snapshotSourceArtist = (trackMetadataById[snapshot.event.sourceTrackId]?.artist ?? '').trim().toLowerCase();
+        return snapshotSourceArtist === sourceArtist;
+      })
+    )
+    : null;
+  const targetArtistSummary = targetArtist.length > 0
+    ? summarizeRuntimeRisk(
+      snapshots.filter((snapshot) => {
+        const snapshotTargetArtist = (trackMetadataById[snapshot.event.targetTrackId]?.artist ?? '').trim().toLowerCase();
+        return snapshotTargetArtist === targetArtist;
+      })
+    )
+    : null;
+
+  const components: Array<{ summary: RuntimeRiskSummary; baseWeight: number }> = [];
+  if (sourceSummary) components.push({ summary: sourceSummary, baseWeight: 0.45 });
+  if (targetSummary) components.push({ summary: targetSummary, baseWeight: 0.35 });
+  if (sourceArtistSummary) components.push({ summary: sourceArtistSummary, baseWeight: 0.12 });
+  if (targetArtistSummary) components.push({ summary: targetArtistSummary, baseWeight: 0.08 });
+
+  const eligibleComponents = components.filter(
+    (component) => component.summary.sampleCount >= Math.floor(RUNTIME_CONTEXT_BIAS_MIN_SAMPLES / 2)
+  );
+  if (eligibleComponents.length === 0) return 0;
+
+  const effectiveSampleCount = eligibleComponents.reduce(
+    (sum, component) => sum + component.summary.sampleCount * component.baseWeight,
+    0
+  );
+  if (effectiveSampleCount < RUNTIME_CONTEXT_BIAS_MIN_SAMPLES) return 0;
+
+  const weightedRiskSum = eligibleComponents.reduce((sum, component) => (
+    sum + component.summary.risk * component.baseWeight
+  ), 0);
+  const totalBaseWeight = eligibleComponents.reduce((sum, component) => sum + component.baseWeight, 0);
+  if (totalBaseWeight <= 0) return 0;
+
+  const aggregateSummary: RuntimeRiskSummary = {
+    risk: clamp(weightedRiskSum / totalBaseWeight, 0, 1),
+    sampleCount: Math.round(effectiveSampleCount),
+    weightedCount: eligibleComponents.reduce((sum, component) => sum + component.summary.weightedCount, 0),
+  };
+  return toRuntimeBias(aggregateSummary, {
+    maxAbs: RUNTIME_CONTEXT_BIAS_MAX_ABS,
+    confidenceDivisor: 12,
+  });
+}
+
+function computeCandidateSelectionScore(candidate: TransitionCandidate): number {
+  const runtimeBias = candidate.runtimeBias ?? 0;
+  const runtimeRiskPenalty = runtimeBias < 0 ? Math.abs(runtimeBias) * 0.6 : 0;
+  return (
+    candidate.score.finalScore
+    + candidate.learningBias
+    + runtimeBias * 0.9
+    + candidate.confidenceScore * 0.12
+    - candidate.score.artifactPenalty * 0.12
+    - runtimeRiskPenalty
+  );
+}
+
+function computeRuntimeReliabilityBias(
+  sourceTrackId: string,
+  targetTrackId: string,
+  nowMs = Date.now()
+): number {
+  const cutoffMs = nowMs - RUNTIME_PAIR_BIAS_WINDOW_MS;
+  const autoSnapshots = transitionRuntimeEvents
+    .filter((event) => {
+      if (event.mode !== 'auto') return false;
+      if (event.skippedAutoTransition) return false;
+      const eventMs = toUnixMs(event.recordedAt);
+      return eventMs !== null && eventMs >= cutoffMs;
+    })
+    .map((event) => {
+      const eventMs = toUnixMs(event.recordedAt);
+      if (eventMs === null) return null;
+      return {
+        event,
+        weight: computeRecencyWeight(eventMs, nowMs),
+      } satisfies RuntimeBiasSnapshot;
+    })
+    .filter((snapshot): snapshot is RuntimeBiasSnapshot => snapshot !== null)
+    .slice(-40);
+  const pairSnapshots = autoSnapshots.filter(
+    (snapshot) => snapshot.event.sourceTrackId === sourceTrackId && snapshot.event.targetTrackId === targetTrackId
+  );
+
+  if (pairSnapshots.length >= RUNTIME_PAIR_BIAS_MIN_SAMPLES) {
+    const pairSummary = summarizeRuntimeRisk(pairSnapshots);
+    if (!pairSummary) return 0;
+    return toRuntimeBias(pairSummary, {
+      maxAbs: RUNTIME_PAIR_BIAS_MAX_ABS,
+      confidenceDivisor: 8,
+    });
+  }
+  return computeRuntimeContextFallbackBias(autoSnapshots, sourceTrackId, targetTrackId);
+}
+
 function resolveSeedPerformanceTier(
   sourceTrackId: string,
   requestedTier?: TransitionPerformanceTier
@@ -1124,11 +1344,20 @@ function computeDecisionConfidenceScore(input: {
   const marginScore = input.top1Top2Margin === null ? 1 : clamp(input.top1Top2Margin / 0.2, 0, 1);
   const gatePenalty = clamp(input.gateReasonsCount / 5, 0, 1);
   const artifactRisk = clamp(input.topCandidate.score.artifactPenalty, 0, 1);
+  const runtimeBias = typeof input.topCandidate.runtimeBias === 'number'
+    ? clamp(input.topCandidate.runtimeBias, -RUNTIME_PAIR_BIAS_MAX_ABS, RUNTIME_PAIR_BIAS_MAX_ABS)
+    : 0;
+  const runtimeTrustScore = clamp(
+    (runtimeBias + RUNTIME_PAIR_BIAS_MAX_ABS) / (RUNTIME_PAIR_BIAS_MAX_ABS * 2),
+    0,
+    1
+  );
   return clamp(
-    input.topCandidate.score.finalScore * 0.55
-      + marginScore * 0.25
-      + (1 - artifactRisk) * 0.15
-      + (1 - gatePenalty) * 0.05,
+    input.topCandidate.score.finalScore * 0.5
+      + marginScore * 0.22
+      + (1 - artifactRisk) * 0.14
+      + (1 - gatePenalty) * 0.05
+      + runtimeTrustScore * 0.09,
     0,
     1
   );
@@ -1294,6 +1523,17 @@ export function decideAutoTransition(
     reasons.push('LOW_MARGIN');
     hasLowConfidence = true;
   }
+  const runtimeBias = typeof topCandidate.runtimeBias === 'number' ? topCandidate.runtimeBias : 0;
+  const hasRuntimeUncertaintyRisk = top1Top2Margin !== null
+    && top1Top2Margin >= decisionConfig.minTop1Top2Margin
+    && top1Top2Margin < (decisionConfig.minTop1Top2Margin * DECISION_MARGIN_UNCERTAINTY_MULTIPLIER)
+    && (
+      runtimeBias <= DECISION_RUNTIME_RISK_BIAS_THRESHOLD
+      || topCandidate.score.artifactPenalty >= DECISION_ARTIFACT_RISK_THRESHOLD
+    );
+  if (hasRuntimeUncertaintyRisk) {
+    hasLowConfidence = true;
+  }
   if (topCandidate.diversityPenalty > 0.6) {
     reasons.push('DUPLICATE_CLUSTER');
     hasLowConfidence = true;
@@ -1402,6 +1642,7 @@ function buildScoreDiagnostic(score: TransitionEdgeScore): TransitionScoreDiagno
 
 function buildTransitionExplain(
   score: TransitionEdgeScore,
+  runtimeBias = 0,
   gatePreview?: {
     wouldPassV3: boolean;
     reasons: TransitionGateReason[];
@@ -1413,6 +1654,8 @@ function buildTransitionExplain(
   if (score.smoothnessScore >= 0.68) topReasons.push(`Smoothness ${formatPercentLabel(score.smoothnessScore)}`);
   if (score.embeddingSimilarity >= 0.72) topReasons.push(`Doku benzerligi ${formatPercentLabel(score.embeddingSimilarity)}`);
   if (score.loudnessContinuityScore >= 0.7) topReasons.push(`Loudness gecisi ${formatPercentLabel(score.loudnessContinuityScore)}`);
+  if (runtimeBias >= 0.05) topReasons.push(`Runtime guven +${Math.round(runtimeBias * 100)}%`);
+  if (runtimeBias <= -0.05) topReasons.push(`Runtime riski ${Math.round(Math.abs(runtimeBias) * 100)}%`);
 
   const gatedReason = gatePreview?.wouldPassV3 === false
     ? gatePreview.reasons[0]
@@ -1813,6 +2056,16 @@ export async function findTransitionCandidates(
   const sourceTier = resolveSeedPerformanceTier(sourceTrackId, input.seedTrackPerformanceTier);
   const diversityBudgetTopN = resolveDiversityBudgetTopN(limit, sourceTier);
   const sourceArtistNormalized = (trackMetadataById[sourceTrackId]?.artist ?? '').trim().toLowerCase();
+  const runtimeBiasByTarget = new Map<string, number>();
+
+  const resolveRuntimeBias = (targetTrackId: string): number => {
+    if (runtimeBiasByTarget.has(targetTrackId)) {
+      return runtimeBiasByTarget.get(targetTrackId) ?? 0;
+    }
+    const bias = computeRuntimeReliabilityBias(sourceTrackId, targetTrackId);
+    runtimeBiasByTarget.set(targetTrackId, bias);
+    return bias;
+  };
 
   interface TargetNodeReference {
     trackId: string;
@@ -1858,6 +2111,7 @@ export async function findTransitionCandidates(
       const score = scoreTransition(sourceNode, targetEntry.node);
       const gatePreview = applyHardGate(sourceNode, targetEntry.node);
       const learningBias = computeLearningBias(sourceTrackId, targetEntry.trackId);
+      const runtimeBias = resolveRuntimeBias(targetEntry.trackId);
       candidates.push({
         sourceTrackId,
         sourceTimeMs: sourceNode.timeMs,
@@ -1866,15 +2120,19 @@ export async function findTransitionCandidates(
         targetTimeMs: targetEntry.node.timeMs,
         targetLoudnessRms: targetEntry.node.loudnessRms,
         confidenceScore: clamp(
-          score.finalScore * 0.75 + (1 - score.artifactPenalty) * 0.25 + learningBias * 0.5,
+          score.finalScore * 0.75
+            + (1 - score.artifactPenalty) * 0.25
+            + learningBias * 0.5
+            + runtimeBias * 0.45,
           0,
           1
         ),
         diversityPenalty: 0,
         learningBias,
+        runtimeBias,
         score,
         diagnostic: buildScoreDiagnostic(score),
-        explain: buildTransitionExplain(score, {
+        explain: buildTransitionExplain(score, runtimeBias, {
           wouldPassV3: gatePreview.passed,
           reasons: gatePreview.reasons,
         }),
@@ -1894,7 +2152,7 @@ export async function findTransitionCandidates(
     if (aGate !== bGate) {
       return aGate ? -1 : 1;
     }
-    return (b.score.finalScore + b.learningBias) - (a.score.finalScore + a.learningBias);
+    return computeCandidateSelectionScore(b) - computeCandidateSelectionScore(a);
   });
 
   const reranked: TransitionCandidate[] = [];
@@ -2022,8 +2280,7 @@ export async function findTransitionCandidates(
         + (eventPairCount === 0 ? 0.03 : 0)
         + (eventFamilyCount === 0 ? 0.02 : 0);
       const adjustedScore =
-        candidate.score.finalScore
-        + candidate.learningBias
+        computeCandidateSelectionScore(candidate)
         + noveltyBonus
         - targetPenalty
         - targetSaturationPenalty
@@ -2929,11 +3186,30 @@ export function recordTransitionRuntimeEvent(
   hydrateFromStorage();
   const sourceTrackId = normalizeTrackId(input.sourceTrackId);
   const targetTrackId = normalizeTrackId(input.targetTrackId);
+  const recordedAt = typeof input.recordedAt === 'string' && toUnixMs(input.recordedAt) !== null
+    ? new Date(input.recordedAt).toISOString()
+    : nowIsoString();
   const event: TransitionRuntimeEvent = {
-    recordedAt: nowIsoString(),
+    recordedAt,
     sourceTrackId,
     targetTrackId,
     latencyMs: Math.max(0, Math.round(toFiniteNumber(input.latencyMs, 0))),
+    audibleReadyWaitMs:
+      typeof input.audibleReadyWaitMs === 'number' && Number.isFinite(input.audibleReadyWaitMs)
+        ? Math.max(0, Math.round(input.audibleReadyWaitMs))
+        : undefined,
+    recoverPlaybackWaitMs:
+      typeof input.recoverPlaybackWaitMs === 'number' && Number.isFinite(input.recoverPlaybackWaitMs)
+        ? Math.max(0, Math.round(input.recoverPlaybackWaitMs))
+        : undefined,
+    overlapAppliedMs:
+      typeof input.overlapAppliedMs === 'number' && Number.isFinite(input.overlapAppliedMs)
+        ? Math.max(0, Math.round(input.overlapAppliedMs))
+        : undefined,
+    sourceFadeOutMs:
+      typeof input.sourceFadeOutMs === 'number' && Number.isFinite(input.sourceFadeOutMs)
+        ? Math.max(0, Math.round(input.sourceFadeOutMs))
+        : undefined,
     stalled: Boolean(input.stalled),
     dropped: Boolean(input.dropped),
     mode: input.mode === 'manual' ? 'manual' : 'auto',

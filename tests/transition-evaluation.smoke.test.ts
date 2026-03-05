@@ -30,6 +30,30 @@ beforeEach(() => {
   clearTransitionRelevanceMap();
 });
 
+function recordRuntimeSeries(input: {
+  sourceTrackId: string;
+  targetTrackId: string;
+  count: number;
+  latencyMs: number;
+  audibleReadyWaitMs: number;
+  stalled: boolean;
+  dropped: boolean;
+  recordedAtFactory?: (index: number) => string | undefined;
+}): void {
+  for (let index = 0; index < input.count; index += 1) {
+    recordTransitionRuntimeEvent({
+      recordedAt: input.recordedAtFactory?.(index),
+      sourceTrackId: input.sourceTrackId,
+      targetTrackId: input.targetTrackId,
+      latencyMs: input.latencyMs,
+      audibleReadyWaitMs: input.audibleReadyWaitMs,
+      stalled: input.stalled,
+      dropped: input.dropped,
+      mode: 'auto',
+    });
+  }
+}
+
 test('runBaselineEvaluation computes Hit@3/5 when labeled relevance exists', async () => {
   await analyzeTrackWithHeuristicV1({
     id: 'seed-track-1',
@@ -150,6 +174,211 @@ test('runBaselineEvaluation reports runtime p95/stall/drop metrics for benchmark
   assert.equal(result.transitionLatencyP95Ms, 2200);
   assert.equal(result.transitionStallRate, 0.5);
   assert.equal(result.transitionDropRate, 0.5);
+});
+
+test('findTransitionCandidates adds positive runtime bias for reliable auto-transition history', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-runtime-positive',
+    name: 'Seed Track Runtime Positive',
+    artist: 'Seed Artist Runtime Positive',
+    durationMs: 175_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-runtime-positive',
+    name: 'Target Track Runtime Positive',
+    artist: 'Target Artist Runtime Positive',
+    durationMs: 176_000,
+  });
+
+  recordRuntimeSeries({
+    sourceTrackId: 'seed-track-runtime-positive',
+    targetTrackId: 'target-track-runtime-positive',
+    count: 4,
+    latencyMs: 420,
+    audibleReadyWaitMs: 55,
+    stalled: false,
+    dropped: false,
+  });
+
+  const candidates = await findTransitionCandidates({
+    trackId: 'seed-track-runtime-positive',
+    limit: 5,
+  });
+  const pairCandidates = candidates.filter((candidate) => candidate.targetTrackId === 'target-track-runtime-positive');
+
+  assert.ok(pairCandidates.length > 0);
+  assert.ok((pairCandidates[0].runtimeBias ?? 0) > 0);
+  assert.ok(pairCandidates[0].explain.topReasons.some((reason) => reason.includes('Runtime guven')));
+});
+
+test('findTransitionCandidates adds negative runtime bias for unstable auto-transition history', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-runtime-negative',
+    name: 'Seed Track Runtime Negative',
+    artist: 'Seed Artist Runtime Negative',
+    durationMs: 175_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-runtime-negative',
+    name: 'Target Track Runtime Negative',
+    artist: 'Target Artist Runtime Negative',
+    durationMs: 176_000,
+  });
+
+  recordRuntimeSeries({
+    sourceTrackId: 'seed-track-runtime-negative',
+    targetTrackId: 'target-track-runtime-negative',
+    count: 4,
+    latencyMs: 3200,
+    audibleReadyWaitMs: 920,
+    stalled: true,
+    dropped: true,
+  });
+
+  const candidates = await findTransitionCandidates({
+    trackId: 'seed-track-runtime-negative',
+    limit: 5,
+  });
+  const pairCandidates = candidates.filter((candidate) => candidate.targetTrackId === 'target-track-runtime-negative');
+
+  assert.ok(pairCandidates.length > 0);
+  assert.ok((pairCandidates[0].runtimeBias ?? 0) < 0);
+  assert.ok(pairCandidates[0].explain.topReasons.some((reason) => reason.includes('Runtime riski')));
+});
+
+test('findTransitionCandidates keeps runtime bias neutral when sample size is below minimum', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-runtime-neutral',
+    name: 'Seed Track Runtime Neutral',
+    artist: 'Seed Artist Runtime Neutral',
+    durationMs: 175_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-runtime-neutral',
+    name: 'Target Track Runtime Neutral',
+    artist: 'Target Artist Runtime Neutral',
+    durationMs: 176_000,
+  });
+
+  recordRuntimeSeries({
+    sourceTrackId: 'seed-track-runtime-neutral',
+    targetTrackId: 'target-track-runtime-neutral',
+    count: 3,
+    latencyMs: 380,
+    audibleReadyWaitMs: 45,
+    stalled: false,
+    dropped: false,
+  });
+
+  const candidates = await findTransitionCandidates({
+    trackId: 'seed-track-runtime-neutral',
+    limit: 5,
+  });
+  const pairCandidates = candidates.filter((candidate) => candidate.targetTrackId === 'target-track-runtime-neutral');
+
+  assert.ok(pairCandidates.length > 0);
+  assert.equal(pairCandidates[0].runtimeBias ?? 0, 0);
+});
+
+test('findTransitionCandidates prioritizes recent runtime behavior in pair bias', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-runtime-recency',
+    name: 'Seed Track Runtime Recency',
+    artist: 'Seed Artist Runtime Recency',
+    durationMs: 175_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-runtime-recency',
+    name: 'Target Track Runtime Recency',
+    artist: 'Target Artist Runtime Recency',
+    durationMs: 176_000,
+  });
+
+  const nowMs = Date.now();
+  recordRuntimeSeries({
+    sourceTrackId: 'seed-track-runtime-recency',
+    targetTrackId: 'target-track-runtime-recency',
+    count: 4,
+    latencyMs: 3400,
+    audibleReadyWaitMs: 900,
+    stalled: true,
+    dropped: true,
+    recordedAtFactory: (index) => new Date(nowMs - ((12 * 24 * 60 * 60 * 1000) + index * 1000)).toISOString(),
+  });
+  recordRuntimeSeries({
+    sourceTrackId: 'seed-track-runtime-recency',
+    targetTrackId: 'target-track-runtime-recency',
+    count: 4,
+    latencyMs: 380,
+    audibleReadyWaitMs: 45,
+    stalled: false,
+    dropped: false,
+    recordedAtFactory: (index) => new Date(nowMs - ((2 * 60 * 60 * 1000) + index * 1000)).toISOString(),
+  });
+
+  const candidates = await findTransitionCandidates({
+    trackId: 'seed-track-runtime-recency',
+    limit: 5,
+  });
+  const pairCandidates = candidates.filter((candidate) => candidate.targetTrackId === 'target-track-runtime-recency');
+
+  assert.ok(pairCandidates.length > 0);
+  assert.ok((pairCandidates[0].runtimeBias ?? 0) > 0);
+});
+
+test('findTransitionCandidates uses context fallback runtime bias when direct pair sample is cold', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-runtime-fallback-source',
+    name: 'Seed Track Runtime Fallback Source',
+    artist: 'Seed Artist Runtime Fallback',
+    durationMs: 175_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-runtime-fallback-main',
+    name: 'Target Track Runtime Fallback Main',
+    artist: 'Target Artist Runtime Fallback',
+    durationMs: 176_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-runtime-fallback-alt',
+    name: 'Target Track Runtime Fallback Alt',
+    artist: 'Target Artist Runtime Fallback',
+    durationMs: 177_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-runtime-fallback-alt',
+    name: 'Seed Track Runtime Fallback Alt',
+    artist: 'Seed Artist Runtime Fallback',
+    durationMs: 178_000,
+  });
+
+  recordRuntimeSeries({
+    sourceTrackId: 'seed-track-runtime-fallback-source',
+    targetTrackId: 'target-track-runtime-fallback-alt',
+    count: 6,
+    latencyMs: 420,
+    audibleReadyWaitMs: 50,
+    stalled: false,
+    dropped: false,
+  });
+  recordRuntimeSeries({
+    sourceTrackId: 'seed-track-runtime-fallback-alt',
+    targetTrackId: 'target-track-runtime-fallback-main',
+    count: 6,
+    latencyMs: 390,
+    audibleReadyWaitMs: 55,
+    stalled: false,
+    dropped: false,
+  });
+
+  const candidates = await findTransitionCandidates({
+    trackId: 'seed-track-runtime-fallback-source',
+    limit: 5,
+  });
+  const pairCandidates = candidates.filter((candidate) => candidate.targetTrackId === 'target-track-runtime-fallback-main');
+
+  assert.ok(pairCandidates.length > 0);
+  assert.ok((pairCandidates[0].runtimeBias ?? 0) > 0);
 });
 
 test('runBaselineEvaluation reports auto-skip metrics when decision policy skips auto transition', async () => {

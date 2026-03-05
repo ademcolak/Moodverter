@@ -1056,8 +1056,14 @@ function App() {
       const targetTrack = library.find((track) => track.id === candidate.targetTrackId);
       const targetTimeMs = clampTimeToTrackDuration(candidate.targetTimeMs, targetTrack?.durationMs);
       const activeProvider = provider ?? getYouTubeProvider();
+      let transitionPlaybackResult: {
+        audibleReadyWaitMs?: number;
+        recoverPlaybackWaitMs?: number;
+        overlapAppliedMs?: number;
+        sourceFadeOutMs?: number;
+      } | null = null;
       try {
-        await activeProvider.playTransitionTarget(candidate.targetTrackId, targetTimeMs, {
+        transitionPlaybackResult = await activeProvider.playTransitionTarget(candidate.targetTrackId, targetTimeMs, {
           sourceLoudnessRms: candidate.sourceLoudnessRms,
           targetLoudnessRms: candidate.targetLoudnessRms,
           effectStyle: transitionEffectStyle,
@@ -1080,6 +1086,10 @@ function App() {
         sourceTrackId: candidate.sourceTrackId,
         targetTrackId: candidate.targetTrackId,
         latencyMs: observedLatencyMs,
+        audibleReadyWaitMs: transitionPlaybackResult?.audibleReadyWaitMs,
+        recoverPlaybackWaitMs: transitionPlaybackResult?.recoverPlaybackWaitMs,
+        overlapAppliedMs: transitionPlaybackResult?.overlapAppliedMs,
+        sourceFadeOutMs: transitionPlaybackResult?.sourceFadeOutMs,
         stalled: observedLatencyMs >= TRANSITION_STALL_THRESHOLD_MS,
         dropped: false,
         mode: options.reason === 'auto' ? 'auto' : 'manual',

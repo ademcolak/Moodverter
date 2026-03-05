@@ -38,7 +38,17 @@ const SECONDARY_DECK_CONTAINER_ID = 'youtube-player-secondary';
 const DUAL_DECK_PREROLL_MS = 420;
 const DUAL_DECK_MAX_PREROLL_MS = 1400;
 const TRANSITION_SWAP_DRIFT_SEEK_THRESHOLD_SECONDS = 0.85;
-const TRANSITION_AUDIO_OVERLAP_MS = 90;
+const TRANSITION_AUDIO_OVERLAP_MS = 180;
+const TRANSITION_AUDIO_OVERLAP_MIN_MS = 140;
+const TRANSITION_AUDIO_OVERLAP_MAX_MS = 320;
+const TRANSITION_AUDIBLE_READY_TIMEOUT_MS = 700;
+const TRANSITION_AUDIBLE_READY_POLL_MS = 35;
+const TRANSITION_AUDIBLE_MIN_ADVANCE_SECONDS = 0.05;
+const TRANSITION_SOURCE_FADEOUT_MS = 140;
+const TRANSITION_SOURCE_FADEOUT_MIN_MS = 100;
+const TRANSITION_SOURCE_FADEOUT_MAX_MS = 280;
+const ADAPTIVE_TRANSITION_TIMING_SAMPLE_LIMIT = 14;
+const ADAPTIVE_TRANSITION_TIMING_WINDOW_MS = 25 * 60 * 1000;
 
 type DeckKey = 'primary' | 'secondary';
 
@@ -64,6 +74,13 @@ export interface TransitionPlaybackOptions {
   effectStyle?: TransitionEffectStyle;
   contentHint?: TransitionContentHint;
   silenceAwarePreDuck?: boolean;
+}
+
+export interface TransitionPlaybackResult {
+  audibleReadyWaitMs?: number;
+  recoverPlaybackWaitMs?: number;
+  overlapAppliedMs?: number;
+  sourceFadeOutMs?: number;
 }
 
 export interface TransitionHandoffProfile {
@@ -110,6 +127,14 @@ interface TransitionEnvelopePlan {
   settleMs: number;
   releaseMs: number;
   preDuckMs: number;
+}
+
+interface AdaptiveTransitionTimingSample {
+  recoverPlaybackWaitMs: number;
+  audibleReadyWaitMs: number;
+  overlapMs: number;
+  sourceFadeOutMs: number;
+  recordedAtMs: number;
 }
 
 const TRANSITION_EFFECT_PROFILES: Record<TransitionEffectStyle, TransitionEffectProfile> = {
@@ -164,6 +189,9 @@ export class YouTubeProvider implements MusicProvider {
     holdMs: DEFAULT_TRANSITION_HANDOFF_HOLD_MS,
   };
   private transitionEffectProfile: TransitionEffectProfile = { ...TRANSITION_EFFECT_PROFILES.clean };
+  private adaptiveTransitionOverlapMs = TRANSITION_AUDIO_OVERLAP_MS;
+  private adaptiveSourceFadeOutMs = TRANSITION_SOURCE_FADEOUT_MS;
+  private adaptiveTransitionTimingSamples: AdaptiveTransitionTimingSample[] = [];
   private hasWarnedRecentQuota = false;
   private primedTransition: PrimedTransitionState | null = null;
 
@@ -724,6 +752,191 @@ export class YouTubeProvider implements MusicProvider {
     throw new Error('Playback did not start in expected time');
   }
 
+  private async waitForAudibleTargetReady(
+    player: YouTubePlayer,
+    trackId: string,
+    targetStartSeconds: number
+  ): Promise<{ waitedMs: number }> {
+    const startedAtMs = Date.now();
+    const expectedStartFloor = Math.max(0, targetStartSeconds - 0.5);
+    let previousObservedTime: number | null = null;
+    let advancedSeconds = 0;
+
+    while (true) {
+      const state = player.getState();
+      const elapsedMs = Date.now() - startedAtMs;
+      const hasExpectedTrack = state.videoId === trackId;
+
+      if (hasExpectedTrack && state.error) {
+        throw new Error(`YouTube player error: ${state.error}`);
+      }
+
+      if (
+        hasExpectedTrack
+        && state.isPlaying
+        && Number.isFinite(state.currentTime)
+        && state.currentTime >= expectedStartFloor
+      ) {
+        const currentTime = Math.max(0, state.currentTime);
+        if (previousObservedTime !== null) {
+          const delta = Math.max(0, currentTime - previousObservedTime);
+          advancedSeconds += delta;
+        }
+        previousObservedTime = currentTime;
+
+        if (advancedSeconds >= TRANSITION_AUDIBLE_MIN_ADVANCE_SECONDS) {
+          return { waitedMs: elapsedMs };
+        }
+      } else {
+        previousObservedTime = null;
+        advancedSeconds = 0;
+      }
+
+      if (elapsedMs >= TRANSITION_AUDIBLE_READY_TIMEOUT_MS) {
+        throw new Error('Transition target deck audible readiness timeout');
+      }
+
+      await wait(TRANSITION_AUDIBLE_READY_POLL_MS);
+    }
+  }
+
+  private async fadeOutAndPauseSource(sourcePlayer: YouTubePlayer): Promise<number> {
+    const startedAtMs = Date.now();
+    const targetFadeOutMs = Math.max(
+      TRANSITION_SOURCE_FADEOUT_MIN_MS,
+      Math.min(TRANSITION_SOURCE_FADEOUT_MAX_MS, Math.round(this.adaptiveSourceFadeOutMs))
+    );
+    const startVolume = this.clampVolume(sourcePlayer.getState().volume);
+    if (startVolume <= 0) {
+      sourcePlayer.pause();
+      sourcePlayer.setVolume(0);
+      return Date.now() - startedAtMs;
+    }
+
+    const steps = Math.max(4, Math.min(9, Math.round(targetFadeOutMs / 32)));
+    const stepDurationMs = Math.max(16, Math.round(targetFadeOutMs / steps));
+    for (let step = 1; step <= steps; step += 1) {
+      const remainingRatio = Math.max(0, (steps - step) / steps);
+      const nextVolume = this.clampVolume(Math.round(startVolume * remainingRatio));
+      sourcePlayer.setVolume(nextVolume);
+      if (step < steps) {
+        await wait(stepDurationMs);
+      }
+    }
+
+    sourcePlayer.pause();
+    sourcePlayer.setVolume(0);
+    return Date.now() - startedAtMs;
+  }
+
+  private resolveAdaptiveTransitionTimings(input: {
+    recoverPlaybackWaitMs: number;
+    audibleReadyWaitMs: number;
+  }): { overlapMs: number; sourceFadeOutMs: number } {
+    const nowMs = Date.now();
+    this.adaptiveTransitionTimingSamples = this.adaptiveTransitionTimingSamples.filter(
+      (sample) => nowMs - sample.recordedAtMs <= ADAPTIVE_TRANSITION_TIMING_WINDOW_MS
+    );
+    const boundedRecoverMs = Math.max(0, Math.min(3000, Math.round(input.recoverPlaybackWaitMs)));
+    const boundedAudibleMs = Math.max(0, Math.min(3000, Math.round(input.audibleReadyWaitMs)));
+    const recentRecoverP75 = this.computePercentile(
+      this.adaptiveTransitionTimingSamples.map((sample) => sample.recoverPlaybackWaitMs),
+      0.75
+    );
+    const recentAudibleP75 = this.computePercentile(
+      this.adaptiveTransitionTimingSamples.map((sample) => sample.audibleReadyWaitMs),
+      0.75
+    );
+    const effectiveRecoverMs = Math.max(boundedRecoverMs, recentRecoverP75);
+    const effectiveAudibleMs = Math.max(boundedAudibleMs, recentAudibleP75);
+    const runtimePressure = Math.max(
+      0,
+      Math.min(
+        1,
+        (effectiveRecoverMs / 1800) * 0.42
+          + (effectiveAudibleMs / 680) * 0.58
+      )
+    );
+    const weightedTarget = TRANSITION_AUDIO_OVERLAP_MS
+      + effectiveRecoverMs * 0.03
+      + effectiveAudibleMs * 0.16
+      + runtimePressure * 72;
+    const clampedTarget = Math.max(
+      TRANSITION_AUDIO_OVERLAP_MIN_MS,
+      Math.min(TRANSITION_AUDIO_OVERLAP_MAX_MS, weightedTarget)
+    );
+    const blended = this.adaptiveTransitionOverlapMs * 0.65 + clampedTarget * 0.35;
+    const nextOverlapMs = Math.round(
+      Math.max(
+        TRANSITION_AUDIO_OVERLAP_MIN_MS,
+        Math.min(TRANSITION_AUDIO_OVERLAP_MAX_MS, blended)
+      )
+    );
+    this.adaptiveTransitionOverlapMs = nextOverlapMs;
+
+    const fadeTarget = TRANSITION_SOURCE_FADEOUT_MS
+      + effectiveAudibleMs * 0.08
+      + runtimePressure * 78;
+    const clampedFadeTarget = Math.max(
+      TRANSITION_SOURCE_FADEOUT_MIN_MS,
+      Math.min(TRANSITION_SOURCE_FADEOUT_MAX_MS, fadeTarget)
+    );
+    const blendedFade = this.adaptiveSourceFadeOutMs * 0.62 + clampedFadeTarget * 0.38;
+    const nextFadeOutMs = Math.round(
+      Math.max(
+        TRANSITION_SOURCE_FADEOUT_MIN_MS,
+        Math.min(TRANSITION_SOURCE_FADEOUT_MAX_MS, blendedFade)
+      )
+    );
+    this.adaptiveSourceFadeOutMs = nextFadeOutMs;
+
+    return {
+      overlapMs: nextOverlapMs,
+      sourceFadeOutMs: nextFadeOutMs,
+    };
+  }
+
+  private recordAdaptiveTransitionTimingSample(sample: {
+    recoverPlaybackWaitMs: number;
+    audibleReadyWaitMs: number;
+    overlapMs: number;
+    sourceFadeOutMs: number;
+  }): void {
+    const nowMs = Date.now();
+    const nextSample: AdaptiveTransitionTimingSample = {
+      recoverPlaybackWaitMs: Math.max(0, Math.min(3000, Math.round(sample.recoverPlaybackWaitMs))),
+      audibleReadyWaitMs: Math.max(0, Math.min(3000, Math.round(sample.audibleReadyWaitMs))),
+      overlapMs: Math.max(0, Math.min(2000, Math.round(sample.overlapMs))),
+      sourceFadeOutMs: Math.max(0, Math.min(2000, Math.round(sample.sourceFadeOutMs))),
+      recordedAtMs: nowMs,
+    };
+    this.adaptiveTransitionTimingSamples = [
+      ...this.adaptiveTransitionTimingSamples.filter(
+        (entry) => nowMs - entry.recordedAtMs <= ADAPTIVE_TRANSITION_TIMING_WINDOW_MS
+      ),
+      nextSample,
+    ].slice(-ADAPTIVE_TRANSITION_TIMING_SAMPLE_LIMIT);
+  }
+
+  private boostAdaptiveTransitionSafety(): void {
+    this.adaptiveTransitionOverlapMs = Math.round(
+      this.adaptiveTransitionOverlapMs * 0.7 + TRANSITION_AUDIO_OVERLAP_MAX_MS * 0.3
+    );
+    this.adaptiveSourceFadeOutMs = Math.round(
+      this.adaptiveSourceFadeOutMs * 0.72 + TRANSITION_SOURCE_FADEOUT_MAX_MS * 0.28
+    );
+  }
+
+  private computePercentile(values: number[], percentile: number): number {
+    if (values.length === 0) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const index = Math.max(
+      0,
+      Math.min(sorted.length - 1, Math.ceil(sorted.length * percentile) - 1)
+    );
+    return sorted[index];
+  }
+
   isAuthenticated(): boolean {
     return true;
   }
@@ -747,6 +960,9 @@ export class YouTubeProvider implements MusicProvider {
     this.previousSnapshot = null;
     this.lastEndedSignature = null;
     this.primedTransition = null;
+    this.adaptiveTransitionOverlapMs = TRANSITION_AUDIO_OVERLAP_MS;
+    this.adaptiveSourceFadeOutMs = TRANSITION_SOURCE_FADEOUT_MS;
+    this.adaptiveTransitionTimingSamples = [];
   }
 
   async getLibrary(): Promise<UnifiedTrack[]> {
@@ -995,7 +1211,7 @@ export class YouTubeProvider implements MusicProvider {
     trackId: string,
     targetTimeMs: number,
     options: TransitionPlaybackOptions = {}
-  ): Promise<void> {
+  ): Promise<TransitionPlaybackResult> {
     this.transitionHandoffToken += 1;
     void this.warmupTransitionTarget(trackId);
     await this.ensureInitialized();
@@ -1011,7 +1227,7 @@ export class YouTubeProvider implements MusicProvider {
         makeActive: true,
         emitReason: 'manual',
       });
-      return;
+      return {};
     }
 
     const targetTrack = await this.resolveTrackForPlayback(trackId);
@@ -1046,16 +1262,45 @@ export class YouTubeProvider implements MusicProvider {
     if (driftSeconds > TRANSITION_SWAP_DRIFT_SEEK_THRESHOLD_SECONDS) {
       targetPlayer.seek(targetStartSeconds);
     }
-    if (!isTargetAlreadyRunning) {
-      void this.recoverPlaybackStart(targetPlayer, trackId, targetStartSeconds, true).catch((error) => {
-        console.warn('Late transition deck recovery failed:', error);
-      });
-    }
+    let recoverPlaybackWaitMs: number | undefined;
+    let audibleReadyWaitMs: number | undefined;
+    let overlapAppliedMs: number | undefined;
+    let sourceFadeOutMs: number | undefined;
     const targetStartVolume = envelopePlan?.compensatedVolume ?? this.volume;
-    targetPlayer.setVolume(targetStartVolume);
-    await wait(TRANSITION_AUDIO_OVERLAP_MS);
-    sourcePlayer.pause();
-    sourcePlayer.setVolume(0);
+    try {
+      if (!isTargetAlreadyRunning) {
+        const recoverStartedAtMs = Date.now();
+        await this.recoverPlaybackStart(targetPlayer, trackId, targetStartSeconds, true);
+        recoverPlaybackWaitMs = Date.now() - recoverStartedAtMs;
+      } else {
+        recoverPlaybackWaitMs = 0;
+      }
+      const readiness = await this.waitForAudibleTargetReady(targetPlayer, trackId, targetStartSeconds);
+      audibleReadyWaitMs = readiness.waitedMs;
+      targetPlayer.setVolume(targetStartVolume);
+      const adaptiveTimings = this.resolveAdaptiveTransitionTimings({
+        recoverPlaybackWaitMs: recoverPlaybackWaitMs ?? 0,
+        audibleReadyWaitMs: audibleReadyWaitMs ?? 0,
+      });
+      overlapAppliedMs = adaptiveTimings.overlapMs;
+      await wait(overlapAppliedMs);
+      this.cancelTransitionVolumeAutomation(false);
+      this.adaptiveSourceFadeOutMs = adaptiveTimings.sourceFadeOutMs;
+      sourceFadeOutMs = await this.fadeOutAndPauseSource(sourcePlayer);
+      this.recordAdaptiveTransitionTimingSample({
+        recoverPlaybackWaitMs: recoverPlaybackWaitMs ?? 0,
+        audibleReadyWaitMs: audibleReadyWaitMs ?? 0,
+        overlapMs: overlapAppliedMs,
+        sourceFadeOutMs,
+      });
+    } catch (error) {
+      this.cancelTransitionVolumeAutomation(true);
+      targetPlayer.setVolume(0);
+      targetPlayer.pause();
+      this.boostAdaptiveTransitionSafety();
+      throw error;
+    }
+
     this.activeDeck = targetDeck;
     this.primedTransition = null;
     this.currentTrack = targetTrack;
@@ -1094,6 +1339,13 @@ export class YouTubeProvider implements MusicProvider {
       reason: 'manual',
       track: targetTrack,
     });
+
+    return {
+      audibleReadyWaitMs,
+      recoverPlaybackWaitMs,
+      overlapAppliedMs,
+      sourceFadeOutMs,
+    };
   }
 
   primeTransitionHandoff(): void {

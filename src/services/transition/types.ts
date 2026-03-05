@@ -139,6 +139,7 @@ export interface TransitionCandidate {
   confidenceScore: number;
   diversityPenalty: number;
   learningBias: number;
+  runtimeBias?: number;
   score: TransitionEdgeScore;
   diagnostic: TransitionScoreDiagnostic;
   explain: TransitionDecisionExplain;
@@ -155,6 +156,10 @@ export interface TransitionRuntimeEvent {
   sourceTrackId: string;
   targetTrackId: string;
   latencyMs: number;
+  audibleReadyWaitMs?: number;
+  recoverPlaybackWaitMs?: number;
+  overlapAppliedMs?: number;
+  sourceFadeOutMs?: number;
   stalled: boolean;
   dropped: boolean;
   mode: TransitionRuntimeMode;
@@ -168,9 +173,14 @@ export interface TransitionRuntimeEvent {
 }
 
 export interface RecordTransitionRuntimeEventInput {
+  recordedAt?: string;
   sourceTrackId: string;
   targetTrackId: string;
   latencyMs: number;
+  audibleReadyWaitMs?: number;
+  recoverPlaybackWaitMs?: number;
+  overlapAppliedMs?: number;
+  sourceFadeOutMs?: number;
   stalled?: boolean;
   dropped?: boolean;
   mode?: TransitionRuntimeMode;

@@ -206,6 +206,10 @@ export function HistoryPage({
               <div key={`${event.recordedAt}:${index}`} className="text-[11px] text-[var(--color-text-secondary)]">
                 {event.sourceTrackId} → {event.targetTrackId}
                 {' | '} latency {Math.round(event.latencyMs)}ms
+                {typeof event.audibleReadyWaitMs === 'number' ? ` | audible ${Math.round(event.audibleReadyWaitMs)}ms` : ''}
+                {typeof event.recoverPlaybackWaitMs === 'number' ? ` | recover ${Math.round(event.recoverPlaybackWaitMs)}ms` : ''}
+                {typeof event.overlapAppliedMs === 'number' ? ` | overlap ${Math.round(event.overlapAppliedMs)}ms` : ''}
+                {typeof event.sourceFadeOutMs === 'number' ? ` | fade ${Math.round(event.sourceFadeOutMs)}ms` : ''}
                 {' | '} skip {event.skippedAutoTransition ? 'yes' : 'no'}
               </div>
             ))}

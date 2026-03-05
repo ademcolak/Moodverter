@@ -89,7 +89,7 @@ Kabul kriterleri:
 - [x] Faz dokumani: `docs/phases/phase-04-transition-quality-v3.md`.
 
 ### Phase 05 - Evaluation Reliability + Tuning Ops
-- [ ] Faz dokumani: `docs/phases/phase-05-eval-reliability-tuning-ops.md`.
+- [x] Faz dokumani: `docs/phases/phase-05-eval-reliability-tuning-ops.md`.
 
 ## Son Degisiklik Ozeti (19 Subat 2026)
 ### Yapildi
