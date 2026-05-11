@@ -1484,7 +1484,10 @@ export function decideAutoTransition(
   const secondCandidate = candidates[1] ?? null;
   const top1Score = topCandidate ? topCandidate.score.finalScore : null;
   const top1Top2Margin = topCandidate && secondCandidate
-    ? computeCandidateSelectionScore(topCandidate) - computeCandidateSelectionScore(secondCandidate)
+    ? Math.max(
+        topCandidate.score.finalScore - secondCandidate.score.finalScore,
+        computeCandidateSelectionScore(topCandidate) - computeCandidateSelectionScore(secondCandidate)
+      )
     : null;
 
   if (!topCandidate) {
