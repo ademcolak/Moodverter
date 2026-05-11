@@ -775,6 +775,7 @@ test('regression gate rejects baseline run when enforced and Hit@K drops', async
     }),
     /Regression gate failed/
   );
+  assert.equal(getBaselineRunHistory(5).length, 1);
 });
 
 test('benchmark merge gate rejects when regression or runtime gate is degraded', async () => {
@@ -837,6 +838,42 @@ test('benchmark merge gate rejects when regression or runtime gate is degraded',
     }),
     /Benchmark merge gate failed/
   );
+  assert.equal(getBaselineRunHistory(5).length, 1);
+});
+
+test('runBaselineEvaluation deduplicates repeated seed ids', async () => {
+  await analyzeTrackWithHeuristicV1({
+    id: 'seed-track-dedupe',
+    name: 'Seed Track Dedupe',
+    artist: 'Seed Artist Dedupe',
+    durationMs: 180_000,
+  });
+  await analyzeTrackWithHeuristicV1({
+    id: 'target-track-dedupe-a',
+    name: 'Target Track Dedupe A',
+    artist: 'Target Artist Dedupe',
+    durationMs: 181_000,
+  });
+
+  const candidates = await findTransitionCandidates({
+    trackId: 'seed-track-dedupe',
+    limit: 5,
+  });
+  assert.ok(candidates.length > 0);
+
+  const result = await runBaselineEvaluation({
+    seedTrackIds: ['seed-track-dedupe', 'seed-track-dedupe'],
+    limit: 5,
+    scopeLabel: 'custom',
+    scopeId: 'dedupe-seed-scope',
+    relevantTargetsBySeed: {
+      'seed-track-dedupe': [candidates[0].targetTrackId],
+    },
+  });
+
+  assert.equal(result.totalSeedCount, 1);
+  assert.equal(result.seedReports.length, 1);
+  assert.deepEqual(getBaselineRunHistory(1)[0].seedTrackIds, ['seed-track-dedupe']);
 });
 
 test('relevance target gate rejects baseline run when enforced and labels are insufficient', async () => {

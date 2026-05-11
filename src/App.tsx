@@ -502,6 +502,8 @@ function App() {
   const lastAutoTransitionRef = useRef<AutoTransitionSnapshot | null>(null);
   const isPreviewingRef = useRef(false);
   const queuedManualTransitionRef = useRef<QueuedManualTransition | null>(null);
+  const transitionCandidateRequestIdRef = useRef(0);
+  const transitionPlaybackInFlightRef = useRef(false);
   const playlistImportCancelRequestedRef = useRef(false);
   const datasetImportInputRef = useRef<HTMLInputElement | null>(null);
   const warmedTransitionCandidateKeyRef = useRef<string | null>(null);
@@ -592,16 +594,18 @@ function App() {
     if (typeof window === 'undefined') return;
     if (window.localStorage.getItem(ONE_TIME_DATA_RESET_KEY) === '1') return;
 
+    try {
+      window.localStorage.setItem(ONE_TIME_DATA_RESET_KEY, '1');
+    } catch (error) {
+      console.warn('Skipping one-time reset because marker write failed:', error);
+      return;
+    }
+
     clearYouTubeLocalData();
     clearTransitionData();
     clearBenchmarkSeedTrackIds();
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(TRANSITION_FEEDBACK_STORAGE_KEY);
-    }
-    try {
-      window.localStorage.setItem(ONE_TIME_DATA_RESET_KEY, '1');
-    } catch (error) {
-      console.warn('Skipping one-time reset marker write due to storage limits:', error);
     }
 
     resetRuntimeState();
@@ -643,11 +647,14 @@ function App() {
 
   const refreshTransitionCandidates = useCallback(async () => {
     if (!seedTrackId) {
+      transitionCandidateRequestIdRef.current += 1;
       setTransitionCandidates([]);
       setTransitionError(null);
       return;
     }
 
+    const requestId = transitionCandidateRequestIdRef.current + 1;
+    transitionCandidateRequestIdRef.current = requestId;
     setIsTransitionLoading(true);
     setTransitionError(null);
     try {
@@ -659,16 +666,20 @@ function App() {
       const normalizedCandidates = LEARNING_BIAS_ENABLED
         ? candidates
         : candidates.map((candidate) => ({ ...candidate, learningBias: 0 }));
+      if (transitionCandidateRequestIdRef.current !== requestId) return;
       setTransitionCandidates(normalizedCandidates);
       if (candidates.length === 0) {
         setTransitionError('Bu seed icin aday bulunamadi. Once daha fazla sarki ekleyip analiz et.');
       }
     } catch (error) {
+      if (transitionCandidateRequestIdRef.current !== requestId) return;
       console.error('Failed to find transition candidates:', error);
       setTransitionCandidates([]);
       setTransitionError('Transition adaylari yuklenemedi.');
     } finally {
-      setIsTransitionLoading(false);
+      if (transitionCandidateRequestIdRef.current === requestId) {
+        setIsTransitionLoading(false);
+      }
     }
   }, [pinnedSourceTimeMs, seedTrackId]);
 
@@ -968,7 +979,12 @@ function App() {
       setBenchmarkSeedTrackIdsState([]);
       setRelevanceMap(setTransitionRelevanceMap({}));
       setRuntimeEventVersion((current) => current + 1);
+      setRuntimeEvents([]);
+      setTransitionFeedbackEvents([]);
       setTransitionFeedbackModel(getTransitionFeedbackModel());
+      setSuggestedManualCandidate(null);
+      setFeedbackTargetEventKey(null);
+      setLastFeedbackLabel(null);
       autoTransitionedSourceTrackIdRef.current = null;
       autoTransitionCooldownUntilRef.current = 0;
       lastAutoTransitionRef.current = null;
@@ -1049,6 +1065,8 @@ function App() {
       manualAccepted?: boolean;
     } = {}
   ) => {
+    if (transitionPlaybackInFlightRef.current) return;
+    transitionPlaybackInFlightRef.current = true;
     const startedAtMs =
       typeof performance !== 'undefined' ? performance.now() : Date.now();
     setUiError(null);
@@ -1171,6 +1189,8 @@ function App() {
       console.error('Failed to play transition candidate:', error);
       queuedManualTransitionRef.current = null;
       setUiError('Transition adayi calinamadi.');
+    } finally {
+      transitionPlaybackInFlightRef.current = false;
     }
   }, [library, noteRuntimeEvent, play, provider, seek, transitionEffectStyle]);
 

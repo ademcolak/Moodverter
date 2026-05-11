@@ -1484,7 +1484,7 @@ export function decideAutoTransition(
   const secondCandidate = candidates[1] ?? null;
   const top1Score = topCandidate ? topCandidate.score.finalScore : null;
   const top1Top2Margin = topCandidate && secondCandidate
-    ? topCandidate.score.finalScore - secondCandidate.score.finalScore
+    ? computeCandidateSelectionScore(topCandidate) - computeCandidateSelectionScore(secondCandidate)
     : null;
 
   if (!topCandidate) {
@@ -2352,9 +2352,13 @@ export async function runBaselineEvaluation(
     .filter((state) => state.status === 'ready')
     .map((state) => state.trackId);
 
-  const seedTrackIds = (input.seedTrackIds ?? readyTrackIds)
-    .map((trackId) => trackId.trim())
-    .filter((trackId) => trackId.length > 0 && readyTrackIds.includes(trackId));
+  const seedTrackIds = Array.from(
+    new Set(
+      (input.seedTrackIds ?? readyTrackIds)
+        .map((trackId) => trackId.trim())
+        .filter((trackId) => trackId.length > 0 && readyTrackIds.includes(trackId))
+    )
+  );
   const scopeId = normalizeScopeId(scopeLabel, input.scopeId, seedTrackIds);
   const seedSetHash = computeSeedSetHash(seedTrackIds);
   const runMode = resolveRunMode(input.runMode);
@@ -2764,15 +2768,6 @@ export async function runBaselineEvaluation(
     goodThreshold,
   };
 
-  baselineRunHistory = [
-    ...baselineRunHistory,
-    {
-      ...result,
-      seedTrackIds,
-    },
-  ].slice(-100);
-  persistStorage();
-
   if (result.regressionGateEnforced && !result.regressionGatePassed) {
     throw new Error(`Regression gate failed: ${result.regressionSummary ?? 'Hit@K degraded'}`);
   }
@@ -2788,6 +2783,15 @@ export async function runBaselineEvaluation(
   if (result.benchmarkMergeGateEnforced && !result.benchmarkMergeGatePassed) {
     throw new Error(`Benchmark merge gate failed: ${result.benchmarkMergeGateSummary ?? 'Regression/runtime gate failed'}`);
   }
+
+  baselineRunHistory = [
+    ...baselineRunHistory,
+    {
+      ...result,
+      seedTrackIds,
+    },
+  ].slice(-100);
+  persistStorage();
 
   return result;
 }

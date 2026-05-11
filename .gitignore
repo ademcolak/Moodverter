@@ -12,6 +12,7 @@ dist
 dist-ssr
 .smoke-dist
 *.local
+AGENTS.local.md
 
 # Environment variables
 .env
