@@ -40,6 +40,7 @@ test('pipeline:quality keeps required quality guard steps', async () => {
     'Decision Matrix',
     'Feedback Blacklist',
     'Tuning Dry Run',
+    'Tuning Assistant',
     'Real Mini Run',
     'Before/After Report',
   ];
@@ -60,6 +61,7 @@ test('pipeline:quality keeps required quality guard steps', async () => {
   assert.match(source, /args:\s*\['run', 'smoke:decision-matrix'\]/);
   assert.match(source, /args:\s*\['run', 'smoke:feedback-blacklist'\]/);
   assert.match(source, /args:\s*\['run', 'smoke:tuning-loop-dry-run'\]/);
+  assert.match(source, /args:\s*\['run', 'smoke:tuning-assistant'\]/);
   assert.match(source, /args:\s*\['run', 'smoke:real-mini-run'\]/);
   assert.match(source, /args:\s*\['run', 'smoke:benchmark-before-after-report'\]/);
 });
@@ -80,12 +82,16 @@ test('repo config keeps smoke artifact ignored and quality scripts published', a
   assert.equal(typeof scripts['pipeline:quality'], 'string');
   assert.equal(typeof scripts['qa:auto'], 'string');
   assert.equal(typeof scripts['oss:guard'], 'string');
+  assert.equal(scripts['clean:artifacts'], 'node scripts/clean-artifacts.mjs');
+  assert.equal(scripts['smoke:compile'], 'node scripts/smoke-compile.mjs');
   assert.equal(typeof scripts['smoke:regression-gate'], 'string');
   assert.equal(typeof scripts['smoke:benchmark-merge-gate'], 'string');
   assert.equal(typeof scripts['smoke:transition-gating'], 'string');
   assert.equal(typeof scripts['smoke:transition-decision'], 'string');
   assert.equal(typeof scripts['smoke:decision-matrix'], 'string');
   assert.equal(typeof scripts['smoke:feedback-blacklist'], 'string');
+  assert.equal(typeof scripts['smoke:tuning-assistant'], 'string');
+  assert.equal(typeof scripts['tuning:assistant'], 'string');
   assert.equal(typeof scripts['smoke:real-mini-run'], 'string');
   assert.equal(typeof scripts['smoke:benchmark-before-after-report'], 'string');
 });

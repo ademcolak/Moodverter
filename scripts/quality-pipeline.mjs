@@ -11,6 +11,7 @@ const stepDefinitions = [
   { name: 'Decision Matrix', command: 'pnpm', args: ['run', 'smoke:decision-matrix'] },
   { name: 'Feedback Blacklist', command: 'pnpm', args: ['run', 'smoke:feedback-blacklist'] },
   { name: 'Tuning Dry Run', command: 'pnpm', args: ['run', 'smoke:tuning-loop-dry-run'] },
+  { name: 'Tuning Assistant', command: 'pnpm', args: ['run', 'smoke:tuning-assistant'] },
   { name: 'Real Mini Run', command: 'pnpm', args: ['run', 'smoke:real-mini-run'] },
   { name: 'Before/After Report', command: 'pnpm', args: ['run', 'smoke:benchmark-before-after-report'] },
 ];

@@ -31,6 +31,7 @@ Ana hedef: `A@t1 -> B@t2` gecis kalitesini olculebilir sekilde iyilestirmek.
 - `pnpm run smoke:retrieval-gate`
 - `pnpm run smoke:tuning-loop-dry-run`
 - `pnpm run tuning:loop -- --input <json> --output <json>`
+- `pnpm run tuning:assistant -- --input <json> --output <json>`
 - `pnpm run runtime:drift-report -- --input <json> --output <json>`
 - `pnpm run dataset:pipeline -- --config ./configs/dataset-pipeline.example.json`
 - Uygulamada `Dataset JSON Yukle` ile `dataset/output/playlist.moodverter.json` import edilir (otomatik degil).
@@ -52,6 +53,10 @@ Ana hedef: `A@t1 -> B@t2` gecis kalitesini olculebilir sekilde iyilestirmek.
 - Manual checklist UI'da yok; subjektif dinleme notlari manuel QA adiminda tutulur.
 
 ## Değişiklik Politikası
+- Push oncesinde `pnpm run pipeline:quality` lokal olarak calistirilmali; test gecmeden push yapilmaz.
+- Agent push yapacaksa once `pnpm run pipeline:quality` kosup sonucu bildirmelidir.
+- Commit mesajlarini sadece kullanici yazar; agent commit mesaji olusturmaz.
+- Kullanici commit'i kendi mesaji ile olusturduktan sonra push isterse agent push islemini yapabilir.
 - Scoring/formul degisikligi yapildiginda smoke testler zorunlu.
 - Baseline metrik davranisini etkileyen degisiklikte yeni/duzenlenmis test eklenmeli.
 - Scope bazli karsilastirmalarda `scopeId` korunmali (farkli benchmark setleri birbirine karismamali).
