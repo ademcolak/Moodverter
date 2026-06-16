@@ -56,10 +56,27 @@ pub fn run() {
                                     Size::Logical(size) => size.height,
                                 };
 
-                                // Position window below tray icon (centered)
-                                let window_width: f64 = 400.0;
-                                let x = tray_x - (window_width / 2.0);
-                                let y = tray_y + tray_height + 5.0;
+                                let window_size = window.outer_size().ok();
+                                let window_width = window_size.map(|size| size.width as f64).unwrap_or(400.0);
+                                let window_height = window_size.map(|size| size.height as f64).unwrap_or(500.0);
+                                let margin = 5.0;
+                                let mut x = tray_x - (window_width / 2.0);
+                                let mut y = tray_y + tray_height + margin;
+
+                                if let Ok(Some(monitor)) = window.current_monitor() {
+                                    let monitor_position = monitor.position();
+                                    let monitor_size = monitor.size();
+                                    let min_x = monitor_position.x as f64;
+                                    let min_y = monitor_position.y as f64;
+                                    let max_x = min_x + monitor_size.width as f64;
+                                    let max_y = min_y + monitor_size.height as f64;
+
+                                    if y + window_height > max_y {
+                                        y = tray_y - window_height - margin;
+                                    }
+                                    x = x.clamp(min_x, (max_x - window_width).max(min_x));
+                                    y = y.clamp(min_y, (max_y - window_height).max(min_y));
+                                }
 
                                 let _ = window.set_position(PhysicalPosition::new(x as i32, y as i32));
                                 let _ = window.show();

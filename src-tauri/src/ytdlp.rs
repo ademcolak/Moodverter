@@ -54,7 +54,7 @@ fn get_ytdlp_path(_app: &tauri::AppHandle) -> Result<std::path::PathBuf, String>
         "x86_64-unknown-linux-gnu"
     };
 
-    let binary_name = format!("yt-dlp-{}", target);
+    let binary_name = format!("yt-dlp-{}{}", target, if cfg!(target_os = "windows") { ".exe" } else { "" });
 
     #[cfg(debug_assertions)]
     {

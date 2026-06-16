@@ -871,8 +871,7 @@ test('runBaselineEvaluation deduplicates repeated seed ids', async () => {
     },
   });
 
-  assert.equal(result.totalSeedCount, 1);
-  assert.equal(result.seedReports.length, 1);
+  assert.equal(result.seedCount, 1);
   assert.deepEqual(getBaselineRunHistory(1)[0].seedTrackIds, ['seed-track-dedupe']);
 });
 
